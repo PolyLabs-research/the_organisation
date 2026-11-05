@@ -41,6 +41,7 @@ export function newManagedSession(): ManagedSession {
     agents: [],
     lastDeclined: null,
     cursor: null,
+    handledTo: null,
   };
 }
 
@@ -165,6 +166,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         managed.synced = {};
         managed.agents = [];
         managed.cursor = null;
+        managed.handledTo = null;
       }
       managed.consoleUrl = info.consoleUrl;
       managed.budgetUsd = info.budgetUsd;
@@ -193,7 +195,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       const next = plan.phases[index + 1];
       // The record's reply is a sure way to reach the lead, so anything the board has since ruled goes with it.
       const pending = pendingInstructions();
-      managed.instructionsSent += pending.length;
+      managed.instructionsSent = plan.amendments.length;
       changed();
       const binding = pending.length ? `\n\n${prompts.sessionInstructions(pending)}` : '';
       return {
@@ -246,13 +248,15 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         if (!managed.agents.includes(threadId)) managed.agents.push(threadId);
         const text = clean(brief ?? '', 4000);
         if (!text) return;
+        // Something this agent was already given, heard again when the session's history is re-read.
+        const known = plan.phases.some((p) => p.tasks.some((t) => t.threadId === threadId && (t.brief === text || t.brief.includes(text.slice(0, 200)))));
+        if (known) return;
         if (latest?.status === 'running') {
           // More from the lead while the agent is still on its task: part of the same task.
-          if (latest.brief !== text && !latest.brief.includes(text.slice(0, 200))) latest.brief = clean(`${latest.brief}\n\n[The lead added]\n${text}`, 4000);
+          latest.brief = clean(`${latest.brief}\n\n[The lead added]\n${text}`, 4000);
           changed();
           return;
         }
-        if (latest && latest.brief === text) return; // heard again after a reconnect
         if (phase.tasks.length >= MAX_TASKS_PER_PHASE) return;
         const task = newTask(org, titleOf(text), text, false);
         task.status = 'running';
@@ -270,6 +274,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       const task = latestTask(plan, threadId);
       if (!task) return;
       const report = text.trim().slice(0, MAX_RESULT_CHARS) || '(The agent gave no report.)';
+      // A report already on record for this agent, heard again when the session's history is re-read.
+      const known = plan.phases.some((p) => p.tasks.some((t) => t.threadId === threadId && !!t.result && (t.result === report || t.result.includes(report.slice(0, 200)))));
+      if (known) return;
       if (task.status === 'running') {
         task.status = 'done';
         task.result = report;
@@ -277,10 +284,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         task.finishedAt = now();
       } else if (!task.result) {
         task.result = report;
-      } else if (task.result !== report && !task.result.includes(report.slice(0, 200))) {
-        task.result = `${task.result}\n\n${report}`.slice(0, MAX_RESULT_CHARS);
       } else {
-        return;
+        task.result = `${task.result}\n\n${report}`.slice(0, MAX_RESULT_CHARS);
       }
       changed();
     },
@@ -416,11 +421,13 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
 
     instructions() {
       const pending = pendingInstructions();
-      return pending.length ? { message: prompts.sessionInstructions(pending), instructions: pending.length } : null;
+      return pending.length ? { message: prompts.sessionInstructions(pending), instructions: plan.amendments.length } : null;
     },
 
-    instructed(count) {
-      managed.instructionsSent = Math.min(plan.amendments.length, managed.instructionsSent + Math.max(0, count));
+    instructed(upTo) {
+      const sent = Math.max(managed.instructionsSent, Math.min(plan.amendments.length, upTo));
+      if (sent === managed.instructionsSent) return;
+      managed.instructionsSent = sent;
       ctx.touch();
     },
 
@@ -439,8 +446,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       return more;
     },
 
-    checkpoint(at) {
-      if (!managed.cursor || at > managed.cursor) managed.cursor = at;
+    checkpoint(readFrom, handledTo) {
+      if (!managed.cursor || readFrom > managed.cursor) managed.cursor = readFrom;
+      if (!managed.handledTo || handledTo > managed.handledTo) managed.handledTo = handledTo;
     },
   };
 
@@ -451,15 +459,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       planId: plan.id,
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),
       system: prompts.sessionSystem(org, lead),
-      kickoff: {
-        message: prompts.sessionKickoff(org, lead, plan, files),
-        // The kickoff states every instruction the board has given, including any an earlier session already heard.
-        instructions: pendingInstructions().length,
-      },
-      resume: () => {
-        const pending = pendingInstructions();
-        return { message: prompts.sessionResume(lead, plan, pending), instructions: pending.length };
-      },
+      // The kickoff states every instruction the board has given so far.
+      kickoff: { message: prompts.sessionKickoff(org, lead, plan, files), instructions: plan.amendments.length },
+      resume: () => ({ message: prompts.sessionResume(lead, plan, pendingInstructions()), instructions: plan.amendments.length }),
       executiveModel: org.settings.executiveModel,
       executiveEffort: org.settings.executiveEffort,
       workerModel: org.settings.workerModel,
@@ -472,7 +474,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         ? {
             id: managed.sessionId,
             cursor: managed.cursor,
+            handled: managed.handledTo ?? managed.cursor,
             openRuns: managed.runs.filter((r) => r.status === 'running' || r.status === 'paused').map((r) => r.id),
+            runThreads: plan.phases.flatMap((p) => p.tasks).flatMap((t) => (t.threadId && t.agent === null ? [t.threadId] : [])),
             reported: managed.pendingReport !== null,
           }
         : null,

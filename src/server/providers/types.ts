@@ -135,9 +135,10 @@ export interface HookReply {
   message: string;
 }
 
-/** A message for the lead, and how many of the board's binding instructions it carries. */
+/** A message for the lead, and how far it brings the lead up to date with the board's binding instructions. */
 export interface Briefing {
   message: string;
+  /** The message states every instruction the board has given up to this one, counting from the first. */
   instructions: number;
 }
 
@@ -169,14 +170,17 @@ export interface PlanHooks {
   hasOutput(file: { id: string; size: number }): boolean;
   /** Binding instructions the session has not been told yet, as a message for the lead. */
   instructions(): Briefing | null;
-  /** That many more of the board's instructions have reached the session. */
-  instructed(count: number): void;
+  /** The session has now been told the board's instructions up to this one, counting from the first. Safe to say twice. */
+  instructed(upTo: number): void;
   /** pause: hold the session where it is. cancel: the plan is off. null: carry on. */
   halt(): 'pause' | 'cancel' | null;
   /** The session is at its spend cap. A higher cap in dollars, or null to leave it there. */
   moreBudget(spentUsd: number): number | null;
-  /** Events up to this time have been handled; a later attachment can start reading from here. */
-  checkpoint(at: string): void;
+  /**
+   * Where a later attachment should start reading the session's events, and how far they have already been
+   * acted on. The two differ while a call from the session is still waiting for its answer.
+   */
+  checkpoint(readFrom: string, handledTo: string): void;
 }
 
 export interface PlanJob {
@@ -206,8 +210,12 @@ export interface PlanJob {
     id: string;
     /** Read the session's events from this time on. */
     cursor: string | null;
+    /** Events before this time have already been acted on. */
+    handled: string | null;
     /** Workflow runs that had not ended when the session was last followed. */
     openRuns: string[];
+    /** Threads known to belong to workflow runs, whose agents are not the lead's own. */
+    runThreads: string[];
     /** Whether the lead's report to the board has already been taken. */
     reported: boolean;
   } | null;

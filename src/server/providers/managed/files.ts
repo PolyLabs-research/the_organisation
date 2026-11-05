@@ -109,6 +109,7 @@ export interface SessionFile {
   id: string;
   name: string;
   size: number;
+  createdAt: string;
 }
 
 /** The files a session has produced so far. `inputs` are the session's own copies of the files mounted into it, which the same listing can return. */
@@ -116,7 +117,7 @@ export async function listOutputs(client: Anthropic, sessionId: string, inputs: 
   const files: SessionFile[] = [];
   for await (const file of client.beta.files.list({ scope_id: sessionId, betas: [MANAGED_AGENTS_BETA] })) {
     if (inputs.has(file.id) || file.downloadable === false) continue;
-    files.push({ id: file.id, name: file.filename, size: file.size_bytes });
+    files.push({ id: file.id, name: file.filename, size: file.size_bytes, createdAt: file.created_at });
   }
   return files;
 }

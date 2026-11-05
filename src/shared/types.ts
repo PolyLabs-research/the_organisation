@@ -194,8 +194,10 @@ export interface ManagedSession {
   agents: string[];
   /** The most recent tool call that was declined, for the record. */
   lastDeclined: string | null;
-  /** How far the session's events have been read: the time of the last one handled. */
+  /** Where to start reading the session's events when it is next followed. */
   cursor: string | null;
+  /** How far the session's events have been acted on. Later than `cursor` while a call from the session awaits its answer. */
+  handledTo?: string | null;
 }
 
 export interface Plan {

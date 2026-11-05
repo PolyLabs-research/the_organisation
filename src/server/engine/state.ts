@@ -103,8 +103,9 @@ export const MIN_SESSION_ALLOWANCE_USD = 0.25;
  * organisation's budget has too little left for it. The money not yet spent,
  * and not already promised to other sessions, is shared equally between this
  * plan and the other plans that will want a session. Every session is capped
- * by the platform and the caps never add up to more than the budget, so the
- * organisation cannot overspend through its sessions.
+ * by the platform and the caps never add up to more than the budget, so what
+ * the organisation can overspend through its sessions is bounded: the request
+ * in flight in each thread when a cap is reached still completes.
  */
 export function sessionAllowance(org: Organisation, plan: Plan, spentUsd: number): number | null {
   const others = org.plans.filter((p) => p.id !== plan.id && isPlanActive(p));

@@ -24,16 +24,20 @@ export class FakeSession {
   readonly events: Json[] = [];
   /** What the client has sent, in order. */
   readonly received: Json[] = [];
-  readonly outputs: Array<{ id: string; filename: string; bytes: Buffer; downloadable: boolean }> = [];
+  readonly outputs: Array<{ id: string; filename: string; bytes: Buffer; downloadable: boolean | undefined; createdAt: string }> = [];
   readonly threads = new Map<string, Json[]>();
   readonly streams = new Set<http.ServerResponse>();
   status: 'idle' | 'running' | 'terminated' = 'idle';
+  /** How long the status a client can ask for trails behind the events, as the real one can. */
+  statusLagMs = 0;
+  private shown: 'idle' | 'running' | 'terminated' = 'idle';
   blocked: 'requires_action' | 'budget_reached' | null = null;
   capCents: number;
   spentCents = 0;
   archived = false;
   /** An error thrown by the script, for the test to see. */
   failure: unknown = null;
+  readonly createdAt = new Date().toISOString();
   private consumed = 0;
   private waiters: Array<() => void> = [];
 
@@ -56,20 +60,26 @@ export class FakeSession {
     return event;
   }
 
+  private show(status: 'idle' | 'running' | 'terminated'): void {
+    this.status = status;
+    if (this.statusLagMs > 0) setTimeout(() => (this.shown = this.status), this.statusLagMs);
+    else this.shown = status;
+  }
+
   running(): void {
-    this.status = 'running';
+    this.show('running');
     this.blocked = null;
     this.emit('session.status_running');
   }
 
   idle(reason: StopReason): void {
-    this.status = 'idle';
+    this.show('idle');
     this.blocked = reason.type === 'requires_action' || reason.type === 'budget_reached' ? reason.type : null;
     this.emit('session.status_idle', { stop_reason: reason, stop_details: null });
   }
 
   terminate(): void {
-    this.status = 'terminated';
+    this.show('terminated');
     this.emit('session.status_terminated');
     this.wake();
   }
@@ -137,25 +147,39 @@ export class FakeSession {
     }
     this.emit('agent.thread_message_sent', { to_session_thread_id: threadId, to_agent_name: name, content: text(brief) });
     this.emit('session.thread_status_running', { session_thread_id: threadId, agent_name: name });
+    // On the agent's own thread: the task arrives as a message to it, it says something as it starts, and its
+    // report to the lead is a message it sends.
     this.threads.get(threadId)!.push(
       { id: `sevt_${this.api.nextId()}`, type: 'agent.thread_message_received', from_session_thread_id: 'sthr_primary', content: text(brief), processed_at: this.api.tick() },
-      { id: `sevt_${this.api.nextId()}`, type: 'agent.message', content: text(report), processed_at: this.api.tick() },
+      { id: `sevt_${this.api.nextId()}`, type: 'agent.message', content: text('I will start by reading the workspace.'), processed_at: this.api.tick() },
+      { id: `sevt_${this.api.nextId()}`, type: 'agent.thread_message_sent', to_session_thread_id: 'sthr_primary', content: text(report), processed_at: this.api.tick() },
     );
     if (file) this.writes(file.name, file.content);
     this.emit('session.thread_status_idle', { session_thread_id: threadId, agent_name: name, stop_reason: { type: 'end_turn' }, stop_details: null });
     this.emit('agent.thread_message_received', { from_session_thread_id: threadId, from_agent_name: name, content: text(report) });
   }
 
-  /** A file appears in the session's output folder. */
-  writes(filename: string, content: string, downloadable = true): string {
+  /**
+   * A file appears in the session's output folder. Writing a name again keeps the file's id, unless `anew`
+   * is set, in which case the listing holds both the old file and the new one under the same name.
+   */
+  writes(filename: string, content: string, downloadable: boolean | 'unsaid' = true, anew = false): string {
     const existing = this.outputs.find((o) => o.filename === filename);
-    if (existing) {
+    if (existing && !anew) {
       existing.bytes = Buffer.from(content);
       return existing.id;
     }
     const id = `file_out_${this.api.nextId()}`;
-    this.outputs.push({ id, filename, bytes: Buffer.from(content), downloadable });
+    // Newest first, so that a client which simply takes the listing in order ends up with the oldest version.
+    this.outputs.unshift({ id, filename, bytes: Buffer.from(content), downloadable: downloadable === 'unsaid' ? undefined : downloadable, createdAt: this.api.tick() });
     return id;
+  }
+
+  /** The lead calls one of its custom tools while its agents are still at work, so the session does not go idle. */
+  async callWhileBusy(name: string, input: Json): Promise<{ text: string; isError: boolean }> {
+    const event = this.emit('agent.custom_tool_use', { name, input });
+    const result = await this.next((e) => e.type === 'user.custom_tool_result' && e.custom_tool_use_id === event.id);
+    return { text: result.content?.[0]?.text ?? '', isError: !!result.is_error };
   }
 
   // ---- what the client says ----
@@ -195,12 +219,12 @@ export class FakeSession {
     return {
       id: this.id,
       type: 'session',
-      status: this.status,
+      status: this.shown,
       agent: { id: this.created.agent?.id, version: this.created.agent?.version ?? 1 },
       archived_at: this.archived ? this.api.tick() : null,
       budget: this.budget(),
-      created_at: '2026-11-05T10:00:00Z',
-      updated_at: '2026-11-05T10:00:00Z',
+      created_at: this.createdAt,
+      updated_at: this.createdAt,
       environment_id: this.created.environment_id,
       metadata: this.created.metadata ?? {},
       outcome_evaluations: [],
@@ -223,8 +247,12 @@ export class FakeManagedApi {
   script: (session: FakeSession) => Promise<void> = async () => {};
   /** Called each time a client attaches to a session's stream, before anything else is served. */
   onStream: ((session: FakeSession) => void) | null = null;
+  /** Messages for which this returns true are shown as queued (no time on them) and never as taken up. */
+  queueOnly: ((event: Json) => boolean) | null = null;
+  queued = 0;
   /** A reply to give instead of the normal one, once, for the next request that matches. */
-  private faults: Array<{ test: (r: Recorded) => boolean; status: number; message: string }> = [];
+  private faults: Array<{ test: (r: Recorded) => boolean; status: number; message: string; times: number }> = [];
+  private silences: Array<(r: Recorded) => boolean> = [];
   private server!: http.Server;
   private ids = 0;
   private clock = Date.parse('2026-11-05T10:00:00Z');
@@ -240,8 +268,23 @@ export class FakeManagedApi {
     return new Date(this.clock).toISOString();
   }
 
+  /** Let time pass between events. */
+  skip(ms: number): void {
+    this.clock += ms;
+  }
+
+  /** For the next request that matches: carry it out, then drop the connection without replying. */
+  dropReplyOnce(test: (r: Recorded) => boolean): void {
+    this.silences.push(test);
+  }
+
   failOnce(test: (r: Recorded) => boolean, status: number, message: string): void {
-    this.faults.push({ test, status, message });
+    this.faults.push({ test, status, message, times: 1 });
+  }
+
+  /** Refuse every request that matches, until the stand-in is reset. */
+  failAlways(test: (r: Recorded) => boolean, status: number, message: string): void {
+    this.faults.push({ test, status, message, times: Infinity });
   }
 
   /** The requests made to one route, e.g. count('POST', '/v1/agents'). */
@@ -291,8 +334,11 @@ export class FakeManagedApi {
     this.files.clear();
     this.sessions.clear();
     this.faults = [];
+    this.silences = [];
     this.script = async () => {};
     this.onStream = null;
+    this.queueOnly = null;
+    this.queued = 0;
   }
 
   private async route(req: http.IncomingMessage, res: http.ServerResponse, raw: Buffer): Promise<void> {
@@ -304,16 +350,20 @@ export class FakeManagedApi {
     const recorded: Recorded = { method, path, query: url.searchParams, headers: req.headers, body };
     this.requests.push(recorded);
 
+    const silence = this.silences.findIndex((test) => test(recorded));
+    const silent = silence >= 0;
+    if (silent) this.silences.splice(silence, 1);
     const send = (status: number, payload: unknown): void => {
+      if (silent) return void res.destroy();
       res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(payload));
     };
-    const fail = (status: number, message: string) =>
-      send(status, { type: 'error', error: { type: status === 404 ? 'not_found_error' : status === 409 ? 'conflict_error' : 'invalid_request_error', message } });
+    const kinds: Record<number, string> = { 403: 'permission_error', 404: 'not_found_error', 409: 'conflict_error', 500: 'api_error' };
+    const fail = (status: number, message: string) => send(status, { type: 'error', error: { type: kinds[status] ?? 'invalid_request_error', message } });
 
-    const fault = this.faults.findIndex((f) => f.test(recorded));
-    if (fault >= 0) {
-      const [f] = this.faults.splice(fault, 1);
-      return fail(f!.status, f!.message);
+    const fault = this.faults.find((f) => f.test(recorded));
+    if (fault) {
+      if (--fault.times <= 0) this.faults.splice(this.faults.indexOf(fault), 1);
+      return fail(fault.status, fault.message);
     }
 
     // ---- agents and environments ----
@@ -352,13 +402,15 @@ export class FakeManagedApi {
       const scope = { id: session.id, type: 'session' };
       // The listing holds the session's copies of what was mounted into it as well as what it wrote.
       const inputs = session.resources.map((r) => ({ id: r.file_id, type: 'file', filename: String(r.mount_path).split('/').pop(), mime_type: 'text/plain', size_bytes: 1, created_at: this.tick(), downloadable: false, scope }));
-      const outputs = session.outputs.map((o) => ({ id: o.id, type: 'file', filename: o.filename, mime_type: 'text/plain', size_bytes: o.bytes.length, created_at: this.tick(), downloadable: o.downloadable, scope }));
+      const outputs = session.outputs.map((o) => ({ id: o.id, type: 'file', filename: o.filename, mime_type: 'text/plain', size_bytes: o.bytes.length, created_at: o.createdAt, ...(o.downloadable === undefined ? {} : { downloadable: o.downloadable }), scope }));
       return send(200, { data: [...inputs, ...outputs], next_page: null });
     }
     match = /^\/v1\/files\/([^/]+)\/content$/.exec(path);
     if (match && method === 'GET') {
       for (const session of this.sessions.values()) {
         const output = session.outputs.find((o) => o.id === match![1]);
+        if (output && output.downloadable === false) return fail(400, 'this file cannot be downloaded');
+        if (output && output.downloadable === undefined) return fail(400, 'this file cannot be downloaded');
         if (output) return void res.writeHead(200, { 'content-type': 'application/octet-stream' }).end(output.bytes);
       }
       return fail(404, 'file not found');
@@ -387,6 +439,12 @@ export class FakeManagedApi {
       if (body.initial_events?.length) void this.play(session);
       return;
     }
+    if (method === 'GET' && path === '/v1/sessions') {
+      const agent = url.searchParams.get('agent_id');
+      const since = url.searchParams.get('created_at[gte]');
+      const found = [...this.sessions.values()].filter((s) => (!agent || s.created.agent?.id === agent) && (!since || s.createdAt >= since));
+      return send(200, { data: found.reverse().map((s) => s.json()), next_page: null, prev_page: null });
+    }
     match = /^\/v1\/sessions\/([^/]+)(\/.*)?$/.exec(path);
     const session = match ? this.sessions.get(match[1]!) : undefined;
     if (!match) return fail(404, `no route for ${method} ${path}`);
@@ -406,11 +464,14 @@ export class FakeManagedApi {
     }
     if (rest === '/events' && method === 'GET') return send(200, { data: listed(session.events, url.searchParams), next_page: null });
     if (rest === '/events' && method === 'POST') {
+      if (session.archived) return fail(409, 'the session is archived');
       const starts = (body.events as Json[]).some((e) => e.type === 'user.message');
       if (starts && session.blocked) return fail(400, `the session is waiting (${session.blocked}); only user.tool_confirmation, user.tool_result, user.custom_tool_result and user.interrupt are accepted`);
       const echoed = (body.events as Json[]).map((event) => {
         session.received.push({ ...event });
-        return session.emit(event.type, event.type === 'user.interrupt' ? {} : (({ type: _type, ...fields }) => fields)(event));
+        const fields = event.type === 'user.interrupt' ? {} : (({ type: _type, ...rest }) => rest)(event);
+        // A message waiting behind a turn in progress has no time on it until the session takes it up.
+        return session.emit(event.type, event.type === 'user.message' && this.queueOnly?.(event) ? { ...fields, processed_at: null } : fields);
       });
       send(200, { data: echoed });
       session.wake();

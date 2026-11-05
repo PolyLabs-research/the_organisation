@@ -475,14 +475,14 @@ ${role}
 
 # Carrying out a plan
 You carry out each plan in a sandbox that you and your team share. This is how plans are run here.
-- Your team: your agents are copies of the agent named "${TEAM_AGENT_NAME}". The message that gives you a plan says how many you have. Start no more than that many, and keep giving them work through the plan: an agent you have used before remembers what it did, so give it the work that follows from its earlier task.
+- Your team: your agents are copies of the agent named "${TEAM_AGENT_NAME}". The message that gives you a plan says how many you have. Start no more than that many, and keep giving them work through the plan: an agent you have used before remembers what it did, so give it the work that follows from its earlier task. A session cannot hold more than 25 agents in all, and one you have stopped using still counts.
 - Tasks: an agent sees only the messages you send it, never this conversation, so every task must stand by itself. Say what to produce, which files to build on, the exact path of the file to write, and what done looks like. The first time you give an agent work, tell it in a sentence what the organisation is for and that it is on the ${lead.function} team.
 - Files: work from earlier plans and from other teams is mounted read-only under ${SESSION_WORKSPACE}/. Every work product goes in a file under ${SESSION_OUTPUTS}/${team}/, with a short descriptive name and no further folders. Only files there reach the rest of the organisation. To change an earlier file, write the new version there under the same name.
 - Running things: the sandbox can run code. Where work can be run, have it run (built, executed, tested), and report what actually happened, never what ought to.
 - Phases: take the phases of your operating profile strictly in order. For each one, hand out its tasks, wait for the reports, then review the files yourself as the gate, running them where they can be run. If a specific, fixable gap would undermine what follows, send the phase back once. When the phase passes, call ${PLAN_TOOLS.recordPhase}, and only then start the next phase.
 ${
     org.settings.workflowRuns
-      ? `- Many pieces: when a phase has many separate pieces of the same kind of work (many files to check, many sources to read, the same step across many items), more than your agents could take one each, start a workflow run for that phase: it works through the pieces with copies of the ${TEAM_AGENT_NAME} in the background and brings the results together. For a phase with a handful of tasks, hand them out directly and do not start a run. A run must never have more agents working at one time than you have agents; it takes the pieces in turn. In a run, one agent failing must not fail the run: list what was not covered. Take the current time inside the workflow and give the date to every agent. Give a run a time limit of one hour.`
+      ? `- Many pieces: when a phase has many separate pieces of the same kind of work (many files to check, many sources to read, the same step across many items), more than your agents could take one each, start a workflow run for that phase: it works through the pieces with copies of the ${TEAM_AGENT_NAME} in the background and brings the results together. For a phase with a handful of tasks, hand them out directly and do not start a run. A run must never have more agents working at one time than you have agents; it takes the pieces in turn. In a run, one agent failing must not fail the run: list what was not covered. Take the current time inside the workflow and give the date to every agent. Give a run a time limit of one hour. A run that ends before its work is done (it can time out while the organisation is paused) is started again for the pieces that are left.`
       : '- Many pieces: when a phase has more pieces of work than your agents can take at once, hand them out in turn as agents come free. You cannot start workflow runs in this organisation.'
   }
 - Decisions: decide what is inside your remit, and record each decision with the phase it belongs to.
@@ -563,7 +563,7 @@ export function sessionResume(lead: Executive, plan: Plan, instructions: string[
   const binding = instructions.length ? `\n\nBinding instructions from the board since you last heard:\n${bindingBlock(instructions)}` : '';
   return `Carry on with the plan from where it stands. ${done.length ? `Recorded so far: ${done.join(', ')}.` : 'No phase has been recorded yet.'} ${
     next ? `Next to record: ${next.name}.` : `Every phase is recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`
-  } You have ${agents(Math.max(lead.agentCount, 1))}. A workflow run of yours that is still open carries on; do not start it again.${binding}`;
+  } You have ${agents(Math.max(lead.agentCount, 1))}. If a workflow run of yours is still open, have it continue; do not start it again.${binding}`;
 }
 
 /** New binding instructions for a session that is under way. */
