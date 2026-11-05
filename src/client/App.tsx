@@ -44,6 +44,10 @@ export function App() {
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
+  // With several keys the bar names the first and counts the rest; the page behind the link lists them all.
+  const keys = meta?.provider.connections?.map((c) => c.label) ?? [];
+  const live = keys.length > 2 ? `${keys[0]} and ${keys.length - 1} more` : keys.length ? keys.join(' and ') : (meta?.provider.label ?? '');
+
   return (
     <div className="app">
       <header className="topbar">
@@ -55,10 +59,10 @@ export function App() {
           <a
             className={`provider ${meta.provider.simulated ? 'provider-sim' : 'provider-live'}`}
             href={meta.keys ? '#/models' : undefined}
-            title={meta.provider.simulated ? 'No model is being called. Add an API key to call real ones.' : `Calls are made to ${meta.provider.label}`}
+            title={meta.provider.simulated ? 'No model is being called. Add an API key to call real ones.' : `Keys are connected for ${meta.provider.label}`}
           >
             <span className="provider-dot" aria-hidden="true" />
-            {meta.provider.simulated ? 'Simulation: no model is being called' : `Live: ${meta.provider.label}`}
+            {meta.provider.simulated ? 'Simulation: no model is being called' : `Live: ${live}`}
             {meta.keys ? <span className="provider-more">Models and keys</span> : null}
           </a>
         ) : null}

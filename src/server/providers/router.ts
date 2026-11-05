@@ -318,7 +318,8 @@ export class ProviderRouter implements Provider {
   private routed<R extends { model: string; onUsage?: (usage: CallUsage) => void }>(req: R): { provider: Callable; req: R } {
     const { provider, model } = this.resolve(req.model);
     const ref = req.model;
-    return { provider, req: { ...req, model, onUsage: (usage: CallUsage) => req.onUsage?.({ ...usage, model: ref }) } };
+    // A request that another model ended up serving (Claude's fallback after a refusal) keeps that model's name.
+    return { provider, req: { ...req, model, onUsage: (usage: CallUsage) => req.onUsage?.({ ...usage, model: usage.model === model ? ref : usage.model }) } };
   }
 
   async structured<T>(req: StructuredRequest<T>): Promise<T> {

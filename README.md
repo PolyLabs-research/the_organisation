@@ -112,6 +112,8 @@ An organisation's executives and its agents each run on a model you choose, and 
 
 **Adding a key.** The **Models and keys** page (linked from the top bar) lists the providers below. Choose one, paste a key, and the provider is asked what the key can call; a key it refuses is not kept. From then on that key's models can be chosen when establishing an organisation and in any organisation's settings: the handful picked out for the provider first, with their prices, then everything else the key can call. A key can also be given in the environment or in `.env`, under the variable in the table; it is then used as it is and never written to disk by this program.
 
+![The Models and keys page: the providers a key can be added for, with the form for a Moonshot key open](docs/models-and-keys.png)
+
 Keys added in the interface are kept in `data/connections.json`, which only your user can read. The interface is shown the last four characters of a key and nothing more, and a key that a provider quotes back in an error message is taken out before the message is shown or stored.
 
 | Provider | Models | Key variable | Picked out (list price in and out, US dollars per million tokens) |
@@ -155,6 +157,8 @@ Providers with separate international and mainland-China platforms (Moonshot, Al
 | DeepSeek V4.1 Flash | DeepSeek | 32.6 | `deepseek:deepseek-flash` |
 | GLM-5.3 | Z.ai | 31.7 | `zhipu:glm-5.3` |
 | MiniMax M3.1 Flash | MiniMax | 29.1 | `minimax:MiniMax-M3.1-Flash` |
+
+Two models with no entry here sit between the last two rows, Xiaomi's MiMo-V2.6-Pro (29.9) and Ant's Ling 3.1 Flash (29.6); both are on OpenRouter.
 
 The [Arena text leaderboard](https://arena.ai/leaderboard/text) of 27 October 2026 orders the top differently (Gemini 4 Carbon, Gemini 4 Argon, Claude Opus 5.5, Muse Wonder, Claude Fable 5.1) and puts the Chinese models much closer to the rest. Neither board has scored ByteDance's newest models. These lists go out of date in weeks: the models a key can call are always read from the provider, so a newer model shows up without any change here, under "everything else", until someone adds it to the picks in [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts).
 
