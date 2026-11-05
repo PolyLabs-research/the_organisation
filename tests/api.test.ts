@@ -22,7 +22,7 @@ beforeAll(async () => {
   const store = new Store(dir);
   await store.init();
   registry = new Registry(store, new MockProvider(QUIET), { retryDelayMs: 1, emitIntervalMs: 1 });
-  const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false };
+  const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default' };
   server = createApp(registry, config).listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -110,6 +110,38 @@ describe('the API', () => {
 
     const activity = (await api('GET', `/api/orgs/${id}/activity`)).data as Array<{ kind: string; ok: boolean }>;
     expect(activity.some((a) => a.kind === 'direct' && a.ok)).toBe(true);
+  });
+
+  it('runs an organisation on hosted sessions, and reads a run agent\'s task from the session when asked', async () => {
+    const meta = await api('GET', '/api/meta');
+    expect(meta.data.provider.managed).toBe(true);
+    expect(meta.data.defaults).toMatchObject({ execution: 'local', workflowRuns: true });
+
+    const { org } = await establish({
+      executives: [{ profileId: 'engineering', agentCount: 2 }],
+      settings: { maxCycles: 1, budgetUsd: 1000, execution: 'managed' },
+    });
+    expect(org.settings.execution).toBe('managed');
+    // Anything but the two ways of working is ignored.
+    expect((await api('PATCH', `/api/orgs/${org.id}/settings`, { execution: 'elsewhere' })).data.org.settings.execution).toBe('managed');
+
+    await api('POST', `/api/orgs/${org.id}/start`);
+    const runner = registry.get(org.id)!;
+    await waitFor(() => runner.org.status === 'paused' && !runner.busy, 'the cycle to finish');
+    const view = (await api<OrgView>('GET', `/api/orgs/${org.id}`)).data;
+    const plan = view.org.plans[0]!;
+    expect(plan).toMatchObject({ status: 'done', execution: 'managed' });
+    expect(plan.managed).toMatchObject({ state: 'finished', synced: {} });
+    expect(plan.managed!.runs).toHaveLength(1);
+
+    // An agent in a workflow run got its work from the run, so the plan holds neither its brief nor what it returned.
+    const inRun = plan.phases[2]!.tasks.find((t) => t.agent === null)!;
+    expect(inRun.result).toBeNull();
+    const detail = (await api('GET', `/api/orgs/${org.id}/tasks/${inRun.id}`)).data;
+    expect(detail.task.brief).toMatch(/^Check piece 1 of 4/);
+    expect(detail.task.result).toMatch(/^Piece 1 is consistent/);
+    // Read once, then kept.
+    expect((await api<OrgView>('GET', `/api/orgs/${org.id}`)).data.org.plans[0]!.phases[2]!.tasks.find((t) => t.id === inRun.id)!.result).toMatch(/^Piece 1/);
   });
 
   it('pushes live updates to an open dashboard', async () => {
@@ -216,7 +248,7 @@ describe('who may call the API', () => {
   });
 
   it('applies the localhost rule when bound to the IPv6 loopback address too', async () => {
-    const config: Config = { port: 0, host: '::1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false };
+    const config: Config = { port: 0, host: '::1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default' };
     const other = createApp(registry, config).listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => other.once('listening', resolve));
     const { port } = other.address() as AddressInfo;

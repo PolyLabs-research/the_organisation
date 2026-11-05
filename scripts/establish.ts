@@ -2,6 +2,7 @@
 //
 //   npm run establish -- "A marketplace where local bakeries sell surplus bread"
 //   npm run establish -- --no-start --budget 20 "…"
+//   npm run establish -- --hosted --budget 40 "…"   (plans carried out in hosted sessions)
 //
 // It asks for a recommended executive team, establishes the organisation with
 // it, starts the loop (unless --no-start) and prints where to watch it.
@@ -42,7 +43,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 async function main(): Promise<void> {
   if (!idea || flag('--help')) {
-    console.log('Usage: npm run establish -- [--no-start] [--budget <usd>] [--steer "<text>"] [--url <server>] "<the idea>"');
+    console.log('Usage: npm run establish -- [--no-start] [--hosted] [--budget <usd>] [--steer "<text>"] [--url <server>] "<the idea>"');
     process.exit(idea ? 0 : 1);
   }
   const budget = value('--budget');
@@ -55,7 +56,10 @@ async function main(): Promise<void> {
     idea,
     mission: team.mission,
     executives: team.executives,
-    settings: budget === undefined ? undefined : { budgetUsd: Number(budget) },
+    settings: {
+      ...(budget === undefined ? {} : { budgetUsd: Number(budget) }),
+      ...(flag('--hosted') ? { execution: 'managed' as const } : {}),
+    },
     steer: value('--steer'),
   });
   const { org } = view;
@@ -66,6 +70,7 @@ async function main(): Promise<void> {
     console.log(`  ${seat.short.padEnd(6)} ${seat.title.padEnd(38)} ${seat.phases.map((p) => p.name).join(' → ')}  (${agents})`);
   }
   console.log(`\nBudget: $${org.settings.budgetUsd.toFixed(2)}. The organisation pauses itself when it is reached.`);
+  console.log(org.settings.execution === 'managed' ? 'Plans are carried out in hosted sessions.' : 'Plans are carried out on this machine.');
 
   if (flag('--no-start')) {
     console.log('Established, not started.');

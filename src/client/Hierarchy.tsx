@@ -2,7 +2,7 @@ import { Gavel, Send } from 'lucide-react';
 import { useState } from 'react';
 import type { ActiveWork, Executive, Organisation, OrgView, Plan, Steer } from '../shared/types';
 import { api, useAction, type Meta } from './api';
-import { CEO_QUESTION_TEXT, PLAN_STATUS } from './labels';
+import { CEO_QUESTION_TEXT, PLAN_STATUS, SESSION_STATE } from './labels';
 import { ErrorNote, SeatBadge, Sop, Stepper, clock, hueStyle, money } from './ui';
 
 function isActive(plan: Plan): boolean {
@@ -146,6 +146,14 @@ function Lead({
   const current = plan && (plan.status === 'executing' || plan.status === 'reporting') ? plan.phases.findIndex((p) => p.status !== 'done') : -1;
   const spend = org.usageByExec[exec.id]?.costUsd ?? 0;
   const waiting = (org.inbox[exec.id] ?? []).length;
+  // In a hosted session the agents work on Anthropic's side: who is busy is read from the plan, not from this machine's calls.
+  const session = plan?.status === 'executing' && plan.execution === 'managed' ? plan.managed : null;
+  const hosted = session?.state === 'running' ? plan!.phases.flatMap((p) => p.tasks).filter((t) => t.status === 'running' && t.threadId) : [];
+  const own = hosted.filter((t) => t.agent !== null);
+  const inRuns = hosted.length - own.length;
+  const beyond = own.filter((t) => (t.agent ?? 0) > exec.agentCount).length;
+  const busy = tasks.length + own.length - beyond;
+  const openRuns = session?.state === 'running' ? session.runs.filter((r) => r.status === 'running') : [];
 
   return (
     <li className="seat-card" style={hueStyle(exec.hue)}>
@@ -168,6 +176,7 @@ function Lead({
         <button type="button" className="plan-peek" onClick={() => onOpenPlan(plan.id)} title="Open this plan">
           <span className="plan-peek-status">
             {PLAN_STATUS[plan.status]}
+            {session ? ` · session ${SESSION_STATE[session.state].toLowerCase()}` : ''}
             {plans.length > 1 ? ` · ${plans.length - 1} more queued` : ''}
           </span>
           <span className="clamp-2">{plan.objective}</span>
@@ -184,11 +193,11 @@ function Lead({
 
       <div className="agents">
         <span className="field-label">Agents</span>
-        <ul className="agent-dots" aria-label={`${tasks.length} of ${exec.agentCount} agents working`}>
+        <ul className="agent-dots" aria-label={`${busy} of ${exec.agentCount} agents working`}>
           {Array.from({ length: exec.agentCount }, (_, i) => {
-            const task = tasks.find((t) => t.agent === i + 1);
+            const label = tasks.find((t) => t.agent === i + 1)?.label ?? own.find((t) => t.agent === i + 1)?.title;
             return (
-              <li key={i} className={task ? 'is-busy' : ''} title={task ? `Agent ${i + 1}: ${task.label}` : `Agent ${i + 1}: idle`}>
+              <li key={i} className={label ? 'is-busy' : ''} title={label ? `Agent ${i + 1}: ${label}` : `Agent ${i + 1}: idle`}>
                 {i + 1}
               </li>
             );
@@ -203,14 +212,30 @@ function Lead({
           label={`agents for the ${exec.short}`}
         />
       </div>
-      {tasks.length ? (
+      {tasks.length || own.length ? (
         <ul className="agent-tasks">
           {tasks.map((t) => (
             <li key={t.key}>
               <span className="agent-tag">Agent {t.agent}</span> {t.label}
             </li>
           ))}
+          {own.map((t) => (
+            <li key={t.id}>
+              <span className="agent-tag">Agent {t.agent}</span> {t.title}
+            </li>
+          ))}
         </ul>
+      ) : null}
+      {openRuns.map((run) => (
+        <Working key={run.id} label={`Workflow run “${run.name}”: ${inRuns} agent${inRuns === 1 ? '' : 's'} at work`} />
+      ))}
+      {beyond ? (
+        <p className="note note-warn">
+          <span>
+            The lead has {beyond} more agent{beyond === 1 ? '' : 's'} at work in its session than it was allocated. In a hosted session the allocation is an instruction to the lead; the
+            session’s spend cap is the hard limit.
+          </span>
+        </p>
       ) : null}
       <ErrorNote onDismiss={change.clearError}>{change.error}</ErrorNote>
     </li>

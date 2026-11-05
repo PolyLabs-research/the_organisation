@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Effort, Organisation, OrgSettings, OrgView } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
-import { ErrorNote, Field } from './ui';
+import { ErrorNote, Field, HostedNotes } from './ui';
 
 const EFFORTS: Array<{ id: Effort; label: string }> = [
   { id: 'low', label: 'Low: fastest and cheapest' },
@@ -102,7 +102,30 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
           <Field label="Model calls in flight at once" hint="Lower this if you hit rate limits.">
             <input type="number" min={1} max={16} value={draft.maxConcurrentCalls} onChange={(e) => set('maxConcurrentCalls', Number(e.target.value))} />
           </Field>
+          <Field
+            label="The leads’ agents do their work"
+            hint="On this machine they write files and run nothing. In a hosted session they share a sandbox where work can be run. A plan under way finishes the way it began."
+          >
+            <select value={draft.execution} onChange={(e) => set('execution', e.target.value as OrgSettings['execution'])}>
+              <option value="local">On this machine</option>
+              <option value="managed" disabled={!meta.provider.managed}>
+                In hosted sessions
+              </option>
+            </select>
+          </Field>
         </div>
+        {draft.execution === 'managed' ? (
+          <>
+            <label className="check">
+              <input type="checkbox" checked={draft.workflowRuns} onChange={(e) => set('workflowRuns', e.target.checked)} />
+              <span>
+                <strong>Let leads start workflow runs.</strong> For a phase with many pieces, a lead can have its agents work through them in the background. Every agent in a run uses
+                tokens.
+              </span>
+            </label>
+            <HostedNotes web={draft.webResearch} runs={draft.workflowRuns} simulated={meta.provider.simulated} />
+          </>
+        ) : null}
         <label className="check">
           <input type="checkbox" checked={draft.webResearch} onChange={(e) => set('webResearch', e.target.checked)} />
           <span>

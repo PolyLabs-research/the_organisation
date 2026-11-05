@@ -4,7 +4,10 @@ import {
   ProviderError,
   type AgentRequest,
   type AgentResult,
+  type PlanJob,
+  type PlanOutcome,
   type Provider,
+  type SessionSpend,
   type StructuredRequest,
   type SystemPrompt,
 } from './types';
@@ -18,8 +21,19 @@ export interface MockOptions {
   followUps?: 'first_report' | 'never' | 'always';
   /** Whether a lead sends a phase back for rework. once: one phase per organisation. */
   rework?: 'once' | 'never';
+  /** Whether a lead in a hosted session starts a workflow run. third_phase: one run, in the third phase of each plan. */
+  runs?: 'third_phase' | 'never';
+  /** How many hosted sessions of each plan end early, without a report, before one is allowed to finish. */
+  lostSessions?: number;
   /** Called before each call is answered; throw from it to simulate a failure. */
   onCall?: (kind: string, context: Record<string, unknown>) => void | Promise<void>;
+}
+
+/** What the simulator remembers of a hosted session between the times it is followed. */
+interface SimSession {
+  spend: SessionSpend;
+  /** What each agent thread was asked and what it reported, for looking up afterwards. */
+  threads: Map<string, { brief: string | null; report: string | null }>;
 }
 
 interface Seat {
@@ -85,6 +99,8 @@ export class MockProvider implements Provider {
   private readonly reworked = new Set<string>();
   private readonly followedUp = new Set<string>();
   private readonly objected = new Set<string>();
+  private readonly sessions = new Map<string, SimSession>();
+  private readonly sessionsStarted = new Map<string, number>();
 
   constructor(private readonly options: MockOptions = {}) {}
 
@@ -95,6 +111,7 @@ export class MockProvider implements Provider {
       simulated: true,
       defaultModel: DEFAULT_MODEL,
       models: MODELS.map((m) => ({ id: m.id, label: m.label, inputPerMTok: m.input, outputPerMTok: m.output })),
+      managed: true,
     };
   }
 
@@ -182,6 +199,206 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
     const text = `Produced \`${path}\` for the ${phase.name} phase. It covers the brief ("${brief(task.title, 80)}") and builds on ${existing} existing workspace file${existing === 1 ? '' : 's'}. Unresolved: the content is simulated, so nothing in it has been verified.`;
     this.charge(req, text);
     return { text, turns: 3, stopped: cutShort ? 'cut_short' : 'done' };
+  }
+
+  /**
+   * A hosted session, acted out: the lead hands each phase's work to its
+   * agents, they leave files and report, the lead records the phase, and at
+   * the end reports to the board. Everything reaches the engine through the
+   * same hooks a real session uses, including the spend cap, so the engine's
+   * side of the protocol can be exercised without a session existing anywhere.
+   */
+  async executePlan(job: PlanJob): Promise<PlanOutcome> {
+    const { hooks } = job;
+    const c = job.context;
+    const seat = c.seat as Seat;
+    const plan = c.plan as PlanRef;
+    const dir = c.dir as string;
+    const org = String(c.organisation ?? '');
+    const phases = c.phases as Array<{ id: string; name: string; deliverable: string; done: boolean }>;
+    const agentCount = Math.max(1, seat.agentCount);
+    await this.options.onCall?.('execute', c);
+
+    const planKey = `${org}:${plan.id}`;
+    let id = job.session?.id ?? null;
+    if (!id) {
+      const n = (this.sessionsStarted.get(planKey) ?? 0) + 1;
+      this.sessionsStarted.set(planKey, n);
+      id = `sim_${slug(org)}_${plan.id}_${n}`;
+    }
+    const sessionId = id;
+    const state = this.sessions.get(sessionId) ?? {
+      spend: { costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 },
+      threads: new Map<string, { brief: string | null; report: string | null }>(),
+    };
+    this.sessions.set(sessionId, state);
+    const sessionNumber = this.sessionsStarted.get(planKey) ?? 1;
+    let cap = job.budgetUsd;
+    hooks.session({ id: sessionId, consoleUrl: null, budgetUsd: cap });
+    if (!job.session) hooks.instructed(job.kickoff.instructions);
+
+    /** Hold the session where it is: its cap comes down to what it has spent, as a real one's does. */
+    const hold = (status: 'paused' | 'cancelled'): PlanOutcome => {
+      hooks.session({ id: sessionId, consoleUrl: null, budgetUsd: Math.round((state.spend.costUsd + 0.02) * 100) / 100 });
+      return { status };
+    };
+    /**
+     * One model request by the lead or an agent. Returns how the session must end if it cannot go on:
+     * held by the organisation, or out of money. As with a real session, the request that crosses the cap completes.
+     */
+    const step = async (model: string, input: number, output: number): Promise<PlanOutcome | null> => {
+      const halt = hooks.halt();
+      if (halt) return hold(halt === 'cancel' ? 'cancelled' : 'paused');
+      while (state.spend.costUsd >= cap) {
+        const more = hooks.moreBudget(state.spend.costUsd);
+        if (more === null) return { status: 'at_budget' };
+        cap = more;
+        hooks.session({ id: sessionId, consoleUrl: null, budgetUsd: cap });
+      }
+      try {
+        await this.wait(job.signal);
+      } catch {
+        return hold('paused');
+      }
+      const usage = priceUsage({ model, inputTokens: input, outputTokens: output, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 });
+      state.spend.costUsd += usage.costUsd;
+      state.spend.inputTokens += input;
+      state.spend.outputTokens += output;
+      hooks.spend({ ...state.spend });
+      const told = hooks.instructions();
+      if (told) hooks.instructed(told.instructions);
+      return null;
+    };
+    const leadTurn = () => step(job.executiveModel, 2500, 500);
+    const agentTurn = () => step(job.workerModel, 6000, 1500);
+    const encoder = new TextEncoder();
+    /** An agent leaves a file in the session's output folder, and it is brought home. */
+    const produce = async (name: string, content: string): Promise<string> => {
+      const bytes = encoder.encode(content);
+      const file = { id: `${sessionId}:${name}`, name, bytes };
+      const path = hooks.hasOutput({ id: file.id, size: bytes.length }) ? `${dir}/${name}` : await hooks.output(file);
+      return path ?? `${dir}/${name}`;
+    };
+
+    for (const [index, phase] of phases.entries()) {
+      if (phase.done) continue;
+      await this.options.onCall?.('session_phase', { ...c, phase: { name: phase.name, index } });
+      const stopped = await leadTurn();
+      if (stopped) return stopped;
+      hooks.note(`Handing out the ${phase.name} work to ${agentCount} agent${agentCount === 1 ? '' : 's'}.`);
+
+      // The lead's own agents take the phase's tasks, one each, and keep their numbers from phase to phase.
+      const parts = ['the core deliverable', 'the supporting analysis', 'a review against the success criteria'];
+      const count = Math.max(1, Math.min(agentCount, Number(c.maxTasks ?? 3), parts.length));
+      const tasks = Array.from({ length: count }, (_, i) => ({
+        threadId: `${sessionId}:agent${i + 1}`,
+        title: `${phase.name}: ${parts[i]}`,
+        brief: `${phase.name}: ${parts[i]}\nYou are on the ${seat.function} team of ${org}. Produce ${parts[i]} for the ${phase.name} phase of the plan "${brief(plan.objective, 120)}". The phase must end with: ${lowerFirst(phase.deliverable)} Build on what is already under the workspace folder. Write ${dir}/${plan.id}-${slug(phase.name)}-${i + 1}.md in the outputs folder. Done means a file your lead can review without asking questions.`,
+        file: `${plan.id}-${slug(phase.name)}-${i + 1}.md`,
+      }));
+      const mode = this.options.rework ?? 'once';
+      if (mode === 'once' && index === 1 && !this.reworked.has(org)) {
+        this.reworked.add(org);
+        tasks.push({
+          threadId: `${sessionId}:agent1`,
+          title: `${phase.name}: reconcile with the previous phase`,
+          brief: `${phase.name}: reconcile with the previous phase\nThe gate found that the ${phase.name} files do not yet line up with what the previous phase set out. Read both and write one reconciled version to ${dir}/${plan.id}-${slug(phase.name)}-reconciled.md in the outputs folder.`,
+          file: `${plan.id}-${slug(phase.name)}-reconciled.md`,
+        });
+      }
+      for (const task of tasks) {
+        hooks.assigned({ threadId: task.threadId, agentName: job.worker.name, brief: task.brief, runId: null });
+        const cut = await agentTurn();
+        if (cut) return cut;
+        const path = await produce(
+          task.file,
+          `# ${task.title}
+
+> Simulated work product. No model was called and nothing was run; this file shows where an agent's output lands when a plan is carried out in a hosted session.
+
+**Team:** ${seat.function} (reporting to the ${seat.short})
+**Plan:** ${plan.objective}
+**Phase:** ${phase.name}, which must end with: ${lowerFirst(phase.deliverable)}
+
+## Output
+- Addresses the task for the ${phase.name} phase.
+
+## Open points
+- Assumptions are untested until a real model and a real sandbox are used.
+`,
+        );
+        const report = `Produced \`${path}\` for the ${phase.name} phase ("${brief(task.title, 80)}"). Unresolved: the content is simulated, so nothing in it has been run or verified.`;
+        state.threads.set(task.threadId, { brief: task.brief, report });
+        hooks.reported(task.threadId, report);
+      }
+
+      // One phase with many pieces: the lead starts a workflow run that works through them in the background.
+      if (job.workflows && (this.options.runs ?? 'third_phase') === 'third_phase' && index === 2) {
+        const runId = `${sessionId}:run${index}`;
+        const pieces = Math.min(6, agentCount * 2);
+        hooks.note(`Starting a workflow run to check ${pieces} pieces of the ${phase.name} work, ${agentCount} at a time.`);
+        hooks.run({
+          id: runId,
+          event: 'created',
+          name: `${phase.name} sweep`,
+          description: `Check each ${phase.name} work product against the plan, ${agentCount} at a time, then bring the findings together.`,
+          steps: [
+            { id: `${runId}:check`, name: 'Check each piece' },
+            { id: `${runId}:combine`, name: 'Bring the findings together' },
+          ],
+        });
+        hooks.run({ id: runId, event: 'running' });
+        hooks.run({ id: runId, event: 'step_started', stepId: `${runId}:check` });
+        for (let piece = 1; piece <= pieces; piece++) {
+          const threadId = `${runId}:piece${piece}`;
+          hooks.assigned({ threadId, agentName: job.worker.name, brief: null, runId });
+          const cut = await agentTurn();
+          if (cut) return cut;
+          state.threads.set(threadId, {
+            brief: `Check piece ${piece} of ${pieces} of the ${phase.name} work against the plan "${brief(plan.objective, 120)}".`,
+            report: `Piece ${piece} is consistent with the plan as far as a simulation can tell.`,
+          });
+          hooks.agentEnded(threadId, 'finished');
+        }
+        hooks.run({ id: runId, event: 'step_ended', stepId: `${runId}:check` });
+        hooks.run({ id: runId, event: 'step_started', stepId: `${runId}:combine` });
+        const cut = await agentTurn();
+        if (cut) return cut;
+        await produce(`${plan.id}-${slug(phase.name)}-sweep.md`, `# ${phase.name} sweep\n\n> Simulated. A workflow run checked ${pieces} pieces and found nothing to report.\n`);
+        hooks.run({ id: runId, event: 'step_ended', stepId: `${runId}:combine` });
+        hooks.run({ id: runId, event: 'ended', result: 'completed' });
+      }
+
+      if (index === 0 && sessionNumber <= (this.options.lostSessions ?? 0)) {
+        return { status: 'lost', reason: 'the simulated session was told to end early.' };
+      }
+
+      // The gate: the lead reviews the files, then records the phase.
+      const gate = await leadTurn();
+      if (gate) return gate;
+      const reply = hooks.phase({
+        phase: phase.name,
+        summary: `${phase.name} is complete: ${tasks.length} work product${tasks.length === 1 ? '' : 's'} under ${dir}/. The next phase can rely on them as written. Nothing was run: this session is simulated.`,
+        decisions: [],
+      });
+      if (!reply.ok) throw new ProviderError(`The simulated lead's phase record was refused: ${reply.message}`, 'invalid_output', false);
+    }
+
+    const closing = await leadTurn();
+    if (closing) return closing;
+    const lastPhase = seat.phases.at(-1);
+    const reply = hooks.report({
+      headline: `${seat.function}: ${lowerFirst(noStop(lastPhase?.deliverable ?? 'the plan'))} delivered`,
+      summary: `The plan ran ${seat.phases.map((p) => p.name).join(' → ')} in a hosted session and left its files under ${dir}/. Measured against the success criteria the deliverable exists; its content is simulated and nothing has been run or verified.`,
+      outcomes: phases.map((p) => `${p.name}: completed and recorded.`),
+      asks: Number(c.cycle ?? 1) === 1 ? [`Other leads to check the ${seat.function.toLowerCase()} files against their own plans before the next cycle.`] : [],
+    });
+    if (!reply.ok) throw new ProviderError(`The simulated lead's report was refused: ${reply.message}`, 'invalid_output', false);
+    return { status: 'reported' };
+  }
+
+  async agentDetail(sessionId: string, threadId: string): Promise<{ brief: string | null; report: string | null }> {
+    return this.sessions.get(sessionId)?.threads.get(threadId) ?? { brief: null, report: null };
   }
 
   private answer(kind: string, c: Record<string, unknown>): unknown {

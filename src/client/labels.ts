@@ -1,4 +1,4 @@
-import type { BoardMessageType, CycleStage, DecisionOutcome, PlanStatus, Stance } from '../shared/types';
+import type { BoardMessageType, CycleStage, DecisionOutcome, ExecutionMode, ManagedSession, PlanStatus, Stance, WorkflowRun } from '../shared/types';
 
 export const CEO_QUESTION_TEXT = 'What would the shareholders want now?';
 
@@ -53,4 +53,25 @@ export const PLAN_ACTION: Record<DecisionOutcome['planAction'], string> = {
   proceed: 'The plan proceeds as drafted',
   amend: 'The plan proceeds with changes',
   cancel: 'The plan is cancelled',
+};
+
+export const EXECUTION: Record<ExecutionMode, string> = {
+  local: 'On this machine',
+  managed: 'In hosted sessions',
+};
+
+export const SESSION_STATE: Record<ManagedSession['state'], string> = {
+  starting: 'Starting',
+  running: 'Working',
+  paused: 'Held',
+  at_budget: 'At its spend cap',
+  finished: 'Finished',
+};
+
+export const RUN_STATUS: Record<WorkflowRun['status'], string> = {
+  running: 'Running',
+  paused: 'Paused',
+  completed: 'Completed',
+  stopped: 'Stopped',
+  failed: 'Failed',
 };

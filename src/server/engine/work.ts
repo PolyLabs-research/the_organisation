@@ -19,7 +19,9 @@ export type WorkItem =
   | { kind: 'task'; key: string; execId: string; planId: string; phaseIndex: number; taskId: string }
   | { kind: 'phase_review'; key: string; execId: string; planId: string; phaseIndex: number }
   | { kind: 'report'; key: string; execId: string; planId: string }
-  | { kind: 'react'; key: string; execId: string; reportIds: string[] };
+  | { kind: 'react'; key: string; execId: string; reportIds: string[] }
+  /** Carry a whole plan through in a hosted session: every phase, and the report to the board. */
+  | { kind: 'execute'; key: string; execId: string; planId: string };
 
 function openRound(org: Organisation, drafted: Plan[]): ReviewRound {
   const round: ReviewRound = {
@@ -139,8 +141,11 @@ export function settle(org: Organisation): boolean {
     for (const plan of org.plans) {
       if (plan.status === 'approved') {
         plan.status = 'executing';
+        // How a plan is carried out is settled when it starts and does not change under it.
+        plan.execution ??= org.settings.execution;
         stepped = true;
-      } else if (plan.status === 'executing' && plan.phases.every((phase) => phase.status === 'done')) {
+      } else if (plan.status === 'executing' && plan.execution !== 'managed' && plan.phases.every((phase) => phase.status === 'done')) {
+        // A plan in a hosted session reports from inside the session; this is for plans run here.
         plan.status = 'reporting';
         stepped = true;
       }
@@ -194,7 +199,9 @@ export function nextWork(org: Organisation): WorkItem[] {
     if (plan.status === 'planning') items.push({ kind: 'plan', key: `plan:${plan.id}`, ...base });
     else if (plan.status === 'revising') items.push({ kind: 'revise', key: `revise:${plan.id}`, ...base });
     else if (plan.status === 'reporting') items.push({ kind: 'report', key: `report:${plan.id}`, ...base });
-    else if (plan.status === 'executing') {
+    else if (plan.status === 'executing' && plan.execution === 'managed') {
+      items.push({ kind: 'execute', key: `execute:${plan.id}`, ...base });
+    } else if (plan.status === 'executing') {
       const current = currentPhase(plan);
       if (!current) continue;
       const { phase, index } = current;

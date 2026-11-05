@@ -59,7 +59,8 @@ export class Registry {
       [...this.runners.values()].map(async (runner) => {
         runner.pause('restart');
         runner.stop();
-        await runner.idle(5000).catch(() => {});
+        // Long enough for a hosted session to be capped at what it has spent before the process goes.
+        await runner.idle(8000).catch(() => {});
         await runner.flush();
         runner.dispose();
       }),

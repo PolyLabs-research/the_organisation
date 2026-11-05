@@ -5,6 +5,8 @@ import type { WorkspaceFile } from '../shared/types';
 import type { AgentTool } from './providers/types';
 
 const MAX_WRITE_BYTES = 1_000_000;
+/** Files brought home from a hosted session can be built artefacts, so they may be larger than what an agent writes here. */
+const MAX_OUTPUT_BYTES = 25_000_000;
 const MAX_READ_CHARS = 120_000;
 /** A ceiling on how many files a listing walks, so a runaway workspace cannot stall the server. */
 const MAX_LISTED = 5000;
@@ -77,6 +79,16 @@ export class Workspace {
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, content, 'utf8');
     return { path: rel, bytes };
+  }
+
+  /** Write a file as bytes: for work products brought home from a hosted session, which need not be text. */
+  async writeBytes(input: string, bytes: Uint8Array): Promise<{ path: string; bytes: number }> {
+    const rel = this.normalise(input);
+    if (bytes.length > MAX_OUTPUT_BYTES) throw new WorkspaceError(`file is ${bytes.length} bytes; the limit is ${MAX_OUTPUT_BYTES}`);
+    const target = await this.resolveSafe(rel);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, bytes);
+    return { path: rel, bytes: bytes.length };
   }
 
   async read(input: string): Promise<{ path: string; content: string; truncated: boolean }> {

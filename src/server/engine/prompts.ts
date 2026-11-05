@@ -1,5 +1,5 @@
 import type { BoardReport, Decision, Executive, Organisation, Plan, PlanPhase, ReviewRound, Task, WorkspaceFile } from '../../shared/types';
-import type { SystemPrompt } from '../providers/types';
+import { PLAN_TOOLS, type SystemPrompt } from '../providers/types';
 import { CEO_QUESTION, arbiterOf, execById, leadsOf, teamDir } from './state';
 
 // System prompts are cached by the provider, so they hold only what stays the
@@ -449,6 +449,126 @@ ${inProgress.length ? inProgress.join('\n') : 'Nothing is in progress.'}
 
 # Your task
 Enforce the steer. For each plan in progress decide whether it continues as it is, continues under a new instruction, or is cancelled. List only the plans that must change. Then reply to the shareholders: say what changes now, and what you will take into the next cycle.`;
+}
+
+// ---- plans carried out in a hosted session ----
+
+/** Where a session finds the organisation's earlier work, and where it must leave its own. */
+export const SESSION_WORKSPACE = '/mnt/session/uploads/workspace';
+export const SESSION_OUTPUTS = '/mnt/session/outputs';
+/** The name of the agent every team member in a session is a copy of. Leads are told to hand work to it by this name. */
+export const TEAM_AGENT_NAME = 'Team agent';
+
+const agents = (n: number) => `${n} agent${n === 1 ? '' : 's'}`;
+
+/**
+ * The system prompt of a lead carrying a plan through in a hosted session:
+ * the charter and seat as everywhere else, plus how plans are run there.
+ * Nothing in it changes during a session.
+ */
+export function sessionSystem(org: Organisation, lead: Executive): string {
+  const { charter: charterText, role } = systemFor(org, lead);
+  const team = teamDir(lead);
+  return `${charterText}
+
+${role}
+
+# Carrying out a plan
+You carry out each plan in a sandbox that you and your team share. This is how plans are run here.
+- Your team: your agents are copies of the agent named "${TEAM_AGENT_NAME}". The message that gives you a plan says how many you have. Start no more than that many, and keep giving them work through the plan: an agent you have used before remembers what it did, so give it the work that follows from its earlier task.
+- Tasks: an agent sees only the messages you send it, never this conversation, so every task must stand by itself. Say what to produce, which files to build on, the exact path of the file to write, and what done looks like. The first time you give an agent work, tell it in a sentence what the organisation is for and that it is on the ${lead.function} team.
+- Files: work from earlier plans and from other teams is mounted read-only under ${SESSION_WORKSPACE}/. Every work product goes in a file under ${SESSION_OUTPUTS}/${team}/, with a short descriptive name and no further folders. Only files there reach the rest of the organisation. To change an earlier file, write the new version there under the same name.
+- Running things: the sandbox can run code. Where work can be run, have it run (built, executed, tested), and report what actually happened, never what ought to.
+- Phases: take the phases of your operating profile strictly in order. For each one, hand out its tasks, wait for the reports, then review the files yourself as the gate, running them where they can be run. If a specific, fixable gap would undermine what follows, send the phase back once. When the phase passes, call ${PLAN_TOOLS.recordPhase}, and only then start the next phase.
+${
+    org.settings.workflowRuns
+      ? `- Many pieces: when a phase has many separate pieces of the same kind of work (many files to check, many sources to read, the same step across many items), more than your agents could take one each, start a workflow run for that phase: it works through the pieces with copies of the ${TEAM_AGENT_NAME} in the background and brings the results together. For a phase with a handful of tasks, hand them out directly and do not start a run. A run must never have more agents working at one time than you have agents; it takes the pieces in turn. In a run, one agent failing must not fail the run: list what was not covered. Take the current time inside the workflow and give the date to every agent. Give a run a time limit of one hour.`
+      : '- Many pieces: when a phase has more pieces of work than your agents can take at once, hand them out in turn as agents come free. You cannot start workflow runs in this organisation.'
+  }
+- Decisions: decide what is inside your remit, and record each decision with the phase it belongs to.
+- Reporting: when every phase is recorded, call ${PLAN_TOOLS.reportToBoard} once and end your turn. Do not report before then, and do not claim more than the phases delivered.
+- Instructions from the board can arrive while you work. They are binding: comply, and say how in your next phase record.`;
+}
+
+/** The system prompt of the team agent. It is shared by every organisation, so it says nothing about any of them: the lead's task does. */
+export function teamAgentSystem(web: boolean): string {
+  return `You are an agent on a team inside an organisation that is run by AI agents on behalf of its shareholders. A lead gives you tasks and reviews what you produce.
+
+# How you work
+- Do the task you were given, in full. If part of it cannot be done, do the rest and say exactly what is missing.
+- Files: earlier work is mounted read-only under ${SESSION_WORKSPACE}/. Put every work product in a file under ${SESSION_OUTPUTS}/, at the path your lead named. You share the sandbox with the rest of your team, so leave files that are not yours as they are.
+- You can run code in the sandbox. Run what can be run, and report what actually happened. Do not claim to have run, tested or measured anything you have not. Mark assumptions as assumptions.
+- ${
+    web
+      ? 'You can search the web and fetch pages. Use that for facts you would otherwise have to assume, and cite the source next to anything you take from it.'
+      : 'You cannot browse the web. Work from the files you were given and from what you can run.'
+  }
+- Be concrete and brief. Never invent facts, figures or sources.
+- When you finish, reply with a short report for your lead: what you produced and where, the main findings or decisions, and anything left unresolved.`;
+}
+
+function sessionPhases(plan: Plan): string {
+  return plan.phases
+    .map((p, i) => {
+      const state = p.status === 'done' ? ` Already recorded: ${p.summary ?? 'passed'}` : '';
+      return `${i + 1}. ${p.name}: ${p.intent} Deliverable: ${p.deliverable}${state}`;
+    })
+    .join('\n');
+}
+
+function sessionFiles(files: WorkspaceFile[]): string {
+  if (!files.length) return `Nothing has been produced before this plan: ${SESSION_WORKSPACE}/ is empty.`;
+  const shown = [...files]
+    .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+    .slice(0, 60)
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const more = files.length > shown.length ? `\n(and ${files.length - shown.length} older: list the folder to see them)` : '';
+  return `Earlier work is under ${SESSION_WORKSPACE}/ (${files.length} file${files.length === 1 ? '' : 's'}):\n${shown.map((f) => `- ${f.path}`).join('\n')}${more}`;
+}
+
+/** The message that gives a lead its plan at the start of a session. `files` are the workspace files mounted in the sandbox. */
+export function sessionKickoff(org: Organisation, lead: Executive, plan: Plan, files: WorkspaceFile[]): string {
+  const next = plan.phases.find((p) => p.status !== 'done');
+  return `${today()} Carry out this plan.
+
+# The plan
+${planHeader(org, plan)}
+
+# Your operating profile for this plan
+${sessionPhases(plan)}
+
+${cycleBlock(org)}
+
+${steerBlock(org)}
+
+# Your team and the sandbox
+You have ${agents(Math.max(lead.agentCount, 1))}.
+${sessionFiles(files)}
+Work products go under ${SESSION_OUTPUTS}/${teamDir(lead)}/.
+
+# What to do
+${
+    next
+      ? `Take the plan through its phases in order, starting with ${next.name}. Record each phase when it passes its gate, then report to the board.`
+      : `Every phase of this plan is already recorded. Report to the board with ${PLAN_TOOLS.reportToBoard}.`
+  }`;
+}
+
+const bindingBlock = (instructions: string[]) => instructions.map((i) => `- ${i}`).join('\n');
+
+/** The message that sets a session going again after it stopped short of reporting. */
+export function sessionResume(lead: Executive, plan: Plan, instructions: string[]): string {
+  const done = plan.phases.filter((p) => p.status === 'done').map((p) => p.name);
+  const next = plan.phases.find((p) => p.status !== 'done');
+  const binding = instructions.length ? `\n\nBinding instructions from the board since you last heard:\n${bindingBlock(instructions)}` : '';
+  return `Carry on with the plan from where it stands. ${done.length ? `Recorded so far: ${done.join(', ')}.` : 'No phase has been recorded yet.'} ${
+    next ? `Next to record: ${next.name}.` : `Every phase is recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`
+  } You have ${agents(Math.max(lead.agentCount, 1))}. A workflow run of yours that is still open carries on; do not start it again.${binding}`;
+}
+
+/** New binding instructions for a session that is under way. */
+export function sessionInstructions(instructions: string[]): string {
+  return `Binding instructions from the board:\n${bindingBlock(instructions)}\nComply from now on, and say how in your next phase record.`;
 }
 
 export function recommendPrompt(idea: string, library: string): string {

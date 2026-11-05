@@ -27,6 +27,8 @@ export const DEFAULT_SETTINGS: OrgSettings = {
   executiveEffort: 'medium',
   workerEffort: 'medium',
   maxConcurrentCalls: 4,
+  execution: 'local',
+  workflowRuns: true,
 };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -64,6 +66,8 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
     executiveEffort: effort(p.executiveEffort, base.executiveEffort),
     workerEffort: effort(p.workerEffort, base.workerEffort),
     maxConcurrentCalls: Math.round(clamp(p.maxConcurrentCalls, 1, 16, base.maxConcurrentCalls)),
+    execution: p.execution === 'managed' || p.execution === 'local' ? p.execution : base.execution,
+    workflowRuns: typeof p.workflowRuns === 'boolean' ? p.workflowRuns : base.workflowRuns,
   };
 }
 
@@ -79,6 +83,38 @@ export function addUsage(total: UsageTotals, call: CallUsage): void {
   total.cacheWriteTokens += call.cacheWriteTokens;
   total.webSearches += call.webSearches;
   total.costUsd += call.costUsd;
+}
+
+/** Add to the totals what a hosted session spent since it was last heard from. Its model requests are not counted singly. */
+export function addSpend(total: UsageTotals, delta: Omit<CallUsage, 'model'>): void {
+  total.inputTokens += delta.inputTokens;
+  total.outputTokens += delta.outputTokens;
+  total.cacheReadTokens += delta.cacheReadTokens;
+  total.cacheWriteTokens += delta.cacheWriteTokens;
+  total.webSearches += delta.webSearches;
+  total.costUsd += delta.costUsd;
+}
+
+/** The smallest spend cap worth starting or topping up a hosted session with. */
+export const MIN_SESSION_ALLOWANCE_USD = 0.25;
+
+/**
+ * How high a hosted session's spend cap may be set, in dollars, or null if the
+ * organisation's budget has too little left for it. The money not yet spent,
+ * and not already promised to other sessions, is shared equally between this
+ * plan and the other plans that will want a session. Every session is capped
+ * by the platform and the caps never add up to more than the budget, so the
+ * organisation cannot overspend through its sessions.
+ */
+export function sessionAllowance(org: Organisation, plan: Plan, spentUsd: number): number | null {
+  const others = org.plans.filter((p) => p.id !== plan.id && isPlanActive(p));
+  const live = (p: Plan) => p.managed?.state === 'starting' || p.managed?.state === 'running';
+  // A session that is not being followed can still hold a cap above what it has spent, and could spend up to it.
+  const promised = others.reduce((sum, p) => sum + (p.managed ? Math.max(0, p.managed.budgetUsd - p.managed.spentUsd) : 0), 0);
+  const waiting = others.filter((p) => (p.execution ?? org.settings.execution) === 'managed' && !live(p)).length;
+  const share = (org.settings.budgetUsd - org.usage.costUsd - promised) / (waiting + 1);
+  if (share < MIN_SESSION_ALLOWANCE_USD) return null;
+  return Math.round((spentUsd + share) * 100) / 100;
 }
 
 /** A short id unique within the organisation, e.g. "p12". Short ids keep model prompts and outputs readable. */
@@ -272,15 +308,20 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.inbox ??= {};
   org.usageByExec ??= {};
   for (const plan of org.plans) {
+    plan.execution ??= null;
+    plan.managed ??= null;
     for (const phase of plan.phases) {
       for (const task of phase.tasks) {
-        if (task.status === 'running') {
+        // Local work that was in flight is lost with the process and goes back in the queue. An agent
+        // in a hosted session carries on there, and is caught up with when the session is picked up.
+        if (task.status === 'running' && !task.threadId) {
           task.status = 'pending';
           task.agent = null;
           task.startedAt = null;
         }
       }
     }
+    if (plan.managed && (plan.managed.state === 'running' || plan.managed.state === 'starting')) plan.managed.state = 'paused';
   }
   if (org.status === 'running') {
     org.status = 'paused';
@@ -351,6 +392,8 @@ export function toClientView(org: Organisation): Organisation {
     ...org,
     plans: org.plans.map((plan) => ({
       ...plan,
+      // The record of which outputs are already home is bookkeeping, and can be long.
+      managed: plan.managed ? { ...plan.managed, synced: {} } : null,
       phases: plan.phases.map((phase) => ({
         ...phase,
         tasks: phase.tasks.map((task) =>

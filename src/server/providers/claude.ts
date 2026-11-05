@@ -2,12 +2,17 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
+import { hasCause, translate } from './errors';
+import { ManagedResources } from './managed/resources';
+import { DEFAULT_TIMINGS, PlanSession, threadDetail, type SessionTimings } from './managed/session';
 import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webSearchToolFor } from './pricing';
 import {
   ProviderError,
   type AgentRequest,
   type AgentResult,
   type CallUsage,
+  type PlanJob,
+  type PlanOutcome,
   type Provider,
   type StructuredRequest,
   type SystemPrompt,
@@ -32,19 +37,60 @@ export interface ClaudeProviderOptions {
   maxRetries?: number;
   /** Delay before a failed agent turn is sent again; doubles each time. */
   turnRetryDelayMs?: number;
+  /** Where the ids of the agents and environments that hosted sessions start from are kept. */
+  managedStateFile?: string;
+  /** The workspace's name in links to the Console. */
+  workspace?: string;
+  /** How a hosted session is paced. For tests. */
+  sessionTimings?: Partial<SessionTimings>;
 }
 
 /** Runs the organisation on Claude through the Anthropic API. */
 export class ClaudeProvider implements Provider {
   private readonly client: Anthropic;
   private readonly turnRetryDelayMs: number;
+  private readonly resources: ManagedResources;
+  private readonly workspace: string;
+  private readonly sessionTimings: SessionTimings;
 
   constructor(options: ClaudeProviderOptions = {}) {
-    const { turnRetryDelayMs = 2000, ...clientOptions } = options;
+    const { turnRetryDelayMs = 2000, managedStateFile = 'data/managed.json', workspace = 'default', sessionTimings, ...clientOptions } = options;
     this.turnRetryDelayMs = turnRetryDelayMs;
     // With no key passed, the SDK resolves credentials from the environment
     // (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile).
     this.client = new Anthropic({ maxRetries: 4, ...clientOptions });
+    this.resources = new ManagedResources(this.client, managedStateFile);
+    this.workspace = workspace;
+    this.sessionTimings = { ...DEFAULT_TIMINGS, ...sessionTimings };
+  }
+
+  /**
+   * Carry a plan through in a Claude Managed Agents session: the lead and its
+   * agents work in a hosted sandbox where they can run what they build.
+   */
+  async executePlan(job: PlanJob): Promise<PlanOutcome> {
+    try {
+      return await new PlanSession({ client: this.client, resources: this.resources, workspace: this.workspace, timings: this.sessionTimings }, job).run();
+    } catch (err) {
+      throw translate(err);
+    }
+  }
+
+  async agentDetail(sessionId: string, threadId: string): Promise<{ brief: string | null; report: string | null }> {
+    try {
+      return await threadDetail(this.client, sessionId, threadId);
+    } catch (err) {
+      throw translate(err);
+    }
+  }
+
+  /** Create, or bring up to date, the agents and environment that hosted sessions of this kind start from. Sessions do this themselves when they need to. */
+  async prepareManaged(spec: Parameters<ManagedResources['ensure']>[0]): Promise<Awaited<ReturnType<ManagedResources['ensure']>>> {
+    try {
+      return await this.resources.ensure(spec);
+    } catch (err) {
+      throw translate(err);
+    }
   }
 
   info(): ProviderInfo {
@@ -54,6 +100,7 @@ export class ClaudeProvider implements Provider {
       simulated: false,
       defaultModel: DEFAULT_MODEL,
       models: MODELS.map((m) => ({ id: m.id, label: m.label, inputPerMTok: m.input, outputPerMTok: m.output })),
+      managed: true,
     };
   }
 
@@ -256,11 +303,6 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener('abort', done, { once: true });
   });
 
-/** The SDK wraps a transport failure (a connection cut mid-response, say) in an error that carries it as `cause`. */
-function hasCause(err: unknown): boolean {
-  return err instanceof Error && err.cause !== undefined && err.cause !== null;
-}
-
 /**
  * What of an assistant turn may be sent back, and which tool calls in it are
  * live. When a safety classifier stops a model part-way and a fallback model
@@ -408,26 +450,4 @@ function usageOf(message: Anthropic.Beta.BetaMessage, requested: string): CallUs
     webSearches,
     costUsd: sum((a) => costOfRequest(a.model, a)) + webSearches * WEB_SEARCH_PRICE,
   };
-}
-
-/** Map the SDK's typed errors onto what the engine needs to know: what happened and whether retrying can help. */
-function translate(err: unknown): ProviderError {
-  if (err instanceof ProviderError) return err;
-  if (err instanceof Anthropic.APIUserAbortError) return new ProviderError('The call was interrupted.', 'aborted', false);
-  if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
-    return new ProviderError(`Anthropic rejected the credentials: ${err.message}`, 'auth', false);
-  }
-  if (err instanceof Anthropic.RateLimitError) return new ProviderError(`Rate limited: ${err.message}`, 'rate_limit', true);
-  if (err instanceof Anthropic.BadRequestError || err instanceof Anthropic.NotFoundError || err instanceof Anthropic.UnprocessableEntityError) {
-    return new ProviderError(`Anthropic rejected the request: ${err.message}`, 'bad_request', false);
-  }
-  if (err instanceof Anthropic.APIConnectionError) return new ProviderError(`Could not reach Anthropic: ${err.message}`, 'unavailable', true);
-  if (err instanceof Anthropic.APIError) {
-    const retryable = err.status === undefined || err.status >= 500 || err.status === 408 || err.status === 409;
-    return new ProviderError(`Anthropic API error${err.status ? ` ${err.status}` : ''}: ${err.message}`, retryable ? 'unavailable' : 'bad_request', retryable);
-  }
-  // A response that was cut off part-way is not an API error: the SDK raises a plain error wrapping the transport failure.
-  if (hasCause(err)) return new ProviderError(`The connection to Anthropic was lost part-way through a reply: ${(err as Error).message}`, 'unavailable', true);
-  // Anything else was raised before a response arrived, e.g. no credentials could be resolved.
-  return new ProviderError(err instanceof Error ? err.message : String(err), 'bad_request', false);
 }

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type {
   ActiveWork,
   ActivityEntry,
@@ -5,6 +6,7 @@ import type {
   OrgSettings,
   OrgView,
   PauseReason,
+  Plan,
   Task,
 } from '../../shared/types';
 import { MAX_AGENTS_PER_LEAD } from '../../shared/profiles';
@@ -12,19 +14,23 @@ import { ProviderError, type CallUsage, type Provider } from '../providers/types
 import type { Store } from '../store';
 import { Workspace } from '../workspace';
 import { StaleWork, describeWork, perform, type EngineContext } from './handlers';
+import { MAX_RESULT_CHARS, clean } from './records';
 import {
   CEO_QUESTION,
   LIVE_CYCLES,
   ValidationError,
+  addSpend,
   addSteer,
   addUsage,
   ceoOf,
   digestCycle,
   emptyUsage,
   execById,
+  isPlanActive,
   planById,
   postToBoard,
   sanitiseSettings,
+  sessionAllowance,
   syncJudge,
   toClientView,
 } from './state';
@@ -111,6 +117,10 @@ export class OrgRunner {
     if (org.settings.maxCycles !== null && org.cycle.number > org.settings.maxCycles) {
       throw new ValidationError('The cycle limit has been reached. Raise or remove it before starting again.');
     }
+    const waiting = nextWork(org);
+    if (waiting.length && waiting.every((item) => !this.fundable(item))) {
+      throw new ValidationError('What is left of the budget is too little for the hosted sessions waiting to carry on. Raise it before starting again.');
+    }
     if (this.abort.signal.aborted) this.abort = new AbortController();
     this.halting = false;
     org.status = 'running';
@@ -159,7 +169,19 @@ export class OrgRunner {
 
   updateSettings(patch: Partial<OrgSettings>): void {
     const org = this.org;
+    const before = org.settings.execution;
     org.settings = sanitiseSettings(patch, org.settings);
+    if (org.settings.execution !== before) {
+      // A plan keeps the way of working it started with. One that has not yet begun follows the new setting.
+      for (const plan of org.plans) {
+        if (plan.status !== 'executing' || !plan.execution || plan.execution === org.settings.execution) continue;
+        if (this.inFlight.has(`execute:${plan.id}`)) continue;
+        const begun = plan.execution === 'managed' ? !!plan.managed?.sessionId : plan.phases.some((p) => p.status !== 'pending' || p.tasks.length > 0);
+        if (begun) continue;
+        plan.execution = org.settings.execution;
+        plan.managed = null;
+      }
+    }
     syncJudge(org);
     this.changed();
     this.pump();
@@ -172,6 +194,31 @@ export class OrgRunner {
     exec.agentCount = Math.min(MAX_AGENTS_PER_LEAD, Math.max(1, Math.round(count)));
     this.changed();
     this.pump();
+  }
+
+  /**
+   * One task in full. An agent in a workflow run is given its work by the run,
+   * not by the lead, so neither what it was asked nor what it returned is on
+   * the lead's stream: both are read from the agent's own thread, the first
+   * time someone asks, and kept.
+   */
+  async taskDetail(taskId: string): Promise<{ task: Task; planId: string; phase: string } | null> {
+    for (const plan of this.org.plans) {
+      for (const phase of plan.phases) {
+        const task = phase.tasks.find((t) => t.id === taskId);
+        if (!task) continue;
+        const sessionId = plan.managed?.sessionId;
+        if (task.threadId && sessionId && !task.result && this.provider.agentDetail) {
+          // A thread that cannot be read (its session was replaced, say) leaves the task as it is.
+          const detail = await this.provider.agentDetail(sessionId, task.threadId).catch(() => null);
+          if (detail?.brief && task.agent === null) task.brief = clean(detail.brief, 4000);
+          if (detail?.report && task.status !== 'running') task.result = detail.report.trim().slice(0, MAX_RESULT_CHARS);
+          if (detail?.brief || detail?.report) this.changed();
+        }
+        return { task, planId: plan.id, phase: phase.name };
+      }
+    }
+    return null;
   }
 
   /** Write the current state to disk now and wait for it. */
@@ -205,8 +252,25 @@ export class OrgRunner {
         return;
       }
       settle(org);
+      this.keepToWhatTheProviderCan();
       let items = this.startable();
+      // A hosted session needs money set aside for it before it can start or carry on. One that
+      // cannot be funded waits for other sessions to finish and release what they did not spend.
+      const starved = items.filter((item) => !this.fundable(item));
+      if (starved.length) items = items.filter((item) => !starved.includes(item));
       if (!items.length && this.inFlight.size === 0 && this.backoff.size === 0) {
+        if (starved.length) {
+          const left = Math.max(0, org.settings.budgetUsd - org.usage.costUsd);
+          postToBoard(
+            org,
+            'system',
+            'system',
+            'Budget reached',
+            `What is left of the $${org.settings.budgetUsd.toFixed(2)} budget ($${left.toFixed(2)}) is too little for the hosted session${starved.length === 1 ? '' : 's'} waiting to carry on. The organisation is paused until the shareholders raise it.`,
+          );
+          this.pause('budget');
+          return;
+        }
         if (cycleComplete(org)) {
           this.rollover();
           if (org.status !== 'running') return;
@@ -217,11 +281,14 @@ export class OrgRunner {
           return;
         }
       }
-      const room = () => this.inFlight.size < org.settings.maxConcurrentCalls;
+      // A hosted session runs on the provider's side for as long as its plan takes. It is not one
+      // of this machine's model calls, and holding a call slot for it would stall the board.
+      for (const item of items) if (item.kind === 'execute') this.launch(item, null);
+      const room = () => this.callsInFlight() < org.settings.maxConcurrentCalls;
       // A lead's own calls are short and unblock everything after them, so they go first.
       for (const item of items) {
         if (!room()) break;
-        if (item.kind !== 'task') this.launch(item, null);
+        if (item.kind !== 'task' && item.kind !== 'execute') this.launch(item, null);
       }
       // Agent slots are then shared out: the next task goes to the lead with the
       // fewest agents working, and among equals to the one served least so far.
@@ -254,6 +321,41 @@ export class OrgRunner {
 
   private startable(): WorkItem[] {
     return nextWork(this.org).filter((item) => !this.inFlight.has(item.key) && !this.backoff.has(item.key));
+  }
+
+  private callsInFlight(): number {
+    let n = 0;
+    for (const work of this.inFlight.values()) if (work.kind !== 'execute') n += 1;
+    return n;
+  }
+
+  /** Whether the budget has enough left, after what other sessions were promised, for this work to start. Only hosted sessions need money up front. */
+  private fundable(item: WorkItem): boolean {
+    if (item.kind !== 'execute') return true;
+    const plan = planById(this.org, item.planId);
+    return !plan || sessionAllowance(this.org, plan, plan.managed?.spentUsd ?? 0) !== null;
+  }
+
+  /** With a provider that has no hosted sessions, plans marked for one are carried out on this machine instead. */
+  private keepToWhatTheProviderCan(): void {
+    if (this.provider.executePlan) return;
+    for (const plan of this.org.plans) {
+      if (plan.execution === 'managed' && isPlanActive(plan)) this.toLocal(plan);
+    }
+  }
+
+  private toLocal(plan: Plan): void {
+    plan.execution = 'local';
+    plan.managed = null;
+    for (const phase of plan.phases) {
+      for (const task of phase.tasks) {
+        if (task.status !== 'running') continue;
+        task.status = 'pending';
+        task.agent = null;
+        task.startedAt = null;
+        task.threadId = null;
+      }
+    }
   }
 
   private busyAgents(execId: string): number {
@@ -321,6 +423,19 @@ export class OrgRunner {
         spent.costUsd += usage.costUsd;
         this.changed();
       },
+      recordSpend: (execId, model, delta) => {
+        addSpend(org.usage, delta);
+        addSpend((org.usageByExec[execId] ??= emptyUsage()), delta);
+        spent.model = model;
+        spent.inputTokens += delta.inputTokens + delta.cacheReadTokens + delta.cacheWriteTokens;
+        spent.outputTokens += delta.outputTokens;
+        spent.costUsd += delta.costUsd;
+        this.changed();
+        // A session reports its spend while it runs, so the budget is checked as it does, not only when work finishes.
+        if (org.status === 'running' && org.usage.costUsd >= org.settings.budgetUsd) this.pump();
+      },
+      touch: () => this.changed(),
+      stateDir: path.join(this.store.orgDir(org.id), 'managed'),
     };
     let error: string | null = null;
     try {

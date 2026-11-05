@@ -3,7 +3,7 @@ import { MAX_AGENTS_PER_LEAD, MAX_LEADS, PROFILES } from '../shared/profiles';
 import type { CreateOrgRequest } from '../shared/types';
 import type { Config } from './config';
 import type { OrgRunner } from './engine/runner';
-import { DEFAULT_SETTINGS, ValidationError, planById } from './engine/state';
+import { DEFAULT_SETTINGS, ValidationError } from './engine/state';
 import { ProviderError } from './providers/types';
 import { recommendTeam } from './recommend';
 import type { Registry } from './registry';
@@ -142,18 +142,10 @@ export function createApp(registry: Registry, config: Config): express.Express {
     res.json(runnerOf(req).activity);
   });
 
-  app.get('/api/orgs/:id/tasks/:taskId', (req, res) => {
-    const runner = runnerOf(req);
-    for (const plan of runner.org.plans) {
-      for (const phase of plan.phases) {
-        const task = phase.tasks.find((t) => t.id === req.params.taskId);
-        if (task) {
-          res.json({ task, planId: planById(runner.org, plan.id)?.id, phase: phase.name });
-          return;
-        }
-      }
-    }
-    throw new NotFound('No such task.');
+  app.get('/api/orgs/:id/tasks/:taskId', async (req, res) => {
+    const detail = await runnerOf(req).taskDetail(String(req.params.taskId));
+    if (!detail) throw new NotFound('No such task.');
+    res.json(detail);
   });
 
   app.get('/api/orgs/:id/files', async (req, res) => {

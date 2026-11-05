@@ -30,6 +30,8 @@ function plan(org: Organisation, ownerId: string, fields: Partial<Plan> = {}): P
     cancelReason: null,
     createdAt: at,
     updatedAt: at,
+    execution: null,
+    managed: null,
     ...fields,
   };
   org.plans.push(p);

@@ -1,8 +1,10 @@
 import type { z } from 'zod';
-import type { BoardReport, Executive, Organisation, Plan, PlanOrigin, Task } from '../../shared/types';
+import type { BoardReport, Executive, Organisation, Plan, PlanOrigin } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
 import { Workspace, workspaceTools } from '../workspace';
+import { executeInSession } from './hosted';
 import * as prompts from './prompts';
+import { MAX_RESULT_CHARS, bullets, clean, fileReport, logRemitDecisions, newTask, now } from './records';
 import * as schemas from './schemas';
 import { arbiterOf, execById, followUpsLeft, isPlanActive, leadsOf, nextId, planById, postToBoard, teamDir } from './state';
 import type { WorkItem } from './work';
@@ -17,6 +19,12 @@ export interface EngineContext {
   /** True when the budget is spent: agents finish what they are on and say what is left. */
   overBudget(): boolean;
   recordUsage(execId: string, usage: CallUsage): void;
+  /** Add what a hosted session has spent since it was last heard from. */
+  recordSpend(execId: string, model: string, delta: Omit<CallUsage, 'model'>): void;
+  /** The organisation changed while this work is still in flight: tell whoever is watching, and save. */
+  touch(): void;
+  /** Where a provider may keep its own records for this organisation. */
+  stateDir: string;
 }
 
 /** Applies the result of finished work to the organisation. Runs synchronously, after the model call has returned. */
@@ -24,13 +32,8 @@ export type Commit = () => void;
 
 const MAX_TASK_TURNS = 24;
 const MAX_TASK_SEARCHES = 8;
-const MAX_RESULT_CHARS = 12_000;
 const MAX_REWORK_ROUNDS = 1;
 const MAX_FOLLOW_UPS = 1;
-
-const now = () => new Date().toISOString();
-const clean = (text: string, max = 2000) => text.trim().slice(0, max);
-const bullets = (items: string[]) => items.map((i) => `- ${i}`).join('\n');
 
 function need<T>(value: T | undefined, what: string): T {
   if (value === undefined || value === null) throw new StaleWork(what);
@@ -39,23 +42,6 @@ function need<T>(value: T | undefined, what: string): T {
 
 /** The state this work was for has gone (plan cancelled, cycle moved on). The result is dropped without fuss. */
 export class StaleWork extends Error {}
-
-function newTask(org: Organisation, title: string, brief: string, rework: boolean): Task {
-  return {
-    id: nextId(org, 't'),
-    title: clean(title, 160),
-    brief: clean(brief, 4000),
-    status: 'pending',
-    agent: null,
-    rework,
-    result: null,
-    files: [],
-    error: null,
-    attempts: 0,
-    startedAt: null,
-    finishedAt: null,
-  };
-}
 
 function newPlan(
   org: Organisation,
@@ -97,45 +83,11 @@ function newPlan(
     cancelReason: null,
     createdAt: at,
     updatedAt: at,
+    execution: null,
+    managed: null,
   };
   org.plans.push(plan);
   return plan;
-}
-
-/** Record a decision a lead took inside their own remit. */
-function logRemitDecisions(
-  org: Organisation,
-  lead: Executive,
-  plan: Plan,
-  decisions: Array<{ title: string; decision: string; rationale: string }>,
-): void {
-  for (const d of decisions.slice(0, 4)) {
-    if (!d.title.trim() || !d.decision.trim()) continue;
-    const at = now();
-    org.decisions.push({
-      id: nextId(org, 'd'),
-      cycle: org.cycle.number,
-      at,
-      kind: 'in_remit',
-      title: clean(d.title, 200),
-      context: plan.objective,
-      raisedById: lead.id,
-      planId: plan.id,
-      issues: [],
-      participantIds: [],
-      positions: {},
-      status: 'resolved',
-      outcome: {
-        method: 'lead',
-        byId: lead.id,
-        ruling: clean(d.decision),
-        rationale: clean(d.rationale),
-        planAction: 'proceed',
-        amendments: [],
-        at,
-      },
-    });
-  }
 }
 
 export function cancelPlan(org: Organisation, plan: Plan, reason: string, byId: string): void {
@@ -503,33 +455,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       });
       return () => {
         if (plan.status !== 'reporting') return;
-        const report: BoardReport = {
-          id: nextId(org, 'rep'),
-          planId: plan.id,
-          fromId: exec.id,
-          cycle: plan.cycle,
-          at: now(),
-          headline: clean(data.headline, 240),
-          summary: clean(data.summary, 3000),
-          outcomes: data.outcomes.map((o) => clean(o, 500)).filter(Boolean).slice(0, 8),
-          files: files.slice(0, 40),
-          asks: data.asks.map((a) => clean(a, 500)).filter(Boolean).slice(0, 5),
-        };
-        org.reports.push(report);
-        plan.reportId = report.id;
-        plan.status = 'done';
-        plan.updatedAt = report.at;
-        const asks = report.asks.length ? `\n\n**Asks of the board**\n${bullets(report.asks)}` : '';
-        postToBoard(org, 'report', exec.id, `${exec.short} reports: ${report.headline}`, `${report.summary}\n\n${bullets(report.outcomes)}${asks}`, {
-          planId: plan.id,
-          reportId: report.id,
-        });
-        // The report is the trigger: every other lead gets it, unless this plan is already as deep as follow-ups may go.
-        if (plan.depth < org.settings.maxFollowUpDepth) {
-          for (const lead of leadsOf(org)) {
-            if (lead.id !== exec.id) (org.inbox[lead.id] ??= []).push(report.id);
-          }
-        }
+        fileReport(org, plan, exec, data, files);
       };
     }
 
@@ -557,6 +483,11 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           postToBoard(org, 'reaction', exec.id, `${exec.short} follows up`, `${plan.objective}\n\n**Because:** ${plan.rationale}`, { planId: plan.id });
         }
       };
+    }
+
+    case 'execute': {
+      const plan = need(planById(org, item.planId), `plan ${item.planId}`);
+      return executeInSession(ctx, exec, plan);
     }
 
     case 'steer_review': {
@@ -626,7 +557,7 @@ async function readForReview(workspace: Workspace, paths: string[]): Promise<pro
   return files;
 }
 
-function seatContext(exec: Executive) {
+export function seatContext(exec: Executive) {
   return {
     id: exec.id,
     kind: exec.kind,
@@ -638,7 +569,7 @@ function seatContext(exec: Executive) {
   };
 }
 
-function planContext(org: Organisation, plan: Plan) {
+export function planContext(org: Organisation, plan: Plan) {
   return {
     id: plan.id,
     owner: execById(org, plan.ownerId)?.short ?? plan.ownerId,
@@ -681,6 +612,8 @@ export function describeWork(org: Organisation, item: WorkItem): string {
       return 'Reading board reports';
     case 'steer_review':
       return 'Applying new shareholder steer';
+    case 'execute':
+      return 'Carrying out the plan with its team in a hosted session';
   }
 }
 

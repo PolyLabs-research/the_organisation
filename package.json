@@ -12,6 +12,7 @@
     "build": "vite build",
     "start": "NODE_ENV=production tsx src/server/main.ts",
     "establish": "tsx scripts/establish.ts",
+    "managed:setup": "tsx scripts/managed-setup.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

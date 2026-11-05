@@ -16,7 +16,10 @@ async function main(): Promise<void> {
   const store = new Store(config.dataDir);
   await store.init();
   // The simulator answers in about a second so the dashboard has something to show as it runs.
-  const provider = config.provider === 'claude' ? new ClaudeProvider() : new MockProvider({ delayMs: [500, 1600] });
+  const provider =
+    config.provider === 'claude'
+      ? new ClaudeProvider({ managedStateFile: path.join(config.dataDir, 'managed.json'), workspace: config.workspace })
+      : new MockProvider({ delayMs: [500, 1600] });
   const registry = new Registry(store, provider);
   await registry.load();
 

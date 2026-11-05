@@ -1,4 +1,4 @@
-import { CircleCheck, CircleDashed, CircleX, FileText, LoaderCircle } from 'lucide-react';
+import { CircleCheck, CircleDashed, CirclePause, CircleX, ExternalLink, FileText, LoaderCircle } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ActivityEntry,
@@ -12,7 +12,7 @@ import type {
   WorkspaceFile,
 } from '../shared/types';
 import { api } from './api';
-import { MESSAGE_LABEL, METHOD, PLAN_ACTION, PLAN_STATUS, STANCE } from './labels';
+import { MESSAGE_LABEL, METHOD, PLAN_ACTION, PLAN_STATUS, RUN_STATUS, SESSION_STATE, STANCE } from './labels';
 import { Empty, Markdown, SeatBadge, Sop, clock, duration, money, seatFor, seatName, tokens } from './ui';
 
 // ---- Board ----
@@ -105,46 +105,64 @@ function Message({ org, message, onOpenPlan }: { org: Organisation; message: Boa
 
 // ---- Plans ----
 
-function TaskIcon({ status }: { status: Task['status'] }) {
+function TaskIcon({ status, held }: { status: Task['status']; held: boolean }) {
   if (status === 'done') return <CircleCheck size={16} className="icon-ok" aria-label="Done" />;
   if (status === 'failed') return <CircleX size={16} className="icon-bad" aria-label="Failed" />;
+  // Part-way through in a session that is being held: it carries on when the session does.
+  if (status === 'running' && held) return <CirclePause size={16} className="icon-idle" aria-label="Held with its session" />;
   if (status === 'running') return <LoaderCircle size={16} className="icon-run spin" aria-label="Running" />;
   return <CircleDashed size={16} className="icon-idle" aria-label="Queued" />;
 }
 
-function TaskRow({ orgId, task, onOpenFile }: { orgId: string; task: Task; onOpenFile: (path: string) => void }) {
-  const [full, setFull] = useState<string | null>(null);
+function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task; held: boolean; onOpenFile: (path: string) => void }) {
+  const [fetched, setFetched] = useState<Task | null>(null);
   const [loading, setLoading] = useState(false);
-  const loadFull = () => {
+  const [nothing, setNothing] = useState(false);
+  const shown = fetched ?? task;
+  const load = () => {
     setLoading(true);
     api.task(orgId, task.id).then(
-      (r) => setFull(r.task.result),
+      (r) => {
+        setFetched(r.task);
+        setNothing(!r.task.result);
+        setLoading(false);
+      },
       () => setLoading(false),
     );
   };
+  // An agent in a workflow run is given its work by the run, so what it was asked and what it returned are read on request.
+  const inRun = !!task.threadId && task.agent === null;
   return (
     <li className="task">
       <details>
         <summary>
-          <TaskIcon status={task.status} />
+          <TaskIcon status={task.status} held={held && !!task.threadId} />
           <span className="task-title">{task.title}</span>
           {task.rework ? <span className="tag">Rework</span> : null}
-          {task.agent ? <span className="agent-tag">Agent {task.agent}</span> : null}
+          {task.agent ? <span className="agent-tag">Agent {task.agent}</span> : inRun ? <span className="agent-tag">In a run</span> : null}
         </summary>
         <div className="task-detail">
           <p className="field-label">Brief</p>
-          <p className="pre-wrap">{task.brief}</p>
+          <p className="pre-wrap">{shown.brief}</p>
           {task.error ? <p className="note note-bad">{task.error}</p> : null}
-          {task.result ? (
+          {shown.result ? (
             <>
               <p className="field-label">Report to the lead</p>
-              <Markdown>{full ?? task.result}</Markdown>
-              {task.resultTruncated && full === null ? (
-                <button type="button" className="link" onClick={loadFull} disabled={loading}>
+              <Markdown>{shown.result}</Markdown>
+              {task.resultTruncated && fetched === null ? (
+                <button type="button" className="link" onClick={load} disabled={loading}>
                   {loading ? 'Loading…' : 'Read the whole report'}
                 </button>
               ) : null}
             </>
+          ) : task.threadId && task.status !== 'running' ? (
+            nothing ? (
+              <p className="muted">Nothing more could be read from the session for this agent.</p>
+            ) : (
+              <button type="button" className="link" onClick={load} disabled={loading}>
+                {loading ? 'Reading from the session…' : inRun ? 'Read what it was asked and what it returned' : 'Read what it returned'}
+              </button>
+            )
           ) : null}
           {task.files.length ? (
             <ul className="file-links">
@@ -163,7 +181,110 @@ function TaskRow({ orgId, task, onOpenFile }: { orgId: string; task: Task; onOpe
   );
 }
 
-function PhaseBlock({ orgId, phase, index, onOpenFile }: { orgId: string; phase: PlanPhase; index: number; onOpenFile: (path: string) => void }) {
+/** The hosted session carrying out a plan: where it stands, what it has spent, and the workflow runs its lead started. */
+function SessionBlock({ plan, simulated, onOpenFile }: { plan: Plan; simulated: boolean; onOpenFile: (path: string) => void }) {
+  const session = plan.managed;
+  if (!session) return null;
+  const live = plan.status === 'executing';
+  const state = live ? SESSION_STATE[session.state] : 'Finished';
+  const tone = !live || session.state === 'finished' ? 'done' : session.state === 'running' || session.state === 'starting' ? 'live' : 'held';
+  return (
+    <div className="session">
+      <div className="session-head">
+        <span className="field-label">{simulated ? 'Hosted session (simulated)' : 'Hosted session'}</span>
+        <span className={`status status-session-${tone}`}>{state}</span>
+        {session.consoleUrl ? (
+          <a href={session.consoleUrl} target="_blank" rel="noreferrer">
+            Watch it in the Anthropic Console <ExternalLink size={13} aria-hidden="true" />
+          </a>
+        ) : null}
+      </div>
+      <dl className="session-facts">
+        <div>
+          <dt>Spent</dt>
+          <dd className="num">
+            {money(session.spentUsd)}
+            {live && session.budgetUsd > 0 ? ` of a ${money(session.budgetUsd)} cap` : ''}
+          </dd>
+        </div>
+        <div>
+          <dt>Agents used</dt>
+          <dd className="num">{session.agents.length}</dd>
+        </div>
+        {session.declined ? (
+          <div>
+            <dt>Tool calls declined</dt>
+            <dd title={session.lastDeclined ?? undefined}>
+              <span className="num">{session.declined}</span>
+              {session.lastDeclined ? <span className="muted"> · last: {session.lastDeclined}</span> : null}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+      {live && session.state === 'at_budget' ? (
+        <p className="muted">The session has spent its share of the budget and waits there, intact. It carries on when the budget is raised or another plan finishes under its share.</p>
+      ) : null}
+      {live && session.state === 'paused' ? <p className="muted">The session is capped at what it has spent, so nothing in it can run until the organisation is resumed.</p> : null}
+      {session.note && live ? (
+        <p className="session-note">
+          <span className="field-label">The lead’s latest note</span>
+          {session.note}
+        </p>
+      ) : null}
+      {session.runs.length ? (
+        <>
+          <span className="field-label">Workflow runs</span>
+          <ul className="runs">
+            {session.runs.map((run) => {
+              // Nothing in a session that is held or at its cap can run, whatever was last heard of the run.
+              const status = run.status === 'running' && tone !== 'live' ? (live ? 'paused' : 'stopped') : run.status;
+              return (
+                <li key={run.id}>
+                  <div className="run-head">
+                    <strong>{run.name}</strong>
+                    <span className={`status status-run-${status}`}>{RUN_STATUS[status]}</span>
+                    <span className="muted">
+                      {plan.phases[run.phaseIndex]?.name ?? 'Plan'} phase · {run.agents} agent{run.agents === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  {run.description ? <p className="muted">{run.description}</p> : null}
+                  {run.steps.length ? (
+                    <ol className="run-steps">
+                      {run.steps.map((step) => (
+                        <li key={step.id} className={`is-${step.status}`}>
+                          {step.name}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : null}
+                  {run.error ? <p className="note note-bad">{run.error}</p> : null}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      ) : null}
+      {session.files.length ? (
+        <details className="session-files">
+          <summary>
+            {session.files.length} file{session.files.length === 1 ? '' : 's'} brought home from the session
+          </summary>
+          <ul className="file-links">
+            {session.files.map((path) => (
+              <li key={path}>
+                <button type="button" className="link" onClick={() => onOpenFile(path)}>
+                  <FileText size={14} aria-hidden="true" /> {path}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function PhaseBlock({ orgId, phase, index, held, onOpenFile }: { orgId: string; phase: PlanPhase; index: number; held: boolean; onOpenFile: (path: string) => void }) {
   const state = phase.status === 'done' ? 'Passed' : phase.status === 'working' ? (phase.reworkRounds ? 'Rework under way' : 'Under way') : 'Not started';
   return (
     <li className={`phase phase-${phase.status}`}>
@@ -176,7 +297,7 @@ function PhaseBlock({ orgId, phase, index, onOpenFile }: { orgId: string; phase:
       {phase.tasks.length ? (
         <ul className="tasks">
           {phase.tasks.map((task) => (
-            <TaskRow key={task.id} orgId={orgId} task={task} onOpenFile={onOpenFile} />
+            <TaskRow key={task.id} orgId={orgId} task={task} held={held} onOpenFile={onOpenFile} />
           ))}
         </ul>
       ) : null}
@@ -190,13 +311,14 @@ function PhaseBlock({ orgId, phase, index, onOpenFile }: { orgId: string; phase:
   );
 }
 
-function PlanCard({ org, plan, open, onOpenFile }: { org: Organisation; plan: Plan; open: boolean; onOpenFile: (path: string) => void }) {
+function PlanCard({ org, plan, open, simulated, onOpenFile }: { org: Organisation; plan: Plan; open: boolean; simulated: boolean; onOpenFile: (path: string) => void }) {
   const ref = useRef<HTMLDetailsElement>(null);
   const owner = seatFor(org, plan.ownerId);
   const report = org.reports.find((r) => r.id === plan.reportId);
   const done = plan.phases.filter((p) => p.status === 'done').length;
   const current = plan.status === 'executing' ? plan.phases.findIndex((p) => p.status !== 'done') : -1;
   const ended = plan.status === 'done' || plan.status === 'cancelled' || plan.status === 'failed';
+  const held = !!plan.managed && plan.managed.state !== 'running' && plan.managed.state !== 'starting';
 
   useEffect(() => {
     if (open && ref.current) {
@@ -215,6 +337,7 @@ function PlanCard({ org, plan, open, onOpenFile }: { org: Organisation; plan: Pl
             <span className={`status status-plan-${ended ? plan.status : 'live'}`}>{PLAN_STATUS[plan.status]}</span>
             <span className="muted">{plan.origin.type === 'directive' ? 'CEO directive' : 'Follow-up to a board report'}</span>
             <span className="muted">{plan.priority} priority</span>
+            {plan.execution === 'managed' ? <span className="tag">Hosted session</span> : null}
           </div>
           <Sop phases={plan.phases} done={done} current={current} compact />
         </div>
@@ -251,9 +374,10 @@ function PlanCard({ org, plan, open, onOpenFile }: { org: Organisation; plan: Pl
             </span>
           </div>
         ) : null}
+        <SessionBlock plan={plan} simulated={simulated} onOpenFile={onOpenFile} />
         <ol className="phases">
           {plan.phases.map((phase, i) => (
-            <PhaseBlock key={phase.sopPhaseId} orgId={org.id} phase={phase} index={i} onOpenFile={onOpenFile} />
+            <PhaseBlock key={phase.sopPhaseId} orgId={org.id} phase={phase} index={i} held={held} onOpenFile={onOpenFile} />
           ))}
         </ol>
         {report ? (
@@ -268,7 +392,7 @@ function PlanCard({ org, plan, open, onOpenFile }: { org: Organisation; plan: Pl
   );
 }
 
-export function Plans({ org, target, onOpenFile }: { org: Organisation; target: string | null; onOpenFile: (path: string) => void }) {
+export function Plans({ org, target, simulated, onOpenFile }: { org: Organisation; target: string | null; simulated: boolean; onOpenFile: (path: string) => void }) {
   const cycles = [...new Set(org.plans.map((p) => p.cycle))].sort((a, b) => b - a);
   if (!org.plans.length) {
     return <Empty title="No plans yet.">Plans appear once the CEO has issued directives for the cycle.</Empty>;
@@ -281,7 +405,7 @@ export function Plans({ org, target, onOpenFile }: { org: Organisation; target: 
           {org.plans
             .filter((p) => p.cycle === cycle)
             .map((plan) => (
-              <PlanCard key={plan.id} org={org} plan={plan} open={target === plan.id} onOpenFile={onOpenFile} />
+              <PlanCard key={plan.id} org={org} plan={plan} open={target === plan.id} simulated={simulated} onOpenFile={onOpenFile} />
             ))}
         </section>
       ))}
@@ -410,7 +534,7 @@ export function Files({ org, selected, onSelect }: { org: Organisation; selected
   const [content, setContent] = useState<{ path: string; text: string; truncated: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Tasks finishing is what adds files, so refetch the list when that count moves.
-  const doneTasks = org.plans.reduce((n, p) => n + p.phases.reduce((m, ph) => m + ph.tasks.filter((t) => t.status === 'done').length, 0), 0);
+  const doneTasks = org.plans.reduce((n, p) => n + (p.managed?.files.length ?? 0) + p.phases.reduce((m, ph) => m + ph.tasks.filter((t) => t.status === 'done').length, 0), 0);
 
   useEffect(() => {
     let live = true;

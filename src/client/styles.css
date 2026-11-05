@@ -1758,6 +1758,145 @@ input[type='radio'] {
   border-left: 3px solid var(--ok);
 }
 
+/* ---- a plan's hosted session ---- */
+
+.session {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.session-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.session-head a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.session-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 26px;
+}
+
+.session-facts > div {
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+
+.session-facts dt {
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.session-facts dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-note {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.status-session-live,
+.status-run-running {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.status-session-held,
+.status-run-paused,
+.status-run-stopped {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+
+.status-session-done,
+.status-run-completed {
+  background: var(--ok-soft);
+  border-color: var(--ok-line);
+  color: var(--ok);
+}
+
+.status-run-failed {
+  background: var(--bad-soft);
+  border-color: var(--bad-line);
+  color: var(--bad);
+}
+
+.runs {
+  display: grid;
+  gap: 8px;
+}
+
+.runs > li {
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.run-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  font-size: 12px;
+}
+
+.run-steps li {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink-3);
+}
+
+.run-steps li.is-running {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.run-steps li.is-done {
+  background: var(--ok-soft);
+  border-color: var(--ok-line);
+  color: var(--ok);
+}
+
+.session-files summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
+
+.session-files .file-links {
+  margin-top: 6px;
+}
+
 /* ---- decisions ---- */
 
 .decisions {

@@ -2,6 +2,13 @@
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/**
+ * Where a plan's agents do their work.
+ * local: on this machine, through file tools; they cannot run code.
+ * managed: in a Claude Managed Agents session, a hosted sandbox where they can run and test what they build.
+ */
+export type ExecutionMode = 'local' | 'managed';
+
 /** One step of a standard operating profile, e.g. "Spec" in Spec → Build → Test → Release. */
 export interface SopPhase {
   id: string;
@@ -66,6 +73,13 @@ export interface OrgSettings {
   workerEffort: Effort;
   /** Upper bound on model calls in flight at once across the organisation. */
   maxConcurrentCalls: number;
+  /** How plans are carried out. */
+  execution: ExecutionMode;
+  /**
+   * In hosted sessions: whether a lead may start workflow runs, background work that puts many
+   * agents on the pieces of one phase. Every agent in a run uses tokens.
+   */
+  workflowRuns: boolean;
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -89,6 +103,8 @@ export interface Task {
   attempts: number;
   startedAt: string | null;
   finishedAt: string | null;
+  /** For work done in a hosted session: the session thread of the agent that did it. */
+  threadId?: string | null;
 }
 
 export type PhaseStatus = 'pending' | 'working' | 'done';
@@ -130,6 +146,58 @@ export interface Escalation {
   proposal: string;
 }
 
+/** A background run a lead started in a hosted session to put many agents on one phase's work. */
+export interface WorkflowRun {
+  id: string;
+  name: string;
+  description: string | null;
+  status: 'running' | 'paused' | 'completed' | 'stopped' | 'failed';
+  error: string | null;
+  /** The steps the lead's workflow declared, and how far it has got. */
+  steps: Array<{ id: string; name: string; status: 'pending' | 'running' | 'done' }>;
+  /** Agents the run has started. */
+  agents: number;
+  /** Which phase of the operating profile the run belongs to. */
+  phaseIndex: number;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+/** The hosted session carrying out a plan, when the organisation runs plans as Claude Managed Agents sessions. */
+export interface ManagedSession {
+  sessionId: string | null;
+  /** Where to watch the session in the Anthropic Console. */
+  consoleUrl: string | null;
+  /** The spend cap currently set on the session, enforced by the platform. */
+  budgetUsd: number;
+  /** What the session has spent so far at list prices, as the platform reports it. */
+  spentUsd: number;
+  /** Cumulative token counts behind `spentUsd`. */
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; webSearches: number };
+  state: 'starting' | 'running' | 'paused' | 'at_budget' | 'finished';
+  runs: WorkflowRun[];
+  /** The lead's report, held until the session's files have been brought home. */
+  pendingReport: { headline: string; summary: string; outcomes: string[]; asks: string[] } | null;
+  /** How many of the plan's binding instructions the session has been told. */
+  instructionsSent: number;
+  /** Tool calls the platform could not clear as safe, declined because nobody was watching. */
+  declined: number;
+  /** The lead's latest note on what it is doing. */
+  note: string | null;
+  /** Files the session has produced, as workspace paths. */
+  files: string[];
+  /** Sessions of this plan that ended without a report. A lost session is replaced once; after that the organisation stops. */
+  attempts: number;
+  /** Outputs already brought home: file id to size in bytes. */
+  synced: Record<string, number>;
+  /** The session threads of the lead's own agents, in the order they were first given work. Agent 1 is the first. */
+  agents: string[];
+  /** The most recent tool call that was declined, for the record. */
+  lastDeclined: string | null;
+  /** How far the session's events have been read: the time of the last one handled. */
+  cursor: string | null;
+}
+
 export interface Plan {
   id: string;
   cycle: number;
@@ -153,6 +221,9 @@ export interface Plan {
   cancelReason: string | null;
   createdAt: string;
   updatedAt: string;
+  /** How this plan is being carried out; fixed when execution begins. */
+  execution: ExecutionMode | null;
+  managed: ManagedSession | null;
 }
 
 export interface Objection {
@@ -355,7 +426,8 @@ export type WorkKind =
   | 'phase_review'
   | 'report'
   | 'react'
-  | 'steer_review';
+  | 'steer_review'
+  | 'execute';
 
 /** A record of one model call, for the activity log. */
 export interface ActivityEntry {
@@ -403,6 +475,8 @@ export interface ProviderInfo {
   simulated: boolean;
   defaultModel: string;
   models: Array<{ id: string; label: string; inputPerMTok: number; outputPerMTok: number }>;
+  /** True when plans can be run as hosted sessions (Claude Managed Agents). */
+  managed: boolean;
 }
 
 // ---- API payloads ----

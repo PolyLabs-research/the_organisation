@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { OrgView } from '../shared/types';
 import { api, useAction, useOrgStream, type Meta } from './api';
 import { Hierarchy } from './Hierarchy';
-import { STAGES } from './labels';
+import { EXECUTION, STAGES } from './labels';
 import { SettingsPanel } from './SettingsPanel';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
@@ -24,7 +24,7 @@ function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void })
     );
   }
   const text = {
-    budget: 'Spend has reached the budget, so the organisation paused itself. Raise the budget to let it continue.',
+    budget: 'The budget is spent, or what is left is too little for the work that is waiting, so the organisation paused itself. Raise the budget to let it continue.',
     cycle_limit: 'The organisation has completed the number of cycles you set. Raise or remove the limit to let it continue.',
     restart: 'The server restarted while this organisation was running. Resume and it carries on from where it stopped.',
   }[org.pauseReason];
@@ -72,8 +72,10 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const stage = STAGES.find((s) => s.id === org.cycle.stage)!;
   const openDecisions = org.decisions.filter((d) => d.status !== 'resolved').length;
   const livePlans = org.plans.filter((p) => !['done', 'cancelled', 'failed'].includes(p.status)).length;
-  const statusLabel =
-    org.status === 'running' ? 'Running' : draining ? `Pausing: ${active.length} call${active.length === 1 ? '' : 's'} finishing` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
+  const sessions = active.filter((a) => a.kind === 'execute').length;
+  const calls = active.length - sessions;
+  const winding = [calls ? `${calls} call${calls === 1 ? '' : 's'} finishing` : '', sessions ? `${sessions} session${sessions === 1 ? '' : 's'} being held` : ''].filter(Boolean).join(', ');
+  const statusLabel = org.status === 'running' ? 'Running' : draining ? `Pausing: ${winding}` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
 
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: 'board', label: 'Board' },
@@ -101,7 +103,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
             {statusLabel}
           </span>
           {org.status === 'running' ? (
-            <button type="button" className="button" onClick={() => act(() => api.pause(org.id))} disabled={control.busy} title="Stop starting new work; calls in flight finish">
+            <button type="button" className="button" onClick={() => act(() => api.pause(org.id))} disabled={control.busy} title="Stop starting new work; calls in flight finish, and hosted sessions are held where they are">
               <Pause size={15} aria-hidden="true" /> Pause
             </button>
           ) : (
@@ -146,6 +148,10 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
           <span className="field-label">Decisions signed off by</span>
           <span>{org.settings.arbiter === 'judge' ? 'An independent judge' : 'The CEO'}</span>
         </div>
+        <div className="strip-item">
+          <span className="field-label">Agents work</span>
+          <span>{EXECUTION[org.settings.execution]}</span>
+        </div>
         {!connected ? <span className="tag tag-warn">Reconnecting…</span> : null}
       </div>
 
@@ -167,7 +173,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
           </div>
           <div className="tab-panel" role="tabpanel">
             {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
-            {tab === 'plans' ? <Plans org={org} target={planTarget} onOpenFile={openFile} /> : null}
+            {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
             {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
             {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
             {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}

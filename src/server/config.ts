@@ -13,6 +13,8 @@ export interface Config {
   /** Why that provider was chosen, for the startup log and the UI. */
   providerReason: string;
   production: boolean;
+  /** The Anthropic workspace the API key belongs to, as it appears in Console links to hosted sessions. */
+  workspace: string;
 }
 
 /** True when the Anthropic SDK would find credentials without being handed a key. */
@@ -47,5 +49,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     provider,
     providerReason,
     production: env.NODE_ENV === 'production',
+    workspace: (env.ANTHROPIC_WORKSPACE_ID ?? '').trim() || 'default',
   };
 }

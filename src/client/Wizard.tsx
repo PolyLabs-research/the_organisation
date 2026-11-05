@@ -4,7 +4,7 @@ import { hueFor } from '../shared/profiles';
 import type { ExecutiveDraft, OperatingProfile, OrgSettings, SopPhase } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
-import { ErrorNote, Field, SeatBadge, Sop, Stepper, money } from './ui';
+import { ErrorNote, Field, HostedNotes, SeatBadge, Sop, Stepper, money } from './ui';
 
 interface Seat {
   key: number;
@@ -313,13 +313,51 @@ export function Wizard({ meta }: { meta: Meta }) {
               </label>
             </fieldset>
 
+            <fieldset className="choice">
+              <legend>The leads’ agents do their work:</legend>
+              <label>
+                <input type="radio" name="execution" checked={settings.execution === 'local'} onChange={() => set('execution', 'local')} />
+                <span>
+                  <strong>On this machine.</strong> They read and write files in the organisation’s workspace folder and cannot run anything. The cheapest way to work.
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="execution"
+                  checked={settings.execution === 'managed'}
+                  onChange={() => set('execution', 'managed')}
+                  disabled={!meta.provider.managed}
+                />
+                <span>
+                  <strong>In hosted sessions</strong> (Claude Managed Agents). Each plan gets a sandbox on Anthropic’s side where the lead and its agents can run and test what they
+                  build. It costs more: agents work for longer on each task, and the sandbox’s running time is billed as well.
+                  {meta.provider.managed ? '' : ' Not available with this provider.'}
+                </span>
+              </label>
+            </fieldset>
+            {settings.execution === 'managed' ? (
+              <>
+                <label className="check">
+                  <input type="checkbox" checked={settings.workflowRuns} onChange={(e) => set('workflowRuns', e.target.checked)} />
+                  <span>
+                    <strong>Let leads start workflow runs.</strong> For a phase with many pieces, a lead can have its agents work through them in the background. Every agent in a run
+                    uses tokens. Without it, a lead hands every task out itself.
+                  </span>
+                </label>
+                <HostedNotes web={settings.webResearch} runs={settings.workflowRuns} simulated={meta.provider.simulated} />
+              </>
+            ) : null}
+
             <div className="grid-2">
               <Field
                 label="Budget (US dollars)"
                 hint={
                   meta.provider.simulated
                     ? 'In simulation this is play money, but the cap behaves the same.'
-                    : 'Estimated spend. The organisation pauses itself here and waits for you. Spend grows with the number of leads and agents, so start small and raise it once you have seen a cycle.'
+                    : settings.execution === 'managed'
+                      ? 'The organisation pauses itself here and waits for you. Every plan runs a lead and its agents in a sandbox for as long as the plan takes, so allow several times what you would for work on this machine, and raise it once you have seen a cycle.'
+                      : 'Estimated spend. The organisation pauses itself here and waits for you. Spend grows with the number of leads and agents, so start small and raise it once you have seen a cycle.'
                 }
               >
                 <input type="number" min={0.1} step={0.5} value={settings.budgetUsd} onChange={(e) => set('budgetUsd', Number(e.target.value))} />
