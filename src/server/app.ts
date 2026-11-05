@@ -11,7 +11,9 @@ import { WorkspaceError } from './workspace';
 
 class NotFound extends Error {}
 
+/** Loopback as it appears in a Host header, and as HOST may be configured. */
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+const LOOPBACK_BINDINGS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 function hostname(hostHeader: string | undefined): string {
   if (!hostHeader) return '';
@@ -29,7 +31,7 @@ export function createApp(registry: Registry, config: Config): express.Express {
   // pointing a hostname of its own at 127.0.0.1.
   app.use('/api', (req, res, next) => {
     const host = hostname(req.headers.host);
-    if (LOOPBACK.has(config.host) && !LOOPBACK.has(host)) {
+    if (LOOPBACK_BINDINGS.has(config.host) && !LOOPBACK.has(host)) {
       res.status(403).json({ error: 'This server only answers requests addressed to localhost.' });
       return;
     }

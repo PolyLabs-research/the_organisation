@@ -482,11 +482,31 @@ describe('limits and controls', () => {
     expect(org.usage.costUsd).toBeLessThan(0.2);
     expect(org.history).toHaveLength(0);
     expect(() => h!.runner.start()).toThrow(/budget/i);
+    // Agents that were at work when the money ran out finished what they were on:
+    // nothing is left half-run to be paid for again.
+    const atPause = org.plans.flatMap((p) => p.phases.flatMap((ph) => ph.tasks));
+    expect(atPause.some((t) => t.status === 'running')).toBe(false);
 
     h.runner.updateSettings({ budgetUsd: 1000 });
     await runToRest(h.runner);
     expect(org.pauseReason).toBe('cycle_limit');
     expect(plansOf(org, 1).every((p) => p.status === 'done')).toBe(true);
+    // No task was started twice.
+    expect(org.plans.flatMap((p) => p.phases.flatMap((ph) => ph.tasks)).every((t) => t.attempts === 1)).toBe(true);
+  });
+
+  it('never abandons a run to the budget, however small the top-ups', async () => {
+    let runs = 0;
+    h = await harness({ settings: { budgetUsd: 0.1, maxConcurrentCalls: 8 }, mock: { onCall: (kind) => void (kind === 'task' && runs++) } });
+    for (let i = 0; i < 400 && h.org.pauseReason !== 'cycle_limit'; i++) {
+      if (h.org.status !== 'running') h.runner.updateSettings({ budgetUsd: h.org.usage.costUsd + 0.02 });
+      if (h.org.status !== 'running') h.runner.start();
+      await h.runner.idle();
+    }
+    expect(h.org.pauseReason).toBe('cycle_limit');
+    const tasks = h.org.plans.flatMap((p) => p.phases.flatMap((ph) => ph.tasks));
+    // Every agent run that was started was kept: one run per task.
+    expect(runs).toBe(tasks.length);
   });
 
   it('pauses without losing work in flight, and resumes where it left off', async () => {

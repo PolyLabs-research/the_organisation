@@ -423,6 +423,8 @@ export interface TeamRecommendation {
   name: string;
   mission: string;
   executives: ExecutiveDraft[];
+  /** What asking for the recommendation cost. It belongs to no organisation, so no budget covers it. */
+  costUsd: number;
 }
 
 export interface CreateOrgRequest {

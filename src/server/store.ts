@@ -34,7 +34,14 @@ export class Store {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
-        orgs.push(JSON.parse(await fs.readFile(path.join(this.orgsDir(), entry.name, 'org.json'), 'utf8')) as Organisation);
+        const org = JSON.parse(await fs.readFile(path.join(this.orgsDir(), entry.name, 'org.json'), 'utf8')) as Organisation;
+        // A copy of an organisation's folder (a backup, say) holds the original's id. Loading it
+        // would have the copy's stale state saved over the original, so it is left alone.
+        if (org.id !== entry.name) {
+          console.warn(`Skipping ${entry.name}: it holds organisation ${org.id}, which belongs in a folder of that name.`);
+          continue;
+        }
+        orgs.push(org);
       } catch (err) {
         console.warn(`Skipping ${entry.name}: ${(err as Error).message}`);
       }

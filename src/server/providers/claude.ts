@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
-import { DEFAULT_MODEL, MODELS, priceUsage, webSearchToolFor } from './pricing';
+import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webSearchToolFor } from './pricing';
 import {
   ProviderError,
   type AgentRequest,
@@ -23,21 +23,28 @@ const STRUCTURED_MAX_TOKENS = 32_000;
 const AGENT_MAX_TOKENS = 64_000;
 /** How often a server-side tool turn that paused is resumed before the run is given up. */
 const MAX_PAUSE_RESUMES = 5;
+/** How often one turn of an agent run is sent again after a failure that may pass, before the run is given up. */
+const TURN_RETRIES = 3;
 
 export interface ClaudeProviderOptions {
   apiKey?: string;
   baseURL?: string;
   maxRetries?: number;
+  /** Delay before a failed agent turn is sent again; doubles each time. */
+  turnRetryDelayMs?: number;
 }
 
 /** Runs the organisation on Claude through the Anthropic API. */
 export class ClaudeProvider implements Provider {
   private readonly client: Anthropic;
+  private readonly turnRetryDelayMs: number;
 
   constructor(options: ClaudeProviderOptions = {}) {
+    const { turnRetryDelayMs = 2000, ...clientOptions } = options;
+    this.turnRetryDelayMs = turnRetryDelayMs;
     // With no key passed, the SDK resolves credentials from the environment
     // (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile).
-    this.client = new Anthropic({ maxRetries: 4, ...options });
+    this.client = new Anthropic({ maxRetries: 4, ...clientOptions });
   }
 
   info(): ProviderInfo {
@@ -129,18 +136,25 @@ export class ClaudeProvider implements Provider {
         eager_input_streaming: true,
       };
     });
-    if (req.webSearch) tools.push({ type: webSearchToolFor(req.model), name: 'web_search', max_uses: req.webSearch.maxUses });
+    // `max_uses` limits one request, not the run, and the tool list cannot change
+    // mid-run, so the allowance for the whole task is enforced below by counting.
+    if (req.webSearch) tools.push({ type: webSearchToolFor(req.model), name: 'web_search', max_uses: req.webSearch.perRequest });
 
     const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: req.prompt }];
     let turns = 0;
     let pauses = 0;
     let badJson = 0;
+    let retries = 0;
+    let searches = 0;
+    let searchesWhenWarned: number | null = null;
     let wrapUpSent = false;
 
     for (;;) {
       if (req.shouldStop?.()) return { text: '', turns, stopped: 'interrupted' };
+      // Nothing has been spent on this run yet, so there is nothing to wrap up: leave the task for later.
+      if (turns === 0 && req.shouldWrapUp?.()) return { text: '', turns, stopped: 'interrupted' };
 
-      let message;
+      let message: Anthropic.Beta.BetaMessage;
       try {
         message = await this.client.beta.messages
           .stream(
@@ -160,17 +174,27 @@ export class ClaudeProvider implements Provider {
           )
           .finalMessage();
         badJson = 0;
+        retries = 0;
       } catch (err) {
-        if (err instanceof Anthropic.APIError || req.signal?.aborted) throw translate(err);
-        // With eager input streaming, a tool input that is not parseable JSON
-        // rejects here. The turn was never added to the history, so re-issue it.
-        if (++badJson > 2) {
+        if (req.signal?.aborted) throw translate(err);
+        const failure = translate(err);
+        // The failed turn was never added to the history, so the same request can be sent
+        // again. Giving up on the run instead would mean paying for every earlier turn twice.
+        if (failure.retryable && retries < TURN_RETRIES) {
+          await sleep(this.turnRetryDelayMs * 2 ** retries++, req.signal);
+          continue;
+        }
+        if (!(err instanceof Anthropic.APIError) && !hasCause(err)) {
+          // With eager input streaming, a tool input that is not parseable JSON rejects here.
+          if (++badJson <= 2) continue;
           throw new ProviderError(`The agent’s tool call could not be read: ${(err as Error).message}`, 'invalid_output', false);
         }
-        continue;
+        throw failure;
       }
       turns += 1;
-      req.onUsage?.(usageOf(message, req.model));
+      const usage = usageOf(message, req.model);
+      req.onUsage?.(usage);
+      searches += usage.webSearches;
       checkStop(message);
 
       if (message.stop_reason === 'pause_turn') {
@@ -180,35 +204,84 @@ export class ClaudeProvider implements Provider {
         continue;
       }
 
-      const text = message.content
+      const { content, calls } = afterFallback(message.content);
+      const text = content
         .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === 'text')
         .map((block) => block.text)
         .join('\n')
         .trim();
-      const calls = message.content.filter((block): block is Anthropic.Beta.BetaToolUseBlock => block.type === 'tool_use');
-      if (!calls.length) return { text, turns, stopped: wrapUpSent ? 'max_turns' : 'done' };
+      if (!calls.length) return { text, turns, stopped: wrapUpSent ? 'cut_short' : 'done' };
 
       // A tool input cut off at the token limit can still parse as a smaller valid object, so never run it.
       if (message.stop_reason === 'max_tokens') {
         throw new ProviderError('A tool call was cut off before it was complete.', 'truncated', true);
       }
-      if (wrapUpSent) return { text, turns, stopped: 'max_turns' };
+      if (wrapUpSent) return { text, turns, stopped: 'cut_short' };
 
-      messages.push({ role: 'assistant', content: message.content });
+      messages.push({ role: 'assistant', content });
       const results: Anthropic.Beta.BetaContentBlockParam[] = [];
       for (const call of calls) {
         results.push(await runTool(req, call));
       }
-      if (turns >= req.maxTurns) {
+      // Instructions to the agent mid-run go after the tool results, so earlier turns are never edited.
+      const allowance = req.webSearch?.perTask ?? Infinity;
+      const searchedAfterWarning = searchesWhenWarned !== null && searches > searchesWhenWarned;
+      if (turns >= req.maxTurns || req.shouldWrapUp?.() || searchedAfterWarning) {
         wrapUpSent = true;
+        results.push({ type: 'text', text: WRAP_UP });
+      } else if (searches >= allowance && searchesWhenWarned === null) {
+        searchesWhenWarned = searches;
         results.push({
           type: 'text',
-          text: 'You have reached your turn limit. Do not call any more tools. Give your closing report now, and say what is left unfinished.',
+          text: `You have used the ${allowance} web searches allowed for this task. Do not search again: finish the task with what you have found.`,
         });
       }
       messages.push({ role: 'user', content: results });
     }
   }
+}
+
+const WRAP_UP =
+  'You have to stop here. Do not call any more tools. Give your closing report now: what you produced and where, and exactly what is left unfinished.';
+
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (ms <= 0 || signal?.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+
+/** The SDK wraps a transport failure (a connection cut mid-response, say) in an error that carries it as `cause`. */
+function hasCause(err: unknown): boolean {
+  return err instanceof Error && err.cause !== undefined && err.cause !== null;
+}
+
+/**
+ * What of an assistant turn may be sent back, and which tool calls in it are
+ * live. When a safety classifier stops a model part-way and a fallback model
+ * takes over, the turn holds a `fallback` marker. The first model's thinking
+ * and tool calls before that marker were abandoned: they must not be echoed,
+ * run or answered. Its text, and server tool calls that already have their
+ * results, stand.
+ */
+function afterFallback(blocks: Anthropic.Beta.BetaContentBlock[]): {
+  content: Anthropic.Beta.BetaContentBlock[];
+  calls: Anthropic.Beta.BetaToolUseBlock[];
+} {
+  const isCall = (block: Anthropic.Beta.BetaContentBlock): block is Anthropic.Beta.BetaToolUseBlock => block.type === 'tool_use';
+  const boundary = blocks.findLastIndex((block) => block.type === 'fallback');
+  if (boundary < 0) return { content: blocks, calls: blocks.filter(isCall) };
+  const before = blocks.slice(0, boundary);
+  const resultFor = (block: Anthropic.Beta.BetaContentBlock) => ('tool_use_id' in block && typeof block.tool_use_id === 'string' ? block.tool_use_id : null);
+  const answered = new Set(before.map(resultFor).filter((id): id is string => id !== null));
+  const kept = before.filter((block) => block.type === 'text' || resultFor(block) !== null || (block.type === 'server_tool_use' && answered.has(block.id)));
+  const after = blocks.slice(boundary + 1);
+  return { content: [...kept, ...after], calls: after.filter(isCall) };
 }
 
 // JSON Schema keywords that structured outputs do not accept. Zod adds numeric bounds to every integer.
@@ -293,21 +366,48 @@ function checkStop(message: Anthropic.Beta.BetaMessage): void {
     throw new ProviderError(`The model declined this request${category ? ` (${category})` : ''}.`, 'refusal', false);
   }
   if (message.stop_reason === 'model_context_window_exceeded') {
-    throw new ProviderError('The conversation outgrew the model’s context window.', 'bad_request', false);
+    // Trying the same work again would end the same way, so this is a failure of the work, not of the provider.
+    throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
   }
 }
 
+/**
+ * What a response cost. When the API retried a declined request on a fallback
+ * model, or ran several sampling rounds for a server tool, `usage.iterations`
+ * lists every attempt with the model that made it, and the top-level figures
+ * cover only the last. Each attempt is priced at its own model's rates.
+ */
 function usageOf(message: Anthropic.Beta.BetaMessage, requested: string): CallUsage {
   const usage = message.usage;
-  return priceUsage({
-    // If a fallback model served the request, price it as that model.
-    model: message.model || requested,
-    inputTokens: usage.input_tokens ?? 0,
-    outputTokens: usage.output_tokens ?? 0,
-    cacheReadTokens: usage.cache_read_input_tokens ?? 0,
-    cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
-    webSearches: usage.server_tool_use?.web_search_requests ?? 0,
-  });
+  const served = message.model || requested;
+  const attempts = usage.iterations?.length
+    ? usage.iterations.map((entry) => ({
+        model: ('model' in entry && entry.model) || served,
+        inputTokens: entry.input_tokens ?? 0,
+        outputTokens: entry.output_tokens ?? 0,
+        cacheReadTokens: entry.cache_read_input_tokens ?? 0,
+        cacheWriteTokens: entry.cache_creation_input_tokens ?? 0,
+      }))
+    : [
+        {
+          model: served,
+          inputTokens: usage.input_tokens ?? 0,
+          outputTokens: usage.output_tokens ?? 0,
+          cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+          cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
+        },
+      ];
+  const webSearches = usage.server_tool_use?.web_search_requests ?? 0;
+  const sum = (pick: (attempt: (typeof attempts)[number]) => number) => attempts.reduce((total, attempt) => total + pick(attempt), 0);
+  return {
+    model: served,
+    inputTokens: sum((a) => a.inputTokens),
+    outputTokens: sum((a) => a.outputTokens),
+    cacheReadTokens: sum((a) => a.cacheReadTokens),
+    cacheWriteTokens: sum((a) => a.cacheWriteTokens),
+    webSearches,
+    costUsd: sum((a) => costOfRequest(a.model, a)) + webSearches * WEB_SEARCH_PRICE,
+  };
 }
 
 /** Map the SDK's typed errors onto what the engine needs to know: what happened and whether retrying can help. */
@@ -326,6 +426,8 @@ function translate(err: unknown): ProviderError {
     const retryable = err.status === undefined || err.status >= 500 || err.status === 408 || err.status === 409;
     return new ProviderError(`Anthropic API error${err.status ? ` ${err.status}` : ''}: ${err.message}`, retryable ? 'unavailable' : 'bad_request', retryable);
   }
+  // A response that was cut off part-way is not an API error: the SDK raises a plain error wrapping the transport failure.
+  if (hasCause(err)) return new ProviderError(`The connection to Anthropic was lost part-way through a reply: ${(err as Error).message}`, 'unavailable', true);
   // Anything else was raised before a response arrived, e.g. no credentials could be resolved.
   return new ProviderError(err instanceof Error ? err.message : String(err), 'bad_request', false);
 }

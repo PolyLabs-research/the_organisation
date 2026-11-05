@@ -147,8 +147,12 @@ function planForBoard(org: Organisation, plan: Plan): string {
 
 function filesBlock(files: WorkspaceFile[]): string {
   if (!files.length) return '# Workspace\nEmpty so far.';
-  const shown = files.slice(-60);
-  const more = files.length > shown.length ? `\n(${files.length - shown.length} older files not listed)` : '';
+  // The most recently written files, whichever team wrote them, shown in path order.
+  const shown = [...files]
+    .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+    .slice(0, 60)
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const more = files.length > shown.length ? `\n(${files.length - shown.length} older files not listed; agents can list the whole workspace)` : '';
   return `# Workspace files\n${shown.map((f) => `- ${f.path}`).join('\n')}${more}`;
 }
 

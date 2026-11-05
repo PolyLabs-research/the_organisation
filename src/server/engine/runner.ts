@@ -103,6 +103,7 @@ export class OrgRunner {
 
   start(): void {
     const org = this.org;
+    if (this.disposed) throw new ValidationError('This organisation has been deleted.');
     if (org.status === 'running') return;
     if (org.usage.costUsd >= org.settings.budgetUsd) {
       throw new ValidationError('The budget is spent. Raise it before starting the organisation again.');
@@ -309,7 +310,8 @@ export class OrgRunner {
       provider: this.provider,
       workspace: this.workspace,
       signal: this.abort.signal,
-      shouldStop: () => this.halting || org.usage.costUsd >= org.settings.budgetUsd,
+      halting: () => this.halting,
+      overBudget: () => org.usage.costUsd >= org.settings.budgetUsd,
       recordUsage: (execId: string, usage: CallUsage) => {
         addUsage(org.usage, usage);
         addUsage((org.usageByExec[execId] ??= emptyUsage()), usage);

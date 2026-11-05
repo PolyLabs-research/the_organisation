@@ -11,6 +11,7 @@ export async function recommendTeam(provider: Provider, idea: string, model: str
   const library = LEAD_PROFILES.map(
     (p) => `- ${p.id}: ${p.title} (${p.short}), leads ${p.function}. ${p.remit} Operating profile: ${p.phases.map((ph) => ph.name).join(' → ')}.`,
   ).join('\n');
+  let costUsd = 0;
   const data = await provider.structured({
     kind: 'recommend_team',
     system: RECOMMEND_SYSTEM,
@@ -18,6 +19,7 @@ export async function recommendTeam(provider: Provider, idea: string, model: str
     schema: RecommendTeam,
     model,
     effort,
+    onUsage: (usage) => (costUsd += usage.costUsd),
     context: { idea },
   });
 
@@ -47,5 +49,5 @@ export async function recommendTeam(provider: Provider, idea: string, model: str
     if (executives.length >= MAX_LEADS) break;
   }
   if (!executives.length) throw new ProviderError('The recommendation named no usable executive seats.', 'invalid_output', true);
-  return { name: data.name.trim().slice(0, 80), mission: data.mission.trim().slice(0, 600), executives };
+  return { name: data.name.trim().slice(0, 80), mission: data.mission.trim().slice(0, 600), executives, costUsd };
 }

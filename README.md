@@ -104,7 +104,7 @@ Start, pause, stop and settings are at the top of the dashboard. Pause lets call
 
 ## Spend and limits
 
-An organisation that never stops can spend without limit, so every organisation has a **budget** (default $5). Spend is estimated from token usage at the list prices in [`src/server/providers/pricing.ts`](src/server/providers/pricing.ts). When the estimate reaches the budget the organisation pauses itself and waits for you to raise it. It can overshoot by the calls that were already in flight. The estimate is not a bill: check the Anthropic Console for what was charged. Calls cut off by "Stop now" are not counted.
+An organisation that never stops can spend without limit, so every organisation has a **budget** (default $5). Spend is estimated from token usage at the list prices in [`src/server/providers/pricing.ts`](src/server/providers/pricing.ts). When the estimate reaches the budget the organisation pauses itself and waits for you to raise it. Agents that are mid-task at that moment are told to stop and report what they have, so their work is kept rather than paid for again; the spend can therefore pass the budget by about one more model turn for each agent at work. The estimate is not a bill: check the Anthropic Console for what was charged. Calls cut off by "Stop now" are not counted, and neither is a team recommendation in the wizard, which belongs to no organisation (the wizard shows what it cost).
 
 What drives spend, and where to change it (wizard or settings):
 
@@ -112,10 +112,10 @@ What drives spend, and where to change it (wizard or settings):
 - **Effort** for executives and agents (default medium).
 - **Agents per lead** and **tasks per phase** (default at most 4 tasks).
 - **Follow-up work per cycle** (default one round, and never more than two follow-up plans per lead).
-- **Web search** for agents (off by default; billed per search by Anthropic).
+- **Web search** for agents (off by default; billed per search by Anthropic; at most 8 searches per task).
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
-If a call fails in a way that may pass (rate limits, overload), it is retried with backoff. If it fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. The same is true after a server restart: an organisation that was running comes back paused.
+If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. The same is true after a server restart: an organisation that was running comes back paused.
 
 ## What agents can and cannot do
 
@@ -132,6 +132,8 @@ data/orgs/<id>/
   archive/         cycles that have left live state (the three most recent stay live)
   workspace/       the files the agents produce
 ```
+
+A folder is loaded only if its name is the organisation's id, so a copy kept beside it as a backup is ignored rather than mistaken for the original.
 
 ## Configuration
 

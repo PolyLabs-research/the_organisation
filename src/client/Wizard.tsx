@@ -4,7 +4,7 @@ import { hueFor } from '../shared/profiles';
 import type { ExecutiveDraft, OperatingProfile, OrgSettings, SopPhase } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
-import { ErrorNote, Field, SeatBadge, Sop, Stepper } from './ui';
+import { ErrorNote, Field, SeatBadge, Sop, Stepper, money } from './ui';
 
 interface Seat {
   key: number;
@@ -83,6 +83,7 @@ export function Wizard({ meta }: { meta: Meta }) {
   const [mission, setMission] = useState('');
   const [seats, setSeats] = useState<Seat[]>([]);
   const [teamOpen, setTeamOpen] = useState(false);
+  const [recommendationCost, setRecommendationCost] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [custom, setCustom] = useState({ title: '', function: '', remit: '', phases: '' });
   const [settings, setSettings] = useState<OrgSettings>(meta.defaults);
@@ -106,6 +107,7 @@ export function Wizard({ meta }: { meta: Meta }) {
       setSeats(recommended.slice(0, meta.limits.maxLeads));
       if (!name.trim()) setName(rec.name);
       setMission(rec.mission);
+      setRecommendationCost(rec.costUsd);
       setTeamOpen(true);
     });
 
@@ -173,6 +175,11 @@ export function Wizard({ meta }: { meta: Meta }) {
           ) : null}
         </div>
         <ErrorNote onDismiss={recommend.clearError}>{recommend.error}</ErrorNote>
+        {recommendationCost !== null && !meta.provider.simulated ? (
+          <p className="muted">
+            That recommendation cost about {money(recommendationCost)}. It is not counted against any organisation’s budget.
+          </p>
+        ) : null}
       </section>
 
       {teamOpen ? (

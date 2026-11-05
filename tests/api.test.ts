@@ -215,6 +215,26 @@ describe('who may call the API', () => {
     expect(same.status).toBe(200);
   });
 
+  it('applies the localhost rule when bound to the IPv6 loopback address too', async () => {
+    const config: Config = { port: 0, host: '::1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false };
+    const other = createApp(registry, config).listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => other.once('listening', resolve));
+    const { port } = other.address() as AddressInfo;
+    const status = await new Promise<number>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/api/orgs', headers: { host: 'evil.example' } }, (res) => (res.resume(), resolve(res.statusCode ?? 0))).on('error', reject);
+    });
+    expect(status).toBe(403);
+    await new Promise<void>((resolve) => other.close(() => resolve()));
+  });
+
+  it('refuses to start an organisation that is being deleted', async () => {
+    const { org } = await establish();
+    const runner = registry.get(org.id)!;
+    await registry.remove(org.id);
+    expect(() => runner.start()).toThrow(/deleted/);
+    expect(runner.org.status).not.toBe('running');
+  });
+
   it('answers only requests addressed to localhost', async () => {
     const status = await new Promise<number>((resolve, reject) => {
       const { port } = server.address() as AddressInfo;

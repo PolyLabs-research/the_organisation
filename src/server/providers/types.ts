@@ -48,18 +48,21 @@ export interface AgentTool {
 
 export interface AgentRequest extends BaseRequest {
   tools: AgentTool[];
-  webSearch: { maxUses: number } | null;
+  /** How many web searches the agent may make: in one model request, and over the whole run. */
+  webSearch: { perRequest: number; perTask: number } | null;
   maxTurns: number;
-  /** Checked between turns; returning true ends the run early. */
+  /** Checked between turns. True ends the run at once and nothing from it is kept. */
   shouldStop?: () => boolean;
+  /** Checked between turns. True has the agent stop using tools and give its closing report. */
+  shouldWrapUp?: () => boolean;
 }
 
 export interface AgentResult {
   /** The agent's closing message. */
   text: string;
   turns: number;
-  /** done: finished by itself. max_turns: ran out of turns. interrupted: `shouldStop` fired. */
-  stopped: 'done' | 'max_turns' | 'interrupted';
+  /** done: finished by itself. cut_short: told to wrap up before it had finished. interrupted: `shouldStop` fired. */
+  stopped: 'done' | 'cut_short' | 'interrupted';
 }
 
 export type ProviderErrorCode =

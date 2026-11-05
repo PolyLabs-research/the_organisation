@@ -129,6 +129,8 @@ export class MockProvider implements Provider {
   }
 
   async agent(req: AgentRequest): Promise<AgentResult> {
+    // A run that would be stopped before its first turn is not started at all.
+    if (req.shouldStop?.() || req.shouldWrapUp?.()) return { text: '', turns: 0, stopped: 'interrupted' };
     await this.options.onCall?.(req.kind, req.context);
     const c = req.context;
     const seat = c.seat as Seat;
@@ -142,6 +144,11 @@ export class MockProvider implements Provider {
     const listing = await tool('list_files').run({ directory: '' });
     this.charge(req, listing);
     if (req.shouldStop?.()) return { text: '', turns: 1, stopped: 'interrupted' };
+    if (req.shouldWrapUp?.()) {
+      const text = `Stopped before writing anything for "${brief(task.title, 80)}": only the workspace listing was read.`;
+      this.charge(req, text);
+      return { text, turns: 2, stopped: 'cut_short' };
+    }
 
     // Turn 2: write the work product.
     await this.wait(req.signal);
@@ -168,12 +175,13 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
     await tool('write_file').run({ path, content });
     this.charge(req, content);
     if (req.shouldStop?.()) return { text: '', turns: 2, stopped: 'interrupted' };
+    const cutShort = req.shouldWrapUp?.() ?? false;
 
     // Turn 3: report to the lead.
     await this.wait(req.signal);
     const text = `Produced \`${path}\` for the ${phase.name} phase. It covers the brief ("${brief(task.title, 80)}") and builds on ${existing} existing workspace file${existing === 1 ? '' : 's'}. Unresolved: the content is simulated, so nothing in it has been verified.`;
     this.charge(req, text);
-    return { text, turns: 3, stopped: 'done' };
+    return { text, turns: 3, stopped: cutShort ? 'cut_short' : 'done' };
   }
 
   private answer(kind: string, c: Record<string, unknown>): unknown {

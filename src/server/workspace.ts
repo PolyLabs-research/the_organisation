@@ -6,7 +6,10 @@ import type { AgentTool } from './providers/types';
 
 const MAX_WRITE_BYTES = 1_000_000;
 const MAX_READ_CHARS = 120_000;
-const MAX_LISTED = 400;
+/** A ceiling on how many files a listing walks, so a runaway workspace cannot stall the server. */
+const MAX_LISTED = 5000;
+/** How many files the listing tool shows an agent at once. */
+const MAX_SHOWN = 400;
 
 export class WorkspaceError extends Error {}
 
@@ -41,6 +44,13 @@ export class Workspace {
   private async resolveSafe(rel: string): Promise<string> {
     const target = path.join(this.root, rel);
     const realRoot = await fs.realpath(this.root);
+    // A link whose destination does not exist yet has no real path to check, and writing
+    // to it would create that destination. Nothing in a workspace needs to be a link.
+    const link = await fs.lstat(target).then(
+      (stat) => stat.isSymbolicLink(),
+      () => false,
+    );
+    if (link) throw new WorkspaceError('path is a symbolic link');
     // Walk up to the deepest ancestor that exists and make sure it really lives inside the root.
     let probe = target;
     for (;;) {
@@ -143,7 +153,13 @@ export function workspaceTools(workspace: Workspace, onWrite: (path: string) => 
         const { directory } = ListInput.parse(input);
         const files = await workspace.list(directory);
         if (!files.length) return directory ? `No files under ${directory}.` : 'The workspace is empty.';
-        return files.map((f) => `${f.path} (${f.size} bytes)`).join('\n');
+        if (files.length <= MAX_SHOWN) return files.map((f) => `${f.path} (${f.size} bytes)`).join('\n');
+        // Too many to show: the most recently written ones, and a pointer to narrowing the listing.
+        const recent = [...files]
+          .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+          .slice(0, MAX_SHOWN)
+          .sort((a, b) => a.path.localeCompare(b.path));
+        return `${recent.map((f) => `${f.path} (${f.size} bytes)`).join('\n')}\n\n[${files.length - MAX_SHOWN} older files not shown. List a directory to see all of its files.]`;
       },
     },
     {

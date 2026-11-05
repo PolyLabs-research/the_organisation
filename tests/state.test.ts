@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LEAD_PROFILES, PROFILES, executiveFromDraft } from '../src/shared/profiles';
 import { DEFAULT_SETTINGS, ValidationError, createOrganisation, sanitiseSettings } from '../src/server/engine/state';
-import { MODELS, priceUsage } from '../src/server/providers/pricing';
+import { MODELS, costOfRequest, priceUsage } from '../src/server/providers/pricing';
 import { MockProvider } from '../src/server/providers/mock';
 import { recommendTeam } from '../src/server/recommend';
 
@@ -139,6 +139,21 @@ describe('pricing', () => {
     expect(usage.costUsd).toBeCloseTo(4 + 20 + 0.2 + 5 + 1, 6);
   });
 
+  it('charges Haiku its higher rate for a prompt over 100,000 tokens', () => {
+    const tokens = { inputTokens: 400_000, outputTokens: 10_000, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    expect(costOfRequest('claude-haiku-5-5', tokens)).toBeCloseTo((400_000 * 0.5 + 10_000 * 2.5) / 1e6, 10);
+    expect(costOfRequest('claude-haiku-5-5', { ...tokens, inputTokens: 90_000 })).toBeCloseTo((90_000 * 0.1 + 10_000 * 0.5) / 1e6, 10);
+    // The threshold counts the whole prompt, cached or not.
+    expect(costOfRequest('claude-haiku-5-5', { inputTokens: 1000, outputTokens: 0, cacheReadTokens: 150_000, cacheWriteTokens: 0 })).toBeCloseTo((1000 * 0.5 + 150_000 * 0.05) / 1e6, 10);
+  });
+
+  it('knows the rates of the models a declined request can fall back to', () => {
+    const tokens = { inputTokens: 1e6, outputTokens: 1e6, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    expect(costOfRequest('claude-opus-4-8', tokens)).toBe(30);
+    expect(costOfRequest('claude-opus-5', tokens)).toBe(30);
+    expect(costOfRequest('claude-opus-5-5', tokens)).toBe(24);
+  });
+
   it('prices a model it does not know as the default model rather than as free', () => {
     const known = priceUsage({ model: 'claude-opus-5-5', inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 });
     const unknown = priceUsage({ model: 'claude-something-new', inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 });
@@ -159,6 +174,8 @@ describe('team recommendation', () => {
     expect(rec.executives.every((e) => (e.agentCount ?? 0) >= 1 && e.rationale)).toBe(true);
     expect(rec.name).toBeTruthy();
     expect(rec.mission).toBeTruthy();
+    // The call is paid for but belongs to no organisation, so its cost is reported with it.
+    expect(rec.costUsd).toBeGreaterThan(0);
     // What comes back can be used to establish the organisation as is.
     const org = createOrganisation({ name: rec.name, idea: 'x', mission: rec.mission, executives: rec.executives }, 'org_1');
     expect(org.executives).toHaveLength(rec.executives.length + 1);

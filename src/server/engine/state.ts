@@ -36,7 +36,8 @@ export const MAX_FOLLOW_UPS_PER_LEAD = 2;
 
 /** How many cycles of plans, decisions and reports stay in live state; older ones are archived to disk. */
 export const LIVE_CYCLES = 3;
-const MAX_BOARD_MESSAGES = 400;
+/** A backstop only: the board is trimmed by archiving whole cycles, so nothing is dropped unarchived in normal running. */
+const MAX_BOARD_MESSAGES = 3000;
 
 export class ValidationError extends Error {}
 

@@ -10,13 +10,21 @@ import { ProviderError, type AgentTool, type CallUsage } from '../src/server/pro
 // provider sends and how it handles what comes back; they cannot check that
 // the real API accepts the requests.
 
-type Block = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown; rawInput?: string };
+type Block =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown; rawInput?: string }
+  /** Any other block, sent whole as the stream announces it. */
+  | { type: 'raw'; block: Record<string, unknown> };
 interface Reply {
   status?: number;
   error?: { type: string; message: string };
   content?: Block[];
   stop_reason?: string;
   model?: string;
+  /** Extra fields for the usage reported at the end of the reply. */
+  usage?: Record<string, unknown>;
+  /** Drop the connection part-way through the reply. */
+  cut?: boolean;
 }
 interface Seen {
   path: string;
@@ -52,6 +60,8 @@ function sse(reply: Reply): string {
     if (block.type === 'text') {
       events.push(['content_block_start', { type: 'content_block_start', index, content_block: { type: 'text', text: '' } }]);
       events.push(['content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } }]);
+    } else if (block.type === 'raw') {
+      events.push(['content_block_start', { type: 'content_block_start', index, content_block: block.block }]);
     } else {
       events.push(['content_block_start', { type: 'content_block_start', index, content_block: { type: 'tool_use', id: block.id, name: block.name, input: {} } }]);
       events.push([
@@ -61,7 +71,7 @@ function sse(reply: Reply): string {
     }
     events.push(['content_block_stop', { type: 'content_block_stop', index }]);
   });
-  events.push(['message_delta', { type: 'message_delta', delta: { stop_reason: reply.stop_reason ?? 'end_turn', stop_sequence: null }, usage: { output_tokens: 40 } }]);
+  events.push(['message_delta', { type: 'message_delta', delta: { stop_reason: reply.stop_reason ?? 'end_turn', stop_sequence: null }, usage: { output_tokens: 40, ...reply.usage } }]);
   events.push(['message_stop', { type: 'message_stop' }]);
   return events.map(([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`).join('');
 }
@@ -79,6 +89,12 @@ beforeAll(async () => {
         return;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (reply.cut) {
+        // The reply starts, then the connection goes away.
+        res.write(sse(reply).split('\n\n').slice(0, 2).join('\n\n') + '\n\n');
+        setTimeout(() => res.destroy(), 5);
+        return;
+      }
       res.end(sse(reply));
     });
   });
@@ -91,7 +107,7 @@ beforeEach(() => {
   seen = [];
 });
 
-const provider = () => new ClaudeProvider({ apiKey: 'test-key', baseURL, maxRetries: 0 });
+const provider = () => new ClaudeProvider({ apiKey: 'test-key', baseURL, maxRetries: 0, turnRetryDelayMs: 0 });
 const system = { charter: 'The charter.', role: 'The role.' };
 const Answer = z.object({ verdict: z.enum(['pass', 'rework']), summary: z.string() });
 
@@ -196,6 +212,40 @@ describe('structured calls', () => {
     expect(usage).toHaveLength(1);
   });
 
+  it('treats a connection lost part-way through a reply as something that may pass', async () => {
+    replies.push({ content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }], cut: true });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect(err.code).toBe('unavailable');
+    expect(err.retryable).toBe(true);
+  });
+
+  it('treats work that outgrew the context window as a failure of the work, not of the provider', async () => {
+    replies.push({ content: [], stop_reason: 'model_context_window_exceeded' });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect(err.code).toBe('invalid_output');
+    expect(err.retryable).toBe(false);
+  });
+
+  it('prices every attempt at the rates of the model that made it', async () => {
+    replies.push({
+      content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }],
+      model: 'claude-opus-4-8',
+      // The requested model declined part-way; a fallback model then answered.
+      usage: {
+        iterations: [
+          { type: 'message', model: 'claude-opus-5-5', input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+          { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 2000, cache_creation_input_tokens: 0, cache_creation: null },
+        ],
+      },
+    });
+    const usage: CallUsage[] = [];
+    await provider().structured(structuredRequest((u) => usage.push(u)));
+    expect(usage[0]).toMatchObject({ model: 'claude-opus-4-8', inputTokens: 2000, outputTokens: 600, cacheReadTokens: 2000 });
+    const declined = (1000 * 4 + 100 * 20) / 1e6;
+    const fallback = (1000 * 5 + 500 * 25 + 2000 * 0.5) / 1e6;
+    expect(usage[0]!.costUsd).toBeCloseTo(declined + fallback, 10);
+  });
+
   it.each([
     [401, 'authentication_error', 'auth', false],
     [403, 'permission_error', 'auth', false],
@@ -282,12 +332,12 @@ describe('agent runs', () => {
 
   it('offers web search only when the organisation allows it', async () => {
     replies.push({ content: [{ type: 'text', text: 'Done.' }] });
-    await provider().agent(agentRequest({ webSearch: { maxUses: 5 } }));
-    expect(seen[0]!.body.tools.at(-1)).toEqual({ type: 'web_search_20260209', name: 'web_search', max_uses: 5 });
+    await provider().agent(agentRequest({ webSearch: { perRequest: 3, perTask: 8 } }));
+    expect(seen[0]!.body.tools.at(-1)).toEqual({ type: 'web_search_20260209', name: 'web_search', max_uses: 3 });
     // Haiku does not run the self-filtering search tool, so it is given the basic one.
     replies.push({ content: [{ type: 'text', text: 'Done.' }] });
-    await provider().agent(agentRequest({ webSearch: { maxUses: 3 }, model: 'claude-haiku-5-5' }));
-    expect(seen[1]!.body.tools.at(-1)).toEqual({ type: 'web_search_20250305', name: 'web_search', max_uses: 3 });
+    await provider().agent(agentRequest({ webSearch: { perRequest: 2, perTask: 8 }, model: 'claude-haiku-5-5' }));
+    expect(seen[1]!.body.tools.at(-1)).toEqual({ type: 'web_search_20250305', name: 'web_search', max_uses: 2 });
     replies.push({ content: [{ type: 'text', text: 'Done.' }] });
     await provider().agent(agentRequest());
     expect(seen[2]!.body.tools.some((t: { name: string }) => t.name === 'web_search')).toBe(false);
@@ -329,18 +379,18 @@ describe('agent runs', () => {
     const call = (id: string): Reply => ({ content: [{ type: 'tool_use', id, name: 'write_file', input: { path: `${id}.md`, content: 'x' } }], stop_reason: 'tool_use' });
     replies.push(call('toolu_1'), call('toolu_2'), { content: [{ type: 'text', text: 'Out of turns; two files written.' }] });
     const result = await provider().agent(agentRequest({ maxTurns: 2 }));
-    expect(result).toEqual({ text: 'Out of turns; two files written.', turns: 3, stopped: 'max_turns' });
+    expect(result).toEqual({ text: 'Out of turns; two files written.', turns: 3, stopped: 'cut_short' });
     expect(written).toHaveLength(2);
     const last = seen[2]!.body.messages.at(-1);
     expect(last.content.at(-1).type).toBe('text');
-    expect(last.content.at(-1).text).toContain('turn limit');
+    expect(last.content.at(-1).text).toContain('Do not call any more tools');
   });
 
   it('stops without running more tools if the model ignores the turn limit', async () => {
     const call = (id: string): Reply => ({ content: [{ type: 'tool_use', id, name: 'write_file', input: { path: `${id}.md`, content: 'x' } }], stop_reason: 'tool_use' });
     replies.push(call('toolu_1'), call('toolu_2'));
     const result = await provider().agent(agentRequest({ maxTurns: 1 }));
-    expect(result.stopped).toBe('max_turns');
+    expect(result.stopped).toBe('cut_short');
     expect(written).toHaveLength(1);
     expect(seen).toHaveLength(2);
   });
@@ -360,6 +410,98 @@ describe('agent runs', () => {
     const result = await provider().agent(agentRequest({ shouldStop: () => turn++ > 0 }));
     expect(result).toEqual({ text: '', turns: 1, stopped: 'interrupted' });
     expect(seen).toHaveLength(1);
+  });
+
+  it('sends the same turn again after a dropped connection, keeping what the run has already done', async () => {
+    const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
+    replies.push(call, { content: [{ type: 'text', text: 'half a rep' }], cut: true }, { content: [{ type: 'text', text: 'Done after a retry.' }] });
+    const result = await provider().agent(agentRequest());
+    expect(result).toEqual({ text: 'Done after a retry.', turns: 2, stopped: 'done' });
+    // The tool ran once; the second turn was asked for twice with the same history.
+    expect(written).toHaveLength(1);
+    expect(seen).toHaveLength(3);
+    expect(seen[2]!.body.messages).toEqual(seen[1]!.body.messages);
+  });
+
+  it('sends the same turn again when the API is overloaded', async () => {
+    const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
+    replies.push(call, { status: 529, error: { type: 'overloaded_error', message: 'Overloaded' } }, { content: [{ type: 'text', text: 'Done.' }] });
+    const result = await provider().agent(agentRequest());
+    expect(result.stopped).toBe('done');
+    expect(written).toHaveLength(1);
+    expect(seen).toHaveLength(3);
+  });
+
+  it('gives up on a turn that keeps failing, saying it may pass later', async () => {
+    const overloaded: Reply = { status: 529, error: { type: 'overloaded_error', message: 'Overloaded' } };
+    replies.push(overloaded, overloaded, overloaded, overloaded);
+    const err = await failure(provider().agent(agentRequest()));
+    expect(err.code).toBe('unavailable');
+    expect(err.retryable).toBe(true);
+    expect(seen).toHaveLength(4);
+  });
+
+  it('does not run or echo what a model had started before a fallback model took over', async () => {
+    replies.push({
+      content: [
+        { type: 'text', text: 'First I will write the file.' },
+        { type: 'raw', block: { type: 'thinking', thinking: '', signature: 'sig' } },
+        { type: 'tool_use', id: 'toolu_abandoned', name: 'write_file', input: { path: 'abandoned.md', content: 'x' } },
+        { type: 'raw', block: { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' }, trigger: { type: 'refusal' } } },
+        { type: 'text', text: 'Continuing.' },
+        { type: 'tool_use', id: 'toolu_live', name: 'write_file', input: { path: 'live.md', content: 'y' } },
+      ],
+      stop_reason: 'tool_use',
+      model: 'claude-opus-4-8',
+    });
+    replies.push({ content: [{ type: 'text', text: 'Wrote live.md.' }] });
+    await provider().agent(agentRequest());
+    expect(written).toEqual([{ path: 'live.md', content: 'y' }]);
+    const [, assistant, user] = seen[1]!.body.messages;
+    expect(assistant.content.map((b: any) => [b.type, b.id ?? b.text])).toEqual([
+      ['text', 'First I will write the file.'],
+      ['text', 'Continuing.'],
+      ['tool_use', 'toolu_live'],
+    ]);
+    expect(user.content).toEqual([{ type: 'tool_result', tool_use_id: 'toolu_live', content: 'Wrote live.md.' }]);
+  });
+
+  it('holds the agent to its search allowance for the whole task, not per request', async () => {
+    const call = (id: string, searches: number): Reply => ({
+      content: [{ type: 'tool_use', id, name: 'write_file', input: { path: `${id}.md`, content: 'x' } }],
+      stop_reason: 'tool_use',
+      usage: { server_tool_use: { web_search_requests: searches, web_fetch_requests: 0 } },
+    });
+    replies.push(call('toolu_1', 4), call('toolu_2', 0), call('toolu_3', 1), { content: [{ type: 'text', text: 'Stopped.' }] });
+    const usage: CallUsage[] = [];
+    const result = await provider().agent(agentRequest({ webSearch: { perRequest: 3, perTask: 4 }, onUsage: (u) => usage.push(u) }));
+    const lastText = (i: number) => seen[i]!.body.messages.at(-1).content.at(-1);
+    // Allowance used: told once to finish without searching.
+    expect(lastText(1).text).toContain('4 web searches allowed for this task');
+    // It carried on without searching: nothing more is said.
+    expect(lastText(2).type).toBe('tool_result');
+    // It searched again: it is made to stop.
+    expect(lastText(3).text).toContain('Do not call any more tools');
+    expect(result).toEqual({ text: 'Stopped.', turns: 4, stopped: 'cut_short' });
+    // The tool list never changes during a run.
+    expect(seen[3]!.body.tools).toEqual(seen[0]!.body.tools);
+    expect(usage[0]!.costUsd).toBeGreaterThan(4 * 0.01);
+  });
+
+  it('has the agent wrap up when told to, keeping what it has done', async () => {
+    replies.push({ content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' });
+    replies.push({ content: [{ type: 'text', text: 'Wrote a.md; the review is not done.' }] });
+    let spent = false;
+    const result = await provider().agent(agentRequest({ onUsage: () => void (spent = true), shouldWrapUp: () => spent }));
+    expect(result).toEqual({ text: 'Wrote a.md; the review is not done.', turns: 2, stopped: 'cut_short' });
+    expect(written).toHaveLength(1);
+    expect(seen[1]!.body.messages.at(-1).content.at(-1).text).toContain('Do not call any more tools');
+  });
+
+  it('does not start a run it would have to wrap up at once', async () => {
+    const result = await provider().agent(agentRequest({ shouldWrapUp: () => true }));
+    expect(result).toEqual({ text: '', turns: 0, stopped: 'interrupted' });
+    expect(seen).toHaveLength(0);
   });
 
   it('declines to continue after a refusal', async () => {

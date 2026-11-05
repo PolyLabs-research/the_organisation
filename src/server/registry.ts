@@ -43,11 +43,12 @@ export class Registry {
   async remove(id: string): Promise<boolean> {
     const runner = this.runners.get(id);
     if (!runner) return false;
+    // Out of the registry first: a request arriving while the work winds down must not find it.
+    this.runners.delete(id);
     runner.stop();
     await runner.idle().catch(() => {});
     await runner.flush();
     runner.dispose();
-    this.runners.delete(id);
     await this.store.remove(id);
     return true;
   }

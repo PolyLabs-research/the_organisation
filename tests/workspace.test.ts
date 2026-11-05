@@ -44,6 +44,13 @@ describe('the workspace', () => {
     await expect(workspace.write('link/new.txt', 'x')).rejects.toThrow('escapes');
   });
 
+  it('refuses to write through a link, even one that points at nothing yet', async () => {
+    await symlink(path.join(dir, 'not-there-yet.txt'), path.join(workspace.root, 'dangling'));
+    await expect(workspace.write('dangling', 'x')).rejects.toThrow('symbolic link');
+    await symlink(path.join(workspace.root, 'real.md'), path.join(workspace.root, 'inside-link'));
+    await expect(workspace.write('inside-link', 'x')).rejects.toThrow('symbolic link');
+  });
+
   it('refuses files over the size limit', async () => {
     await expect(workspace.write('big.txt', 'x'.repeat(1_000_001))).rejects.toThrow('limit');
   });

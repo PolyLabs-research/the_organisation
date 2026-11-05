@@ -12,8 +12,10 @@ export interface EngineContext {
   provider: Provider;
   workspace: Workspace;
   signal: AbortSignal;
-  /** True when agents should stop at their next turn: the loop is being halted or the budget is spent. */
-  shouldStop(): boolean;
+  /** True when work in flight is to be abandoned at once: the organisation was told to stop. */
+  halting(): boolean;
+  /** True when the budget is spent: agents finish what they are on and say what is left. */
+  overBudget(): boolean;
   recordUsage(execId: string, usage: CallUsage): void;
 }
 
@@ -21,6 +23,7 @@ export interface EngineContext {
 export type Commit = () => void;
 
 const MAX_TASK_TURNS = 24;
+const MAX_TASK_SEARCHES = 8;
 const MAX_RESULT_CHARS = 12_000;
 const MAX_REWORK_ROUNDS = 1;
 const MAX_FOLLOW_UPS = 1;
@@ -425,10 +428,11 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         model: org.settings.workerModel,
         effort: org.settings.workerEffort,
         tools,
-        webSearch: org.settings.webResearch ? { maxUses: 5 } : null,
+        webSearch: org.settings.webResearch ? { perRequest: 3, perTask: MAX_TASK_SEARCHES } : null,
         maxTurns: MAX_TASK_TURNS,
         signal: ctx.signal,
-        shouldStop: ctx.shouldStop,
+        shouldStop: ctx.halting,
+        shouldWrapUp: ctx.overBudget,
         onUsage: (usage) => ctx.recordUsage(exec.id, usage),
         context: {
           seat: seatContext(exec),
@@ -452,7 +456,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           task.startedAt = null;
           return;
         }
-        const note = result.stopped === 'max_turns' ? '\n\n[The agent reached its turn limit before finishing.]' : '';
+        const note = result.stopped === 'cut_short' ? '\n\n[The agent was stopped before it had finished: it reached its turn limit or the budget was spent.]' : '';
         task.status = 'done';
         task.result = (result.text.trim() || '(The agent gave no closing report.)').slice(0, MAX_RESULT_CHARS) + note;
         task.files = written;
