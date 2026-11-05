@@ -18,6 +18,9 @@ function PriceCell({ connectionId, model, onView }: { connectionId: string; mode
   const [output, setOutput] = useState(String(model.outputPerMTok));
   const save = useAction();
   const id = model.id.slice(model.id.indexOf(':') + 1);
+  // An emptied box is not a price of nothing.
+  const amount = (text: string) => (text.trim() === '' ? NaN : Number(text));
+  const valid = amount(input) >= 0 && amount(output) >= 0;
   const send = (value: { input: number | null; output?: number }) =>
     save.run(async () => {
       onView(await api.patchConnection(connectionId, { price: { model: id, ...value } }));
@@ -52,7 +55,7 @@ function PriceCell({ connectionId, model, onView }: { connectionId: string; mode
         Out $
         <input type="number" min={0} step="0.01" value={output} onChange={(e) => setOutput(e.target.value)} aria-label={`Output price for ${model.label}`} />
       </label>
-      <button type="button" className="button" disabled={save.busy} onClick={() => void send({ input: Number(input), output: Number(output) })}>
+      <button type="button" className="button" disabled={save.busy || !valid} onClick={() => void send({ input: amount(input), output: amount(output) })}>
         Save
       </button>
       <button type="button" className="link" disabled={save.busy} onClick={() => void send({ input: null })} title="Go back to the list price, or to no price if none is known">
@@ -327,7 +330,14 @@ export function Models({ meta, onChange }: { meta: Meta; onChange: () => void })
             <p className="muted">Loading…</p>
           )
         ) : view.connections.length === 0 ? (
-          <p className="muted">No key yet. Until one is added, organisations run in simulation: every seat gives a scripted answer and nothing is spent.</p>
+          view.provider.simulated ? (
+            <p className="muted">No key yet. Until one is added, organisations run in simulation: every seat gives a scripted answer and nothing is spent.</p>
+          ) : (
+            <p className="muted">
+              No key is connected. Organisations pause when they next need a model, and say which key is missing; add it below and resume them. This server has had keys before, so it does
+              not go back to simulating by itself: to simulate, start it with <code>ORG_PROVIDER=mock</code>.
+            </p>
+          )
         ) : (
           <ul className="key-list">
             {view.connections.map((connection) => (

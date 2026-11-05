@@ -15,6 +15,8 @@ export interface FakeCall {
   arguments: string | Record<string, unknown>;
   /** Send the whole call in one piece with no index, as some endpoints do. */
   whole?: boolean;
+  /** With `whole`: the number to put on the call all the same, as an endpoint does that numbers every call 0. */
+  index?: number;
   /** Extra fields on the call, as an endpoint with something of its own to say puts them. */
   extra?: Record<string, unknown>;
 }
@@ -34,6 +36,8 @@ export interface FakeReply {
   usage?: Record<string, unknown> | null;
   /** Drop the connection part-way through the reply. */
   cut?: boolean;
+  /** End the stream in good order without ever saying why the reply ended, as a proxy that times out can. */
+  unfinished?: boolean;
 }
 
 /** A reply from the Responses API: what the model produced, and how the response ended. */
@@ -189,11 +193,11 @@ export class FakeOpenAI {
     (reply.calls ?? []).forEach((call, index) => {
       const args = typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments);
       const id = call.id ?? `call_${index}`;
-      if (call.whole) return void send({ tool_calls: [{ id, type: 'function', function: { name: call.name, arguments: args }, ...call.extra }] });
+      if (call.whole) return void send({ tool_calls: [{ ...(call.index !== undefined ? { index: call.index } : {}), id, type: 'function', function: { name: call.name, arguments: args }, ...call.extra }] });
       send({ tool_calls: [{ index, id, type: 'function', function: { name: call.name, arguments: '' }, ...call.extra }] });
       for (const piece of pieces(args)) send({ tool_calls: [{ index, function: { arguments: piece } }] });
     });
-    send({}, finish);
+    if (!reply.unfinished) send({}, finish);
     if (usage && (body.stream_options?.include_usage || this.alwaysUsage)) res.write(`data: ${JSON.stringify({ ...base, choices: [], usage })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();

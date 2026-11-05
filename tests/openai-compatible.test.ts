@@ -125,6 +125,15 @@ describe('a structured answer', () => {
     ]);
   });
 
+  it('reports a rate limit met on the way down as a rate limit, not as the refusal that came before it', async () => {
+    api.rules = [(b) => (b.response_format?.type === 'json_schema' ? 'Invalid parameter (1214)' : undefined)];
+    api.replies = [{ status: 429, error: 'Rate limit reached for requests' }];
+    const failure = await ask(provider({ ...OPENAI_LIKE, efforts: null, streamUsage: false })).catch((e) => e);
+    // Something to wait out and try again, where the earlier refusal would have paused the organisation for good.
+    expect(failure).toMatchObject({ code: 'rate_limit', retryable: true });
+    expect(api.chats.map((b) => b.response_format?.type)).toEqual(['json_schema', 'json_schema', 'json_object']);
+  });
+
   it('gives up, as something worth trying again, when the second reply is wrong too', async () => {
     api.replies = [{ content: 'I cannot produce JSON.' }, { content: '{"verdict":"pass"}' }];
     const failure = await ask(provider(PLAIN)).catch((e) => e);
@@ -156,6 +165,68 @@ describe('fitting a request to the endpoint', () => {
     api.replies = [{ content: GOOD }];
     await ask(provider());
     expect(api.chats.map((b) => b.max_completion_tokens)).toEqual([32000, 16000, 8000, 4000]);
+  });
+
+  it('makes room when a prompt and its reply together overflow the model, without shrinking the replies that follow', async () => {
+    const overflow =
+      "This model's maximum context length is 32768 tokens. However, you requested 40000 tokens (8000 in the messages, 32000 in the completion). Please reduce the length of the messages or completion.";
+    api.rules = [(b) => (b.max_completion_tokens > 8000 && JSON.stringify(b.messages).includes('A very long brief') ? overflow : undefined)];
+    api.replies = [{ content: GOOD }, { content: GOOD }];
+    const p = provider();
+    await p.structured({ kind: 'phase_review', system: SYSTEM, prompt: 'A very long brief.', schema: Answer, model: 'big-model', effort: 'high', context: {} });
+    // Less room for the reply, for that request alone: the model's limit on output was never the trouble.
+    expect(api.chats.map((b) => b.max_completion_tokens)).toEqual([32000, 4096]);
+    await ask(p);
+    expect(api.chats.at(-1).max_completion_tokens).toBe(32000);
+  });
+
+  it('says the work is too long, not that the provider is at fault, when it cannot be made to fit', async () => {
+    api.rules = [() => "This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages."];
+    const p = provider();
+    // A failure of the task, which the lead sees at its gate, where a fault of the provider's would pause everything.
+    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'invalid_output', retryable: false, message: expect.stringContaining('outgrew the model’s context window') });
+    expect(api.chats.map((b) => b.max_completion_tokens)).toEqual([32000, 4096]);
+    // Nothing was learned about the model from it.
+    api.rules = [];
+    api.replies = [{ content: GOOD }];
+    await ask(p);
+    expect(api.chats.at(-1).max_completion_tokens).toBe(32000);
+  });
+
+  it('reshapes a request refused with a 422 as it would one refused with a 400', async () => {
+    api.replies = [{ status: 422, error: 'Extra inputs are not permitted: stream_options' }, { content: GOOD }, { content: GOOD }];
+    const p = provider();
+    await ask(p);
+    await ask(p);
+    expect(api.chats.map((b) => !!b.stream_options)).toEqual([true, false, false]);
+  });
+
+  it('sends nothing to an endpoint that OpenAI\'s own environment variables would have added', async () => {
+    const before = { ...process.env };
+    process.env.OPENAI_ORG_ID = 'org-not-theirs';
+    process.env.OPENAI_PROJECT_ID = 'proj-not-theirs';
+    process.env.OPENAI_ADMIN_KEY = 'sk-admin-not-theirs';
+    process.env.OPENAI_CUSTOM_HEADERS = 'X-Internal-Gateway: not-theirs\nX-Team: nor-this';
+    process.env.OPENAI_BASE_URL = 'http://127.0.0.1:9/v1';
+    try {
+      api.replies = [{ content: GOOD }];
+      await ask(provider());
+      const sent = JSON.stringify(api.seen.at(-1)!.headers);
+      expect(sent).not.toMatch(/not-theirs|nor-this/);
+      expect(api.seen.at(-1)!.headers).not.toHaveProperty('openai-organization');
+      expect(api.seen.at(-1)!.headers).not.toHaveProperty('openai-project');
+      expect(api.seen.at(-1)!.headers).not.toHaveProperty('x-internal-gateway');
+      expect(api.seen.at(-1)!.headers.authorization).toBe('Bearer sk-test');
+    } finally {
+      for (const name of ['OPENAI_ORG_ID', 'OPENAI_PROJECT_ID', 'OPENAI_ADMIN_KEY', 'OPENAI_CUSTOM_HEADERS', 'OPENAI_BASE_URL']) {
+        if (before[name] === undefined) delete process.env[name];
+        else process.env[name] = before[name];
+      }
+    }
+  });
+
+  it('will not be built without an address, which would send its key to OpenAI', () => {
+    expect(() => provider(OPENAI_LIKE, { baseURL: '' })).toThrow(/has no address to call/);
   });
 
   it('uses the limit known for a model without having to be refused first', async () => {
@@ -203,8 +274,10 @@ describe('fitting a request to the endpoint', () => {
     api.replies = [{ content: GOOD }, { content: GOOD }];
     const p = provider(dialect);
     expect(await ask(p)).toMatchObject({ verdict: 'pass' });
-    // Refused as sent; refused without the effort level, which was not the trouble; accepted without the extra field.
+    // Refused as sent, and again when sent once more as it was; refused without the effort level, which was
+    // not the trouble; accepted without the extra field.
     expect(api.chats.map((b) => [b.reasoning_effort, b.tool_stream])).toEqual([
+      ['high', true],
       ['high', true],
       [undefined, true],
       ['high', undefined],
@@ -212,9 +285,35 @@ describe('fitting a request to the endpoint', () => {
     // From then on the extra field is left out and nothing is refused. The effort level, which was tried
     // without and made no difference, is still sent, and so is the request for token counts.
     await ask(p);
-    expect(api.chats).toHaveLength(4);
-    expect(api.chats[3]).toMatchObject({ reasoning_effort: 'high', stream_options: { include_usage: true } });
-    expect(api.chats[3].tool_stream).toBeUndefined();
+    expect(api.chats).toHaveLength(5);
+    expect(api.chats[4]).toMatchObject({ reasoning_effort: 'high', stream_options: { include_usage: true } });
+    expect(api.chats[4].tool_stream).toBeUndefined();
+  });
+
+  it('learns nothing from a refusal that does not come twice', async () => {
+    // A passing fault on the provider's side, reported as if the request were at fault.
+    api.replies = [{ status: 400, error: 'Upstream error, please try again' }, { content: GOOD }, { content: GOOD }];
+    const p = provider({ ...OPENAI_LIKE, extraBody: { tool_stream: true } });
+    expect(await ask(p)).toMatchObject({ verdict: 'pass' });
+    await ask(p);
+    // Sent again exactly as it was, and from then on exactly as before: streamed, with everything optional.
+    for (const body of api.chats) expect(body).toMatchObject({ stream: true, reasoning_effort: 'high', tool_stream: true, stream_options: { include_usage: true } });
+    expect(api.chats).toHaveLength(3);
+  });
+
+  it('keeps what a refusal taught it only once a request has gone through that way', async () => {
+    // The endpoint names the effort level as the trouble, and then fails the reshaped request for a reason of its own.
+    api.rules = [(b) => (b.reasoning_effort ? 'Unrecognized request argument supplied: reasoning_effort' : undefined)];
+    api.replies = [{ status: 500, error: 'boom' }];
+    const p = provider();
+    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'unavailable', retryable: true });
+    expect(api.chats.map((b) => b.reasoning_effort)).toEqual(['high', undefined]);
+    // Nothing went through, so nothing was learned: the next request starts where the last one did.
+    api.replies = [{ content: GOOD }, { content: GOOD }];
+    await ask(p);
+    await ask(p);
+    // This time the reshaped request succeeded, and the lesson holds.
+    expect(api.chats.map((b) => b.reasoning_effort)).toEqual(['high', undefined, 'high', undefined, undefined]);
   });
 
   it('drops everything optional when an endpoint objects to more than one thing without saying which', async () => {
@@ -223,8 +322,9 @@ describe('fitting a request to the endpoint', () => {
     api.replies = [{ content: GOOD }, { content: GOOD }];
     const p = provider(dialect);
     expect(await ask(p)).toMatchObject({ verdict: 'pass' });
-    // As sent, then without each of the three optional things alone, then without all of them.
+    // As sent, twice; then without each of the three optional things alone; then without all of them.
     expect(api.chats.map((b) => [b.reasoning_effort, b.tool_stream, !!b.stream_options])).toEqual([
+      ['high', true, true],
       ['high', true, true],
       [undefined, true, true],
       ['high', undefined, true],
@@ -232,8 +332,8 @@ describe('fitting a request to the endpoint', () => {
       [undefined, undefined, false],
     ]);
     await ask(p);
-    expect(api.chats).toHaveLength(6);
-    expect([api.chats[5].reasoning_effort, api.chats[5].tool_stream, api.chats[5].stream_options]).toEqual([undefined, undefined, undefined]);
+    expect(api.chats).toHaveLength(7);
+    expect([api.chats[6].reasoning_effort, api.chats[6].tool_stream, api.chats[6].stream_options]).toEqual([undefined, undefined, undefined]);
   });
 
   it('reports the first refusal, and learns nothing, when a request is wrong whatever is left out', async () => {
@@ -260,9 +360,10 @@ describe('fitting a request to the endpoint', () => {
     api.replies = [{ content: GOOD }, { content: GOOD }];
     const p = provider({ ...OPENAI_LIKE, efforts: null, streamUsage: false });
     expect(await ask(p)).toMatchObject({ verdict: 'pass' });
-    expect(api.chats.map((b) => b.response_format?.type)).toEqual(['json_schema', 'json_object']);
+    // Asked twice with the schema, in case the refusal was a passing fault; then the next way down, which is kept.
+    expect(api.chats.map((b) => b.response_format?.type)).toEqual(['json_schema', 'json_schema', 'json_object']);
     await ask(p);
-    expect(api.chats.map((b) => b.response_format?.type)).toEqual(['json_schema', 'json_object', 'json_object']);
+    expect(api.chats.map((b) => b.response_format?.type)).toEqual(['json_schema', 'json_schema', 'json_object', 'json_object']);
   });
 
   it('uses the effort levels a particular model takes, where they are not the endpoint\'s usual ones', async () => {
@@ -323,6 +424,16 @@ describe('fitting a request to the endpoint', () => {
     expect(usage[0]!.costUsd).toBeCloseTo((500 * 2 + 400 * 0.1 + 100 * 2.5 + 200 * 10) / 1e6, 10);
     // Past 272,000 prompt tokens every part of the request is at the higher rates; a cache write with no rate of its own there is plain input.
     expect(usage[1]!.costUsd).toBeCloseTo((150_000 * 4 + 100_000 * 0.2 + 50_000 * 4 + 1000 * 15) / 1e6, 10);
+  });
+
+  it('does not take a reported cost of nothing for the cost of a model that has a price', async () => {
+    api.replies = [{ content: GOOD, usage: { prompt_tokens: 1000, completion_tokens: 200, cost: 0 } }, { content: GOOD, usage: { prompt_tokens: 1000, completion_tokens: 200, cost: 0.5 } }];
+    const usage: CallUsage[] = [];
+    const p = provider();
+    await ask(p, (u) => usage.push(u));
+    await ask(p, (u) => usage.push(u));
+    expect(usage[0]!.costUsd).toBeCloseTo((1000 * 2 + 200 * 10) / 1e6, 10);
+    expect(usage[1]!.costUsd).toBe(0.5);
   });
 
   it('reads the cache counts some providers report under their own names', async () => {
@@ -638,6 +749,46 @@ describe('an agent run', () => {
 
     api.replies = [{ content: '', finish: 'model_context_window_exceeded' }];
     expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'bad_request', retryable: false });
+  });
+
+  it('does not take a reply for finished when the stream closed without saying so', async () => {
+    // As when something between here and the provider times out and closes the stream in good order.
+    api.replies = [{ content: 'I have written half of the rep', unfinished: true }, { content: 'I have written the report.' }];
+    const usage: CallUsage[] = [];
+    expect(await run(provider(), { onUsage: (u) => usage.push(u) })).toEqual({ text: 'I have written the report.', turns: 1, stopped: 'done' });
+    expect(api.chats).toHaveLength(2);
+    expect(usage).toHaveLength(1);
+    // One that never finishes is given up on, as a fault that may pass.
+    api.replies = Array.from({ length: 6 }, () => ({ content: 'half', unfinished: true }));
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'unavailable', retryable: true, message: expect.stringContaining('without saying it was finished') });
+    // An endpoint that does not stream says how the reply ended in the reply itself.
+    api.rules = [(b) => (b.stream ? 'stream is not supported' : undefined)];
+    api.replies = [{ content: 'Whole.' }];
+    expect((await run(provider())).text).toBe('Whole.');
+  });
+
+  it('counts what the model wrote into a tool call when the endpoint reports no tokens', async () => {
+    api.replies = [{ calls: [{ id: 'call_a', name: 'write_file', arguments: { path: 'big.md', content: 'x'.repeat(48_000) } }], usage: null }, { content: 'Done.', usage: null }];
+    const usage: CallUsage[] = [];
+    await run(provider(), { onUsage: (u) => usage.push(u) });
+    // About four characters to a token: the file's 48,000 characters are some 12,000 tokens of output, not none.
+    expect(usage[0]!.outputTokens).toBeGreaterThan(12_000);
+    expect(usage[0]!.outputTokens).toBeLessThan(13_000);
+    expect(usage[0]!.costUsd).toBeGreaterThan(0.12);
+  });
+
+  it('takes two calls sent whole under the same number for two calls', async () => {
+    api.replies = [
+      { calls: [{ id: 'call_a', name: 'write_file', arguments: { path: 'a.md', content: 'A' }, whole: true, index: 0 }, { id: 'call_b', name: 'write_file', arguments: { path: 'b.md', content: 'B' }, whole: true, index: 0 }] },
+      { content: 'Done.' },
+    ];
+    await run(provider());
+    expect(files).toMatchObject({ 'a.md': 'A', 'b.md': 'B' });
+    expect(api.chats[1].messages.slice(2).map((m: any) => [m.role, m.tool_call_id ?? m.tool_calls.map((c: any) => c.id)])).toEqual([
+      ['assistant', ['call_a', 'call_b']],
+      ['tool', 'call_a'],
+      ['tool', 'call_b'],
+    ]);
   });
 
   it('never runs a tool call that was cut off at the output limit', async () => {

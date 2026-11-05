@@ -19,6 +19,7 @@ import { ConnectionStore } from '../src/server/connections';
 import { TEAM_AGENT_NAME, teamAgentSystem } from '../src/server/engine/prompts';
 import { DEFAULT_SETTINGS } from '../src/server/engine/state';
 import { ClaudeProvider } from '../src/server/providers/claude';
+import { stateFileOf } from '../src/server/providers/router';
 import { isKnownModel } from '../src/server/providers/pricing';
 
 const args = process.argv.slice(2);
@@ -46,15 +47,18 @@ async function main(): Promise<void> {
   // The same Anthropic key the server would use: one from the environment, or one added under "Models and keys".
   const connections = new ConnectionStore(path.join(config.dataDir, 'connections.json'), process.env, config.anthropicAmbient);
   await connections.load();
-  const anthropic = connections.list().find((c) => c.presetId === 'anthropic');
+  // The key that plain Claude model names belong to, as the server has it: the one called "anthropic", else the first there is.
+  const keys = connections.list().filter((c) => c.presetId === 'anthropic');
+  const anthropic = keys.find((c) => c.id === 'anthropic') ?? keys[0];
   if (!anthropic) throw new Error('No Anthropic key is connected. Add one under "Models and keys" in the interface, or set ANTHROPIC_API_KEY in .env.');
 
-  const file = path.join(config.dataDir, 'managed.json');
+  // Saved agents and environments belong to the key's account, so each Anthropic key has its own record of them.
+  const file = stateFileOf(path.join(config.dataDir, 'managed.json'), anthropic.id);
   const provider = new ClaudeProvider({
     managedStateFile: file,
     workspace: config.workspace,
     ...(anthropic.apiKey ? { apiKey: anthropic.apiKey } : {}),
-    ...(anthropic.baseURL !== 'https://api.anthropic.com' ? { baseURL: anthropic.baseURL } : {}),
+    baseURL: anthropic.baseURL,
   });
   const made = await provider.prepareManaged({ workerModel: model, workerEffort: effort, workerName: TEAM_AGENT_NAME, workerSystem: teamAgentSystem(web), web, workflows });
 

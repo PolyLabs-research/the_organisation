@@ -79,6 +79,29 @@ export const ABOUT_FORMAT = /response_format|text\.format|json_schema|json_objec
 export const NOT_ABOUT_FORM =
   /does not exist|not found|no such model|unknown model|not have access|api[ _-]?key|unauthori[sz]ed|authenticat|context (length|window)|too (long|large|many)|content (policy|filter|management)|moderation|inspection|safety|balance|quota|billing|credit|arrears/i;
 
+/** A refusal that says the prompt, or the prompt and the room asked for the reply together, is more than the model can read. */
+export const OVERFLOW = /context (length|window|size|limit)|maximum context|context_length|prompt is too long|input.{0,30}too long|too many (input |prompt )?tokens|exceeds? the (model'?s? )?(maximum )?(context|input)/i;
+/** The room left for a reply when a request is sent again after overflowing the model's window. */
+const SQUEEZED_CAP = 4096;
+
+/** A refusal of the request as it was put, which putting it another way might cure. Some endpoints answer 422 where most answer 400. */
+export function refusesForm(err: unknown): err is InstanceType<typeof OpenAI.APIError> {
+  return err instanceof OpenAI.BadRequestError || err instanceof OpenAI.UnprocessableEntityError;
+}
+
+/**
+ * Headers the client would add from OpenAI's OPENAI_CUSTOM_HEADERS variable, each set to be left out. They were
+ * meant for OpenAI's endpoint, and these connections are mostly to someone else's.
+ */
+function environmentHeadersCleared(): Record<string, null> {
+  const cleared: Record<string, null> = {};
+  for (const line of (process.env.OPENAI_CUSTOM_HEADERS ?? '').split('\n')) {
+    const colon = line.indexOf(':');
+    if (colon > 0) cleared[line.slice(0, colon).trim()] = null;
+  }
+  return cleared;
+}
+
 /** What endpoints call a reply their content rules stopped. */
 const REFUSED = /^(content_filter|sensitive|safety|prohibited_content)$/;
 
@@ -145,11 +168,18 @@ export class OpenAICompatibleProvider {
     this.streamUsage = options.dialect.streamUsage;
     this.toolChoiceNone = options.dialect.toolChoiceNone !== false;
     this.turnRetryDelayMs = options.turnRetryDelayMs ?? 2000;
+    // Without an address the client would fall back to OpenAI's own, and send this connection's key there.
+    if (!options.baseURL) throw new ProviderError(`${options.label} has no address to call.`, 'bad_request', false);
     this.client = new OpenAI({
       apiKey: options.apiKey || 'none', // a local server may take no key, but the client insists on one
       baseURL: options.baseURL,
+      // The client reads these from OpenAI's environment variables when they are left unsaid, and would send
+      // them to whoever this connection is for.
+      organization: null,
+      project: null,
+      adminAPIKey: null,
       maxRetries: options.maxRetries ?? 3,
-      defaultHeaders: options.headers,
+      defaultHeaders: { ...environmentHeadersCleared(), ...options.headers },
     });
   }
 
@@ -193,13 +223,15 @@ export class OpenAICompatibleProvider {
       } catch (err) {
         // An endpoint that does not take this way of asking says so with a 400. Ask the next way down, from now on.
         const next = modes.indexOf(mode) + 1;
-        if (err instanceof OpenAI.BadRequestError && format && next < modes.length) {
+        if (refusesForm(err) && format && next < modes.length) {
           if (ABOUT_FORMAT.test(err.message)) this.structuredMode.set(req.model, next);
           else unexplained ??= err;
           mode = modes[next]!;
           continue;
         }
-        throw this.translate(unexplained ?? err);
+        // The first refusal is the one to report only if this is still a refusal: a rate limit or an outage
+        // met on the way down is what happened, and can be waited out.
+        throw this.translate(refusesForm(err) ? (unexplained ?? err) : err);
       }
     }
     req.onUsage?.(reply.usage);
@@ -346,54 +378,91 @@ export class OpenAICompatibleProvider {
    * is reshaped and sent again, and the lesson is kept for later requests.
    */
   private async complete(model: string, messages: Message[], shape: Shape, effort: Effort, wanted: number, signal?: AbortSignal): Promise<Reply> {
-    // After a refusal that does not say what it objects to, the request is tried without each thing an endpoint
-    // might not know: one at a time, then all together. What it went through without becomes a lesson; if
-    // nothing helps, nothing is learned and the first refusal is the one reported.
     type Optional = 'effort' | 'extra' | 'choice' | 'usage';
+    // How this request goes out. It starts from what earlier requests learned about the endpoint, and each
+    // refusal changes it. A change is kept for later requests only once a request has gone through with it:
+    // a refusal that turns out to have been about something else teaches nothing.
+    const now = {
+      capParam: this.capParam.get(model) ?? this.dialect.maxTokensParam,
+      cap: Math.min(wanted, this.cap.get(model) ?? this.options.maxOutputOf?.(model) ?? wanted),
+      effort: !this.noEffort.has(model),
+      extra: new Set(Object.keys(this.dialect.extraBody ?? {}).filter((key) => !this.noExtra.has(key))),
+      choice: this.toolChoiceNone,
+      usage: this.streamUsage,
+      streaming: this.streaming,
+    };
+    const lessons: Array<() => void> = [];
+    // After a refusal that does not say what it objects to, the request is sent once more as it was, and then
+    // without each thing an endpoint might not know: one at a time, then all together. If nothing helps, the
+    // first refusal is the one reported.
     let without = new Set<Optional>();
     let trials: Optional[][] | null = null;
     let unexplained: unknown;
+    let squeezed = false;
     for (let adaptations = 0; ; adaptations++) {
-      const capParam = this.capParam.get(model) ?? this.dialect.maxTokensParam;
-      const cap = Math.min(wanted, this.cap.get(model) ?? this.options.maxOutputOf?.(model) ?? wanted);
-      const level = this.noEffort.has(model) || without.has('effort') ? undefined : this.levelFor(model, effort);
-      const extra = without.has('extra') ? {} : Object.fromEntries(Object.entries(this.dialect.extraBody ?? {}).filter(([key]) => !this.noExtra.has(key)));
-      const choice = shape.toolChoice && this.toolChoiceNone && !without.has('choice') ? shape.toolChoice : undefined;
-      const usage = this.streamUsage && !without.has('usage');
+      const level = now.effort && !without.has('effort') ? this.levelFor(model, effort) : undefined;
+      const extra = without.has('extra') ? {} : Object.fromEntries(Object.entries(this.dialect.extraBody ?? {}).filter(([key]) => now.extra.has(key)));
+      const choice = shape.toolChoice && now.choice && !without.has('choice') ? shape.toolChoice : undefined;
+      const usage = now.usage && !without.has('usage');
       const body: Record<string, unknown> = {
         ...extra,
         model,
         messages,
-        [capParam]: cap,
+        [now.capParam]: now.cap,
         ...(level ? { reasoning_effort: level } : {}),
         ...(shape.tools?.length ? { tools: shape.tools } : {}),
         ...(choice ? { tool_choice: choice } : {}),
         ...(shape.format ? { response_format: shape.format } : {}),
       };
       try {
-        const reply = this.streaming ? await this.stream(model, body, usage, signal) : await this.whole(model, body, signal);
+        const reply = now.streaming ? await this.stream(model, body, usage, signal) : await this.whole(model, body, signal);
+        for (const learn of lessons) learn();
         if (without.has('effort')) this.noEffort.add(model);
-        if (without.has('extra')) for (const key of Object.keys(this.dialect.extraBody ?? {})) this.noExtra.add(key);
+        if (without.has('extra')) for (const key of now.extra) this.noExtra.add(key);
         if (without.has('choice')) this.toolChoiceNone = false;
         if (without.has('usage')) this.streamUsage = false;
         return reply;
       } catch (err) {
-        if (!(err instanceof OpenAI.BadRequestError)) throw err;
+        if (!refusesForm(err)) throw err;
         if (adaptations >= MAX_ADAPTATIONS) throw unexplained ?? err;
         const said = err.message;
         // The way a structured answer is asked for is the caller's to change.
         if (shape.format && ABOUT_FORMAT.test(said)) throw err;
-        // A refusal that names what it objects to is a lesson straight away.
+        // A refusal that names what it objects to says how to put the request next.
         const refusedExtra = Object.keys(extra).find((key) => said.includes(key));
-        if (refusedExtra) this.noExtra.add(refusedExtra);
-        else if (usage && /stream_options|include_usage/i.test(said)) this.streamUsage = false;
-        else if (level && /reasoning_effort|reasoning\.effort|reasoning effort/i.test(said)) this.noEffort.add(model);
-        else if (choice && /tool_choice/i.test(said)) this.toolChoiceNone = false;
-        else if (/max_completion_tokens/i.test(said) && /unsupported|unrecognized|unknown|not supported|not permitted|unexpected|instead/i.test(said) && capParam === 'max_completion_tokens') this.capParam.set(model, 'max_tokens');
-        else if (/max_tokens/i.test(said) && /max_completion_tokens/i.test(said) && capParam === 'max_tokens') this.capParam.set(model, 'max_completion_tokens');
-        else if (/max_tokens|max_completion_tokens|max_output|maximum.{0,40}tokens|output tokens/i.test(said) && cap > 1024) this.cap.set(model, lowerCap(said, cap));
-        else if (this.streaming && /stream/i.test(said) && !/stream_options/i.test(said)) this.streaming = false;
-        else {
+        if (refusedExtra) {
+          now.extra.delete(refusedExtra);
+          lessons.push(() => this.noExtra.add(refusedExtra));
+        } else if (usage && /stream_options|include_usage/i.test(said)) {
+          now.usage = false;
+          lessons.push(() => (this.streamUsage = false));
+        } else if (level && /reasoning_effort|reasoning\.effort|reasoning effort/i.test(said)) {
+          now.effort = false;
+          lessons.push(() => this.noEffort.add(model));
+        } else if (choice && /tool_choice/i.test(said)) {
+          now.choice = false;
+          lessons.push(() => (this.toolChoiceNone = false));
+        } else if (OVERFLOW.test(said)) {
+          // The prompt and the room asked for the reply do not fit the model's window together. A shorter
+          // reply may fit: for this request only, since the next prompt may well be shorter.
+          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+          squeezed = true;
+          now.cap = SQUEEZED_CAP;
+        } else if (/max_completion_tokens/i.test(said) && /unsupported|unrecognized|unknown|not supported|not permitted|unexpected|instead/i.test(said) && now.capParam === 'max_completion_tokens') {
+          now.capParam = 'max_tokens';
+          lessons.push(() => this.capParam.set(model, 'max_tokens'));
+        } else if (/max_tokens/i.test(said) && /max_completion_tokens/i.test(said) && now.capParam === 'max_tokens') {
+          now.capParam = 'max_completion_tokens';
+          lessons.push(() => this.capParam.set(model, 'max_completion_tokens'));
+        } else if (/max_tokens|max_completion_tokens|max_output|(output|completion) tokens/i.test(said) && now.cap > 1024) {
+          // The model allows less output than was asked for: that is true of every request to it.
+          const lower = lowerCap(said, now.cap);
+          now.cap = lower;
+          if (!squeezed) lessons.push(() => this.cap.set(model, lower));
+        } else if (now.streaming && /\bstream(ing|ed)?\b/i.test(said) && /not supported|unsupported|does not support|not allowed|not available|disabled|must be false/i.test(said)) {
+          now.streaming = false;
+          lessons.push(() => (this.streaming = false));
+        } else {
           if (NOT_ABOUT_FORM.test(said)) throw unexplained ?? err;
           unexplained ??= err;
           if (!trials) {
@@ -401,8 +470,9 @@ export class OpenAICompatibleProvider {
             if (level) sent.push('effort');
             if (Object.keys(extra).length) sent.push('extra');
             if (choice) sent.push('choice');
-            if (usage && this.streaming) sent.push('usage');
-            trials = sent.map((one) => [one]);
+            if (usage && now.streaming) sent.push('usage');
+            // First as it was: a refusal that does not come twice was a passing fault, and teaches nothing.
+            trials = [[], ...sent.map((one) => [one])];
             if (sent.length > 1) trials.push(sent);
           }
           const next = trials.shift();
@@ -451,7 +521,11 @@ export class OpenAICompatibleProvider {
       for (const field of this.dialect.echoFields ?? []) keep(kept, field, delta[field]);
       if (Array.isArray(delta.tool_calls)) for (const part of delta.tool_calls as Array<Record<string, unknown>>) addCallPart(calls, part);
     }
-    return { content, reasoning, reasoningField, kept, calls: finished(calls), finish, usage: this.price(model, usage, messagesLength(body), content.length + reasoning.length) };
+    // Every reply ends by saying why it ended. A stream that closes without doing so was cut off somewhere
+    // on the way, however cleanly, and what arrived is not the whole of it.
+    if (finish === null) throw new ProviderError(`${this.label} ended a reply without saying it was finished.`, 'unavailable', true);
+    const made = finished(calls);
+    return { content, reasoning, reasoningField, kept, calls: made, finish, usage: this.price(model, usage, messagesLength(body), content.length + reasoning.length + callsLength(made)) };
   }
 
   /** The same request without streaming, for the rare endpoint that does not stream. */
@@ -467,14 +541,15 @@ export class OpenAICompatibleProvider {
     if (Array.isArray(message.tool_calls)) for (const part of message.tool_calls as Array<Record<string, unknown>>) addCallPart(calls, { ...part, index: calls.length });
     const kept: Record<string, unknown> = {};
     for (const field of this.dialect.echoFields ?? []) keep(kept, field, message[field]);
+    const made = finished(calls);
     return {
       content,
       reasoning,
       reasoningField,
       kept,
-      calls: finished(calls),
+      calls: made,
       finish: choice?.finish_reason ?? null,
-      usage: this.price(model, completion.usage, messagesLength(body), content.length + reasoning.length),
+      usage: this.price(model, completion.usage, messagesLength(body), content.length + reasoning.length + callsLength(made)),
     };
   }
 
@@ -489,8 +564,9 @@ export class OpenAICompatibleProvider {
       cached: typeof cached === 'number' ? cached : 0,
       written: typeof details.cache_write_tokens === 'number' ? details.cache_write_tokens : 0,
       output: usage?.completion_tokens ?? Math.ceil(replyChars / 4),
-      // A gateway that bills for others' models says what the request cost; that is taken over an estimate.
-      billed: typeof more.cost === 'number' && more.cost >= 0 ? more.cost : null,
+      // A gateway that bills for others' models says what the request cost; that is taken over an estimate. A
+      // cost of nothing is not: an endpoint that fills the field in without meaning it would make every call free.
+      billed: typeof more.cost === 'number' && more.cost > 0 ? more.cost : null,
     });
   }
 
@@ -636,6 +712,11 @@ function messagesLength(body: Record<string, unknown>): number {
   return JSON.stringify(body.messages ?? '').length;
 }
 
+/** The size of a reply's tool calls, which are output the model wrote and is charged for like its words. */
+function callsLength(calls: ToolCall[]): number {
+  return calls.reduce((n, call) => n + call.name.length + call.arguments.length, 0);
+}
+
 /**
  * Add one streamed piece of a tool call to the calls gathered so far. The
  * common form numbers each call and sends its arguments in fragments; some
@@ -645,9 +726,12 @@ function addCallPart(calls: ToolCall[], part: Record<string, unknown>): void {
   const fn = (part.function ?? {}) as Record<string, unknown>;
   const id = typeof part.id === 'string' ? part.id : '';
   let call = typeof part.index === 'number' ? calls[part.index] : id && calls.at(-1)?.id !== id ? undefined : calls.at(-1);
-  if (!call) {
+  // A piece that carries an id other than the one its number already has is not a piece of that call but a
+  // call of its own, from an endpoint that numbers every call the same.
+  const another = !!call && !!id && !!call.id && call.id !== id;
+  if (!call || another) {
     call = { id, name: '', arguments: '', extra: {} };
-    if (typeof part.index === 'number') calls[part.index] = call;
+    if (typeof part.index === 'number' && !another) calls[part.index] = call;
     else calls.push(call);
   }
   if (id && !call.id) call.id = id;

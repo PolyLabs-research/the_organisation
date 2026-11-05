@@ -48,7 +48,13 @@ async function main(): Promise<void> {
     const shown = config.host === '0.0.0.0' || config.host === '::' ? 'localhost' : config.host;
     console.log(`the_organisation is running at http://${shown}:${config.port}`);
     const info = provider.info();
-    console.log(info.simulated ? `Simulating: ${config.provider === 'mock' ? 'ORG_PROVIDER=mock' : 'no API key is connected yet. Add one under "Models and keys".'}` : `Keys connected: ${info.label}`);
+    console.log(
+      info.simulated
+        ? `Simulating: ${config.provider === 'mock' ? 'ORG_PROVIDER=mock' : 'no API key is connected yet. Add one under "Models and keys".'}`
+        : info.connections?.length
+          ? `Keys connected: ${info.label}`
+          : 'No API key is connected. Organisations pause when they next need a model: add a key under "Models and keys", or start with ORG_PROVIDER=mock to simulate.',
+    );
     console.log(`Data: ${config.dataDir}`);
   });
   server.on('error', (err: NodeJS.ErrnoException) => {

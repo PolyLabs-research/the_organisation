@@ -191,7 +191,15 @@ describe('the API', () => {
     const steered = await api<OrgView>('POST', `${url}/steer`, { text: 'Stay profitable.' });
     expect(steered.data.org.steers.map((s) => s.text)).toEqual(['Stay profitable.']);
 
-    const settings = await api<OrgView>('PATCH', `${url}/settings`, { budgetUsd: 12.5, arbiter: 'judge', workerModel: 'claude-haiku-5-5', executiveModel: 'not a model' });
+    // An organisation is not established on a model named in a form no model has; nor is the name quietly dropped.
+    const unnamed = await api('POST', '/api/orgs', { name: 'Nameless', idea: IDEA, executives: [{ profileId: 'engineering' }], settings: { workerModel: '' } });
+    expect(unnamed.status).toBe(400);
+    expect(unnamed.data.error).toMatch(/model named for the agents is not a model’s name/);
+    // A change that names a model in a form no model has is refused whole, not half applied.
+    const malformed = await api('PATCH', `${url}/settings`, { budgetUsd: 99, executiveModel: '' });
+    expect(malformed.status).toBe(400);
+    expect(malformed.data.error).toMatch(/model named for the executives is not a model’s name/);
+    const settings = await api<OrgView>('PATCH', `${url}/settings`, { budgetUsd: 12.5, arbiter: 'judge', workerModel: 'claude-haiku-5-5' });
     expect(settings.data.org.settings).toMatchObject({ budgetUsd: 12.5, arbiter: 'judge', workerModel: 'claude-haiku-5-5', executiveModel: 'claude-opus-5-5' });
     expect(settings.data.org.executives.some((e) => e.kind === 'judge')).toBe(true);
     const back = await api<OrgView>('PATCH', `${url}/settings`, { arbiter: 'ceo' });

@@ -6,11 +6,13 @@ import {
   AGENT_MAX_TOKENS,
   MAX_BAD_ARGUMENTS,
   NOT_ABOUT_FORM,
+  OVERFLOW,
   OpenAICompatibleProvider,
   STRUCTURED_MAX_TOKENS,
   TURN_RETRIES,
   WRAP_UP,
   lowerCap,
+  refusesForm,
   runTool,
   safeParse,
   sleep,
@@ -47,7 +49,6 @@ interface Turn {
   calls: FunctionCall[];
   /** True when the reply stopped at the output cap. */
   cutOff: boolean;
-  usage: CallUsage;
 }
 
 interface Shape {
@@ -58,6 +59,8 @@ interface Shape {
 
 /** How many times one request is reshaped after the endpoint refuses something about its form. */
 const MAX_ADAPTATIONS = 7;
+/** The room left for a reply when a request is sent again after overflowing the model's window. */
+const SQUEEZED_CAP = 4096;
 
 export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
   /** Models that turned out not to take a request for their reasoning to come back encrypted. */
@@ -79,21 +82,22 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     let unexplained: unknown;
     for (;;) {
       try {
-        turn = await this.respond(req.model, asked(mode), instructions, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.signal);
+        turn = await this.respond(req.model, asked(mode), instructions, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.onUsage, req.signal);
         if (unexplained) this.structuredMode.set(req.model, modes.indexOf(mode));
         break;
       } catch (err) {
         const next = modes.indexOf(mode) + 1;
-        if (err instanceof OpenAI.BadRequestError && formatFor(mode) && next < modes.length) {
+        if (refusesForm(err) && formatFor(mode) && next < modes.length) {
           if (ABOUT_FORMAT.test(err.message)) this.structuredMode.set(req.model, next);
           else unexplained ??= err;
           mode = modes[next]!;
           continue;
         }
-        throw this.translate(unexplained ?? err);
+        // The first refusal is the one to report only if this is still a refusal: a rate limit or an outage
+        // met on the way down is what happened, and can be waited out.
+        throw this.translate(refusesForm(err) ? (unexplained ?? err) : err);
       }
     }
-    req.onUsage?.(turn.usage);
     if (turn.cutOff) throw new ProviderError('The reply was cut off before it was complete.', 'truncated', true);
 
     const read = (text: string) => {
@@ -113,8 +117,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         { role: 'user', content: `That reply does not match the required structure (${result.problem}). Reply again with the corrected JSON object and nothing else.` },
       ];
       try {
-        const second = await this.respond(req.model, repair, instructions, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.signal);
-        req.onUsage?.(second.usage);
+        const second = await this.respond(req.model, repair, instructions, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.onUsage, req.signal);
         if (second.cutOff) throw new ProviderError('The reply was cut off before it was complete.', 'truncated', true);
         result = read(second.text);
       } catch (err) {
@@ -146,7 +149,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
 
       let turn: Turn;
       try {
-        turn = await this.respond(req.model, input, instructions, { tools, toolChoice: wrapUpSent ? 'none' : undefined }, req.effort, AGENT_MAX_TOKENS, req.signal);
+        turn = await this.respond(req.model, input, instructions, { tools, toolChoice: wrapUpSent ? 'none' : undefined }, req.effort, AGENT_MAX_TOKENS, req.onUsage, req.signal);
       } catch (err) {
         const failure = this.translate(err);
         if (req.signal?.aborted) throw failure;
@@ -159,7 +162,6 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
       }
       retries = 0;
       turns += 1;
-      req.onUsage?.(turn.usage);
 
       const text = turn.text.trim();
       if (!turn.calls.length) {
@@ -188,25 +190,41 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
   }
 
   /**
-   * One request. When the endpoint refuses something about its form, the request is reshaped and sent again;
-   * what is learned is kept for later requests, but only once a reshaped request has gone through.
+   * One request. When the endpoint refuses something about its form, the request is reshaped and sent again.
+   * What a refusal teaches is kept for later requests only once a request has gone through with the change.
+   * The spend of every response that comes back is reported, whether or not the response is any use.
    */
-  private async respond(model: string, input: Item[], instructions: string, shape: Shape, effort: Effort, wanted: number, signal?: AbortSignal): Promise<Turn> {
-    // After a refusal that does not say what it objects to, the request is tried without each optional thing:
-    // one at a time, then both. What it went through without becomes a lesson; if nothing helps, nothing is learned.
+  private async respond(
+    model: string,
+    input: Item[],
+    instructions: string,
+    shape: Shape,
+    effort: Effort,
+    wanted: number,
+    onUsage: ((usage: CallUsage) => void) | undefined,
+    signal?: AbortSignal,
+  ): Promise<Turn> {
     type Optional = 'effort' | 'include';
+    const now = {
+      cap: Math.min(wanted, this.cap.get(model) ?? this.options.maxOutputOf?.(model) ?? wanted),
+      effort: !this.noEffort.has(model),
+      include: !this.noInclude.has(model),
+    };
+    const lessons: Array<() => void> = [];
+    // After a refusal that does not say what it objects to, the request is sent once more as it was, and then
+    // without each optional thing: one at a time, then both. If nothing helps, the first refusal is the one reported.
     let without = new Set<Optional>();
     let trials: Optional[][] | null = null;
     let unexplained: unknown;
+    let squeezed = false;
     for (let adaptations = 0; ; adaptations++) {
-      const cap = Math.min(wanted, this.cap.get(model) ?? this.options.maxOutputOf?.(model) ?? wanted);
-      const level = this.noEffort.has(model) || without.has('effort') ? undefined : this.levelFor(model, effort);
-      const include = !this.noInclude.has(model) && !without.has('include');
+      const level = now.effort && !without.has('effort') ? this.levelFor(model, effort) : undefined;
+      const include = now.include && !without.has('include');
       const body: Record<string, unknown> = {
         model,
         instructions,
         input,
-        max_output_tokens: cap,
+        max_output_tokens: now.cap,
         store: false,
         // With nothing stored, the model's reasoning has to travel with the exchange, which it does encrypted.
         ...(include ? { include: ['reasoning.encrypted_content'] } : {}),
@@ -217,27 +235,42 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         stream: true,
       };
       try {
-        const turn = await this.read(model, body, signal);
+        const turn = await this.read(model, body, onUsage, signal);
+        for (const learn of lessons) learn();
         if (without.has('effort')) this.noEffort.add(model);
         if (without.has('include')) this.noInclude.add(model);
         return turn;
       } catch (err) {
-        if (!(err instanceof OpenAI.BadRequestError)) throw err;
+        if (!refusesForm(err)) throw err;
         if (adaptations >= MAX_ADAPTATIONS) throw unexplained ?? err;
         const said = err.message;
         // The way a structured answer is asked for is the caller's to change.
         if (shape.format && ABOUT_FORMAT.test(said)) throw err;
-        if (level && /reasoning|effort/i.test(said)) this.noEffort.add(model);
-        else if (include && /include|encrypted_content/i.test(said)) this.noInclude.add(model);
-        else if (/max_output_tokens|maximum.{0,40}tokens|output tokens/i.test(said) && cap > 1024) this.cap.set(model, lowerCap(said, cap));
-        else {
+        if (level && /\beffort\b/i.test(said)) {
+          now.effort = false;
+          lessons.push(() => this.noEffort.add(model));
+        } else if (include && /\binclude\b|encrypted_content/i.test(said)) {
+          now.include = false;
+          lessons.push(() => this.noInclude.add(model));
+        } else if (OVERFLOW.test(said)) {
+          // The exchange and the room asked for the reply do not fit the model's window together. A shorter
+          // reply may fit: for this request only, since the next exchange may well be shorter.
+          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+          squeezed = true;
+          now.cap = SQUEEZED_CAP;
+        } else if (/max_output_tokens|(output|completion) tokens/i.test(said) && now.cap > 1024) {
+          const lower = lowerCap(said, now.cap);
+          now.cap = lower;
+          if (!squeezed) lessons.push(() => this.cap.set(model, lower));
+        } else {
           if (NOT_ABOUT_FORM.test(said)) throw unexplained ?? err;
           unexplained ??= err;
           if (!trials) {
             const sent: Optional[] = [];
             if (level) sent.push('effort');
             if (include) sent.push('include');
-            trials = sent.map((one) => [one]);
+            // First as it was: a refusal that does not come twice was a passing fault, and teaches nothing.
+            trials = [[], ...sent.map((one) => [one])];
             if (sent.length > 1) trials.push(sent);
           }
           const next = trials.shift();
@@ -249,7 +282,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
   }
 
   /** Send one request and gather the reply from its stream: the finished response, as the last event carries it. */
-  private async read(model: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<Turn> {
+  private async read(model: string, body: Record<string, unknown>, onUsage: ((usage: CallUsage) => void) | undefined, signal?: AbortSignal): Promise<Turn> {
     const stream = (await this.client.responses.create(body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming, { signal })) as unknown as AsyncIterable<Record<string, unknown>>;
     let final: Record<string, unknown> | undefined;
     const finished: Item[] = [];
@@ -261,13 +294,28 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     }
     if (!final) throw new ProviderError(`The connection to ${this.label} closed before the reply was complete.`, 'unavailable', true);
 
+    // The finished response lists everything produced. The items gathered along the way stand in if it does not.
+    const items = Array.isArray(final.output) && final.output.length ? (final.output as Item[]) : finished;
     const failed = final.error as { code?: unknown; message?: unknown } | null | undefined;
-    if (final.status === 'failed' || failed) throw this.failure(String(failed?.code ?? ''), String(failed?.message ?? 'The response failed.'));
+    const broken = final.status === 'failed' || !!failed;
+
+    // What the response cost is owed whatever became of it, so it is counted before anything is made of the reply.
+    // A response that failed and reports no tokens is taken to have cost none.
+    const usage = (final.usage ?? null) as { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } } | null;
+    const spent = this.cost(model, {
+      // Without counts from the endpoint, the request is still charged for, at about four characters to a token.
+      prompt: usage?.input_tokens ?? Math.ceil((JSON.stringify(body.input).length + String(body.instructions ?? '').length) / 4),
+      cached: usage?.input_tokens_details?.cached_tokens ?? 0,
+      written: usage?.input_tokens_details?.cache_write_tokens ?? 0,
+      output: usage?.output_tokens ?? Math.ceil(JSON.stringify(items).length / 4),
+      billed: null,
+    });
+    if (usage || !broken) onUsage?.(spent);
+
+    if (broken) throw this.failure(String(failed?.code ?? ''), String(failed?.message ?? 'The response failed.'));
     const reason = (final.incomplete_details as { reason?: unknown } | null | undefined)?.reason;
     if (reason === 'content_filter') throw new ProviderError('The model declined this request.', 'refusal', false);
 
-    // The finished response lists everything produced. The items gathered along the way stand in if it does not.
-    const items = Array.isArray(final.output) && final.output.length ? (final.output as Item[]) : finished;
     let text = '';
     const calls: FunctionCall[] = [];
     for (const item of items) {
@@ -280,22 +328,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         calls.push({ callId: String(item.call_id ?? item.id ?? ''), name: item.name, arguments: typeof item.arguments === 'string' && item.arguments ? item.arguments : '{}' });
       }
     }
-
-    const usage = (final.usage ?? null) as { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } } | null;
-    return {
-      items,
-      text,
-      calls,
-      cutOff: final.status === 'incomplete' && reason !== 'content_filter',
-      usage: this.cost(model, {
-        // Without counts from the endpoint, the request is still charged for, at about four characters to a token.
-        prompt: usage?.input_tokens ?? Math.ceil((JSON.stringify(body.input).length + String(body.instructions ?? '').length) / 4),
-        cached: usage?.input_tokens_details?.cached_tokens ?? 0,
-        written: usage?.input_tokens_details?.cache_write_tokens ?? 0,
-        output: usage?.output_tokens ?? Math.ceil(JSON.stringify(items).length / 4),
-        billed: null,
-      }),
-    };
+    return { items, text, calls, cutOff: final.status === 'incomplete' };
   }
 
   /** A response that failed after it was accepted: what it means, by the code it carries. */

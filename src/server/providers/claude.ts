@@ -85,6 +85,17 @@ export class ClaudeProvider implements Provider {
     }
   }
 
+  /** Whether a hosted session is on this key's account. A session belongs to the account that made it and is unknown to any other. */
+  async hasSession(sessionId: string): Promise<boolean> {
+    try {
+      await this.client.beta.sessions.retrieve(sessionId);
+      return true;
+    } catch (err) {
+      if (err instanceof Anthropic.NotFoundError) return false;
+      throw translate(err);
+    }
+  }
+
   async archiveSession(sessionId: string): Promise<'archived' | 'busy' | 'gone'> {
     try {
       return await archiveSession(this.client, sessionId, Math.min(300, this.sessionTimings.graceMs));

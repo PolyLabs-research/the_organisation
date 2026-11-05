@@ -19,7 +19,7 @@ npm run dev
 
 Open <http://127.0.0.1:4780>.
 
-With no API key the server runs in **simulation**: every seat gives a scripted answer, so you can watch the whole loop work and try every control without spending anything. To call real models, open **Models and keys** in the interface and add a key for any of the providers listed [below](#models-and-keys), or give keys in a file:
+Until it is given an API key the server runs in **simulation**: every seat gives a scripted answer, so you can watch the whole loop work and try every control without spending anything. To call real models, open **Models and keys** in the interface and add a key for any of the providers listed [below](#models-and-keys), or give keys in a file:
 
 ```bash
 cp .env.example .env    # then set ANTHROPIC_API_KEY, OPENAI_API_KEY, or any of the others in that file
@@ -114,7 +114,9 @@ An organisation's executives and its agents each run on a model you choose, and 
 
 ![The Models and keys page: the providers a key can be added for, with the form for a Moonshot key open](docs/models-and-keys.png)
 
-Keys added in the interface are kept in `data/connections.json`, which only your user can read. The interface is shown the last four characters of a key and nothing more, and a key that a provider quotes back in an error message is taken out before the message is shown or stored.
+Keys added in the interface are kept in `data/connections.json`, which only your user can read. The interface is shown the last four characters of a key and nothing more, and a key that a provider quotes back in an error message is taken out before the message is shown or stored. A key is only ever sent to the address it was added for: that address cannot be changed afterwards, so to use a key somewhere else, add it again there.
+
+Simulation is for a server that has never had a key. Once it has had one, removing every key does not bring the simulator back: organisations pause at their next call and say which key they need, because scripted answers passed off as the work of the models an organisation was set to would be worse than a pause. To simulate on purpose, start the server with `ORG_PROVIDER=mock`.
 
 | Provider | Models | Key variable | Picked out (list price in and out, US dollars per million tokens) |
 | --- | --- | --- | --- |
@@ -162,7 +164,7 @@ Two models with no entry here sit between the last two rows, Xiaomi's MiMo-V2.6-
 
 The [Arena text leaderboard](https://arena.ai/leaderboard/text) of 27 October 2026 orders the top differently (Gemini 4 Carbon, Gemini 4 Argon, Claude Opus 5.5, Muse Wonder, Claude Fable 5.1) and puts the Chinese models much closer to the rest. Neither board has scored ByteDance's newest models. These lists go out of date in weeks: the models a key can call are always read from the provider, so a newer model shows up without any change here, under "everything else", until someone adds it to the picks in [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts).
 
-**How a model is named.** An organisation's settings hold a model as `<key>:<model id>`, such as `openai:gpt-6.1-sol` or `openrouter:anthropic/claude-opus-5.5`. A second key for the same provider is `openai-2`, and so on. A bare id such as `claude-opus-5-5` is a Claude model on the first Anthropic key, which is how organisations were set up before there was a choice. The command line takes the same names: `--model` for the executives (and the agents, unless `--agent-model` names another).
+**How a model is named.** An organisation's settings hold a model as `<key>:<model id>`, such as `openai:gpt-6.1-sol` or `openrouter:anthropic/claude-opus-5.5`. A second key for the same provider is `openai-2`, and so on. A bare id such as `claude-opus-5-5` is a Claude model on the Anthropic key called `anthropic` (the first one added, or the one from `ANTHROPIC_API_KEY`), which is how organisations were set up before there was a choice. With more than one Anthropic key, each is an account of its own: a hosted session belongs to the key that started it, and the saved agents it starts from are recorded per key. The command line takes the same names: `--model` for the executives (and the agents, unless `--agent-model` names another).
 
 **Prices.** Spend is estimated from the tokens each call reports and the model's list price, so a budget is only as good as the price behind it.
 
@@ -174,7 +176,7 @@ The [Arena text leaderboard](https://arena.ai/leaderboard/text) of 27 October 20
 
 **What only Claude does here.** Hosted sessions need Claude models from one Anthropic key for both executives and agents, since they run on Anthropic's platform. Web search for agents is Anthropic's too. With any other model, plans are carried out on this machine and agents work without search; the interface says so where you choose.
 
-**How the other providers are called.** OpenAI is called through its Responses API, because its current models will not call tools through Chat Completions; nothing is stored on OpenAI's side, and each request carries the whole exchange. Everyone else is called through Chat Completions, with the differences between them written down per provider in the catalogue: what the output cap is called, whether a JSON schema is accepted or only a request for JSON, which effort levels a model takes (an organisation's effort setting is sent as the nearest one), and whether a model's reasoning has to be handed back with its tool calls. When an endpoint refuses something about the form of a request, the request is reshaped and sent again, and what was learned is kept until the server restarts.
+**How the other providers are called.** OpenAI is called through its Responses API, because its current models will not call tools through Chat Completions; nothing is stored on OpenAI's side, and each request carries the whole exchange. Everyone else is called through Chat Completions, with the differences between them written down per provider in the catalogue: what the output cap is called, whether a JSON schema is accepted or only a request for JSON, which effort levels a model takes (an organisation's effort setting is sent as the nearest one), and whether a model's reasoning has to be handed back with its tool calls. When an endpoint refuses something about the form of a request, the request is reshaped and sent again; once a reshaped request has gone through, that way of asking is kept until the server restarts. A refusal that does not say what it objects to is first repeated as it was, in case it was a passing fault, and then tried without each optional setting in turn.
 
 > **Not yet run against any live provider.** No key for any of these providers was available when this was written. Addresses, model names, prices and each API's particulars were read from the providers' documentation, and the code is tested against a local stand-in (`tests/fake-openai-api.ts`) that speaks Chat Completions and the Responses API, including whole organisations run end to end on it. That shows the pieces fit together; it does not show that a real provider accepts what is sent. Try a new provider with a small budget first, and expect the occasional rough edge that only a live run finds.
 
@@ -260,7 +262,7 @@ A folder is loaded only if its name is the organisation's id, so a copy kept bes
 | `ANTHROPIC_API_KEY` | none | A key for Claude. Any other credential the Anthropic SDK resolves by itself (a login profile, say) works too. |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY`, and the rest | none | A key for another provider: the variable for each is in the table under [Models and keys](#models-and-keys). Keys can also be added in the interface. |
 | `<PROVIDER>_BASE_URL` | the provider's international address | Where a provider's key from the environment is used, for a provider with more than one platform: `MOONSHOT_BASE_URL`, `ALIBABA_BASE_URL`, `ZHIPU_BASE_URL`, `TENCENT_BASE_URL`, `MINIMAX_BASE_URL`, `BYTEDANCE_BASE_URL` (the name before the colon in a model's name, in capitals). |
-| `ORG_PROVIDER` | `auto` | `auto` calls real models once any key is connected and simulates until then. `mock` simulates whatever keys there are. |
+| `ORG_PROVIDER` | `auto` | `auto` simulates until the server is first given a key, and calls real models from then on. `mock` simulates whatever keys there are. |
 | `PORT` | `4780` | Port to listen on. |
 | `HOST` | `127.0.0.1` | Address to listen on. |
 | `ORG_DATA_DIR` | `./data` | Where organisations are stored. |

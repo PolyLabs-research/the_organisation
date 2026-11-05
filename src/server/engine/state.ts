@@ -33,8 +33,26 @@ export const DEFAULT_SETTINGS: OrgSettings = {
 };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-/** What a model reference may look like: "claude-opus-5-5", "openai:gpt-5", "openrouter:deepseek/deepseek-chat:free". */
-const MODEL_REF = /^[A-Za-z0-9][\w.\-:/@+]{0,199}$/;
+/**
+ * What a model reference may look like: "claude-opus-5-5", "openai:gpt-5", "openrouter:deepseek/deepseek-chat:free",
+ * or whatever a server of the user's own calls its models, spaces and brackets included. Anything a listing can
+ * hold is allowed, so that a model that is offered can always be kept; only control characters are not.
+ */
+const MODEL_REF = /^[^\s\p{Cc}][^\p{Cc}]{0,199}$/u;
+
+export function isModelRef(value: unknown): value is string {
+  return typeof value === 'string' && MODEL_REF.test(value);
+}
+
+/**
+ * Refuse a settings change that names a model in a form no model could have. Left to the tidying below, such a
+ * name would quietly become the model the organisation already had, and the change would seem to have been made.
+ */
+export function assertModelRefs(patch: Partial<OrgSettings> | undefined): void {
+  for (const [seat, value] of [['executives', patch?.executiveModel], ['agents', patch?.workerModel]] as const) {
+    if (value !== undefined && !isModelRef(value)) throw new ValidationError(`The model named for the ${seat} is not a model’s name.`);
+  }
+}
 
 /** A ceiling on the follow-up plans one lead may start in a cycle, whatever the reports say. */
 export const MAX_FOLLOW_UPS_PER_LEAD = 2;
@@ -56,7 +74,7 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
   const p = patch ?? {};
   // A model is named by the connection it is reached through and the provider's own id for it. Whether it can
   // be called is for the provider to say, when the organisation is established and whenever it is called.
-  const model = (value: unknown, fallback: string) => (typeof value === 'string' && MODEL_REF.test(value) ? value : fallback);
+  const model = (value: unknown, fallback: string) => (isModelRef(value) ? value : fallback);
   const effort = (value: unknown, fallback: OrgSettings['executiveEffort']) =>
     EFFORTS.includes(value as (typeof EFFORTS)[number]) ? (value as OrgSettings['executiveEffort']) : fallback;
   return {

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { CreateOrgRequest, OrgSummary } from '../shared/types';
 import { OrgRunner, type RunnerOptions } from './engine/runner';
-import { ValidationError, createOrganisation, normaliseLoaded, summarise } from './engine/state';
+import { ValidationError, assertModelRefs, createOrganisation, normaliseLoaded, summarise } from './engine/state';
 import type { Provider } from './providers/types';
 import type { Store } from './store';
 
@@ -35,6 +35,7 @@ export class Registry {
     const id = `org_${randomBytes(5).toString('hex')}`;
     // Models not named in the request are the provider's default, which depends on which keys are connected.
     const fallback = this.provider.defaultModel?.();
+    assertModelRefs(req.settings);
     const settings = { ...req.settings };
     if (fallback) {
       settings.executiveModel ??= fallback;

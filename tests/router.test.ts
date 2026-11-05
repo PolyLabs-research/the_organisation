@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -210,6 +210,94 @@ describe('adding an Anthropic key', () => {
   });
 });
 
+describe('hosted sessions with more than one Anthropic key', () => {
+  /** A stand-in for one Anthropic account: it knows its own sessions and nobody else's. */
+  class Account {
+    readonly archived = new Set<string>();
+    readonly asked: string[] = [];
+    private server!: http.Server;
+    address = '';
+    constructor(private readonly sessions: string[]) {}
+    async start(): Promise<void> {
+      this.server = http.createServer((req, res) => {
+        const url = (req.url ?? '').split('?')[0]!;
+        this.asked.push(`${req.method} ${url}`);
+        const json = (status: number, body: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+        const session = /^\/v1\/sessions\/([^/]+)(\/archive)?$/.exec(url);
+        if (!session || !this.sessions.includes(session[1]!)) return void json(404, { type: 'error', error: { type: 'not_found_error', message: 'Not found' } });
+        if (session[2]) this.archived.add(session[1]!);
+        json(200, { id: session[1], type: 'session', status: 'idle', archived_at: this.archived.has(session[1]!) ? '2026-11-05T12:00:00Z' : null });
+      });
+      await new Promise<void>((resolve) => this.server.listen(0, '127.0.0.1', resolve));
+      this.address = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
+    }
+    async stop(): Promise<void> {
+      this.server.closeAllConnections();
+      await new Promise<void>((resolve) => this.server.close(() => resolve()));
+    }
+  }
+  const first = new Account(['sesn_first']);
+  const second = new Account(['sesn_second']);
+  beforeAll(() => Promise.all([first.start(), second.start()]));
+  afterAll(() => Promise.all([first.stop(), second.stop()]));
+  beforeEach(() => {
+    first.asked.length = 0;
+    second.asked.length = 0;
+    first.archived.clear();
+    second.archived.clear();
+  });
+
+  /** Two Anthropic keys, each on an account of its own, put straight into the store. */
+  async function twoKeys(ids: [string, string] = ['anthropic', 'anthropic-2']) {
+    const made = await setup({}, { claude: { sessionTimings: { graceMs: 5 } as never } });
+    for (const [id, account] of [[ids[0], first], [ids[1], second]] as const) {
+      await made.store.add({ id, presetId: 'anthropic', label: id, baseURL: account.address, apiKey: `sk-ant-${id}-key`, source: 'stored', addedAt: new Date().toISOString(), models: [], checkedAt: null, listingError: null, prices: {}, extraModels: [] });
+    }
+    return made;
+  }
+
+  it('finds the key whose account a session is on', async () => {
+    const { router, store } = await twoKeys();
+    expect((await router.sessionOwner('sesn_first'))?.id).toBe('anthropic');
+    expect((await router.sessionOwner('sesn_second'))?.id).toBe('anthropic-2');
+    expect(await router.sessionOwner('sesn_nobodys')).toBeUndefined();
+    // The key the organisation is on now is asked first, and the other only if that one does not know the session.
+    second.asked.length = 0;
+    first.asked.length = 0;
+    expect((await router.sessionOwner('sesn_second', store.get('anthropic-2')))?.id).toBe('anthropic-2');
+    expect(second.asked).toEqual(['GET /v1/sessions/sesn_second']);
+    expect(first.asked).toEqual([]);
+    expect((await router.sessionOwner('sesn_first', store.get('anthropic-2')))?.id).toBe('anthropic');
+    expect(first.asked).toEqual(['GET /v1/sessions/sesn_first']);
+  });
+
+  it('archives a session on the account it is on, and nowhere else', async () => {
+    const { router } = await twoKeys();
+    expect(await router.archiveSession('sesn_second')).toBe('archived');
+    expect([...second.archived]).toEqual(['sesn_second']);
+    expect([...first.archived]).toEqual([]);
+    // A session no connected key knows is gone, as far as anyone here can tell.
+    expect(await router.archiveSession('sesn_nobodys')).toBe('gone');
+  });
+
+  it('gives plain Claude names to the key called "anthropic" and to no other', async () => {
+    const { router } = await twoKeys();
+    expect(router.knows('claude-opus-5-5')).toBe(true);
+    expect(router.knows('anthropic-2:claude-opus-5-5')).toBe(true);
+    // With that key gone, an organisation set up on plain names is told so. It is not moved to the other account.
+    await router.disconnect('anthropic');
+    expect(router.knows('claude-opus-5-5')).toBe(false);
+    expect(router.knows('anthropic-2:claude-opus-5-5')).toBe(true);
+    expect(router.info().models.map((m) => m.id)).toEqual(['anthropic-2:claude-opus-5-5', 'anthropic-2:claude-fable-5-1', 'anthropic-2:claude-sonnet-5-5', 'anthropic-2:claude-haiku-5-5']);
+    expect(router.searches('claude-haiku-5-5')).toBe(false);
+    expect(router.searches('anthropic-2:claude-haiku-5-5')).toBe(true);
+    expect(router.hosts('anthropic-2:claude-opus-5-5', 'anthropic-2:claude-haiku-5-5')).toBe(true);
+    expect((await ask(router, 'claude-opus-5-5').catch((e) => e)).message).toMatch(/No API key is connected for Anthropic/);
+    expect(router.info().managed).toBe(true);
+    expect(router.defaultModel()).toBe('anthropic-2:claude-opus-5-5');
+  });
+});
+
 describe('calling a model', () => {
   it('sends the call to the connection the model names, under the provider\'s own id for it', async () => {
     const { router } = await setup();
@@ -307,13 +395,62 @@ describe('looking after keys', () => {
     expect(api.seen.at(-1)!.headers.authorization).toBe('Bearer sk-second');
   });
 
-  it('forgets a key when asked, and goes back to simulating when none is left', async () => {
+  it('forgets a key when asked, and does not pass the simulator off as the models an organisation was set to', async () => {
     const { router } = await setup();
+    expect(router.info().simulated).toBe(true);
     await router.connect({ presetId: 'custom', baseURL: api.baseURL, apiKey: 'sk-test' });
     await router.disconnect('custom');
-    expect(router.info().simulated).toBe(true);
-    expect(JSON.parse(await readFile(file, 'utf8')).connections).toEqual([]);
     await expect(router.disconnect('custom')).rejects.toThrow(/no such connection/);
+
+    // A server that has had a key and has none left is short of a key. It is not a simulation.
+    expect(router.info()).toMatchObject({ id: 'router', simulated: false, label: 'No key connected', models: [], managed: false, connections: [] });
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ connections: [], hadKeys: true });
+    api.seen.length = 0;
+    const failure = await ask(router, 'custom:model-a').catch((e) => e);
+    expect(failure).toMatchObject({ code: 'auth', retryable: false });
+    expect(failure.message).toMatch(/No API key is connected for the "custom" connection/);
+    expect((await ask(router, 'claude-opus-5-5').catch((e) => e)).message).toMatch(/No API key is connected for Anthropic/);
+    await expect(router.agent({ kind: 'task', system: SYSTEM, prompt: 'x', model: 'custom:model-a', effort: 'low', tools: [], webSearch: null, maxTurns: 1, context: {} })).rejects.toThrow(/No API key is connected/);
+    expect(router.knows('custom:model-a')).toBe(false);
+    expect(router.knows('claude-opus-5-5')).toBe(false);
+    expect(router.hosts('claude-opus-5-5', 'claude-opus-5-5')).toBe(false);
+    expect(router.searches('claude-opus-5-5')).toBe(false);
+    // A real hosted session is not marked archived, or carried on, by a simulator that has never heard of it.
+    await expect(router.archiveSession('sesn_real')).rejects.toThrow(/No Anthropic key is connected/);
+    await expect(router.executePlan({ executiveModel: 'claude-opus-5-5', workerModel: 'claude-opus-5-5', session: { id: 'sesn_real' } } as never)).rejects.toThrow(/no Anthropic key is connected to pick it up/);
+    expect(api.seen).toHaveLength(0);
+
+    // Having had keys is remembered across a restart, whether they were typed in or came from the environment.
+    expect((await setup()).router.info().simulated).toBe(false);
+    await rm(file);
+    expect((await setup()).router.info().simulated).toBe(true);
+    await setup({ OPENROUTER_API_KEY: 'sk-or-from-env-1234' });
+    expect((await setup()).router.info()).toMatchObject({ simulated: false, connections: [] });
+    expect(await readFile(file, 'utf8')).not.toContain('sk-or-from-env');
+    // Told to simulate, it simulates.
+    expect((await setup({}, { forceMock: true })).router.info().simulated).toBe(true);
+  });
+
+  it('will not start on a keys file it cannot read, and leaves the file alone', async () => {
+    const first = await setup();
+    await first.router.connect({ presetId: 'custom', baseURL: api.baseURL, apiKey: 'sk-precious-key-1234' });
+    const damaged = `${await readFile(file, 'utf8')} trailing junk`;
+    await writeFile(file, damaged);
+    // Carrying on with no keys would put organisations on the simulator and let the next save wipe the file.
+    await expect(setup()).rejects.toThrow(/cannot be read: it is not valid JSON/);
+    expect(await readFile(file, 'utf8')).toBe(damaged);
+  });
+
+  it('never sends a key it holds to a different address', async () => {
+    const { router } = await setup();
+    await router.connect({ presetId: 'custom', baseURL: api.baseURL, apiKey: 'sk-test-held-1234' });
+    // There is no way to ask: a connection's address is fixed when it is made.
+    await router.update('custom', { label: 'Renamed', baseURL: 'http://127.0.0.1:9/v1' } as never);
+    expect(router.info().connections![0]).toMatchObject({ label: 'Renamed', baseURL: api.baseURL });
+    // A connection that somehow has no address is not called at all: the client would otherwise fall back to OpenAI's.
+    await writeFile(file, JSON.stringify({ version: 1, connections: [{ id: 'openai', presetId: 'openai', label: 'OpenAI', baseURL: '', apiKey: 'sk-test-held-1234', source: 'stored', addedAt: '', models: [], checkedAt: null, listingError: null, prices: {}, extraModels: [] }], environment: {} }));
+    const reloaded = await setup();
+    expect(reloaded.store.list()).toEqual([]);
   });
 
   it('comes back after a restart with the keys it was given', async () => {

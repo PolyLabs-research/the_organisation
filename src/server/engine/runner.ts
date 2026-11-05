@@ -16,23 +16,24 @@ import { Workspace } from '../workspace';
 import { StaleWork, describeWork, perform, type EngineContext } from './handlers';
 import { MAX_RESULT_CHARS, clean } from './records';
 import {
-  CEO_QUESTION,
-  LIVE_CYCLES,
-  ValidationError,
   addSpend,
   addSteer,
   addUsage,
+  assertModelRefs,
+  CEO_QUESTION,
   ceoOf,
   digestCycle,
   emptyUsage,
   execById,
   isPlanActive,
+  LIVE_CYCLES,
   planById,
   postToBoard,
   sanitiseSettings,
   sessionAllowance,
   syncJudge,
   toClientView,
+  ValidationError,
 } from './state';
 import { cycleComplete, nextWork, settle, type WorkItem } from './work';
 
@@ -176,6 +177,7 @@ export class OrgRunner {
   updateSettings(patch: Partial<OrgSettings>): void {
     const org = this.org;
     const before = org.settings.execution;
+    assertModelRefs(patch);
     const next = sanitiseSettings(patch, org.settings);
     // A model that cannot be called would stop the organisation at its next call. Better to say so now.
     for (const [seat, model] of [['executives', next.executiveModel], ['agents', next.workerModel]] as const) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LEAD_PROFILES, PROFILES, executiveFromDraft } from '../src/shared/profiles';
-import { DEFAULT_SETTINGS, ValidationError, createOrganisation, sanitiseSettings } from '../src/server/engine/state';
+import { DEFAULT_SETTINGS, ValidationError, assertModelRefs, createOrganisation, isModelRef, sanitiseSettings } from '../src/server/engine/state';
 import { MODELS, costOfRequest, priceUsage } from '../src/server/providers/pricing';
 import { MockProvider } from '../src/server/providers/mock';
 import { recommendTeam } from '../src/server/recommend';
@@ -100,12 +100,23 @@ describe('establishing an organisation', () => {
 describe('settings', () => {
   it('takes a model by the connection it is reached through and the provider\'s id for it', () => {
     // Whether the model can be called is for the provider to say; here only the form is checked.
-    for (const ref of ['claude-opus-5-5', 'openai:gpt-5', 'deepseek:deepseek-chat', 'openrouter:moonshotai/kimi-k2:free', 'custom:qwen3-30b@q4']) {
+    // Anything a provider's listing could call a model is a name: a local server's may have spaces and brackets in it.
+    for (const ref of ['claude-opus-5-5', 'openai:gpt-5', 'deepseek:deepseek-chat', 'openrouter:moonshotai/kimi-k2:free', 'custom:qwen3-30b@q4', 'custom:My Model (Q4)', 'custom:model=b', 'minimax:MiniMax-M3.1-Flash']) {
+      expect(isModelRef(ref)).toBe(true);
       expect(sanitiseSettings({ executiveModel: ref }).executiveModel).toBe(ref);
     }
-    for (const ref of ['', ' ', 'two words', ':leading', 'x'.repeat(300), 42 as never, null as never]) {
+    for (const ref of ['', ' ', ' leading-space', 'x'.repeat(300), 'bell\u0007', 'two\nlines', 42 as never, null as never]) {
+      expect(isModelRef(ref)).toBe(false);
       expect(sanitiseSettings({ executiveModel: ref }).executiveModel).toBe(DEFAULT_SETTINGS.executiveModel);
     }
+  });
+
+  it('refuses a change that names a model in a form no model has, instead of quietly keeping the old one', () => {
+    expect(() => assertModelRefs({ executiveModel: '' })).toThrow(/model named for the executives is not a model’s name/);
+    expect(() => assertModelRefs({ workerModel: 7 as never })).toThrow(/model named for the agents/);
+    expect(() => assertModelRefs({ workerModel: 'custom:My Model (Q4)', budgetUsd: 3 })).not.toThrow();
+    expect(() => assertModelRefs({ budgetUsd: 3 })).not.toThrow();
+    expect(() => assertModelRefs(undefined)).not.toThrow();
   });
 
   it('keeps every value inside its range', () => {
@@ -114,7 +125,7 @@ describe('settings', () => {
       maxCycles: 0,
       maxFollowUpDepth: 99,
       maxConcurrentCalls: 500,
-      executiveModel: 'not a model',
+      executiveModel: '',
       workerModel: 'claude-haiku-5-5',
       executiveEffort: 'extreme' as never,
       arbiter: 'king' as never,

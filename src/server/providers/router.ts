@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ConnectionInfo, ModelOption, PresetInfo, ProviderInfo } from '../../shared/types';
 import { ConnectionStore, address, keyHint, type Connection } from '../connections';
-import { ValidationError } from '../engine/state';
+import { ValidationError, isModelRef } from '../engine/state';
 import { PLAIN_DIALECT, PRESETS, presetById, ratesOn, type CatalogueModel, type Preset, type Price } from './catalogue';
 import { ClaudeProvider, type ClaudeProviderOptions } from './claude';
 import { MockProvider, type MockOptions } from './mock';
@@ -57,9 +57,13 @@ export class ProviderRouter implements Provider {
     this.mock = new MockProvider(options.mock);
   }
 
-  /** True when no real model is called: because none is connected, or because the server was told to simulate. */
+  /**
+   * True when no real model is called: because the server was told to simulate, or because it has never had a
+   * key. A server that had keys and has none left does not simulate: its organisations were set up on real
+   * models, and made-up answers passed off as theirs would be worse than a pause that says which key is missing.
+   */
   get simulated(): boolean {
-    return !!this.options.forceMock || this.store.list().length === 0;
+    return !!this.options.forceMock || !this.store.hadKeys;
   }
 
   // ---- which models there are ----
@@ -69,17 +73,21 @@ export class ProviderRouter implements Provider {
   }
 
   private refOf(connection: Connection, model: string): string {
-    return connection.id === this.firstAnthropic()?.id ? model : `${connection.id}:${model}`;
+    return connection.id === this.plainAnthropic()?.id ? model : `${connection.id}:${model}`;
   }
 
   /**
-   * The Anthropic key that plain Claude model names belong to: the one called "anthropic" if there is one, else
-   * the first there is. Going by the name keeps an organisation on the key it was set up with when a second
-   * Anthropic key appears, whichever order the two are listed in.
+   * The Anthropic key that plain Claude model names belong to: the one called "anthropic", and no other. An
+   * organisation set up on plain names stays on that key whatever other Anthropic keys come and go; if the key
+   * is removed, its calls say so instead of going out on a different account.
    */
-  private firstAnthropic(): Connection | undefined {
-    const all = this.store.list().filter((c) => this.preset(c).kind === 'anthropic');
-    return all.find((c) => c.id === 'anthropic') ?? all[0];
+  private plainAnthropic(): Connection | undefined {
+    const connection = this.store.get('anthropic');
+    return connection && this.preset(connection).kind === 'anthropic' ? connection : undefined;
+  }
+
+  private anthropicKeys(): Connection[] {
+    return this.store.list().filter((c) => this.preset(c).kind === 'anthropic');
   }
 
   /**
@@ -156,7 +164,8 @@ export class ProviderRouter implements Provider {
     const others = [...new Set([...connection.extraModels, ...connection.models.filter((m) => m.tools !== false).map((m) => m.id)])]
       .filter((id) => !picked.has(id))
       .sort((a, b) => a.localeCompare(b));
-    return [...picks.map((m) => option(m.id, m)), ...others.map((id) => option(id))];
+    // A model whose name could not be kept in an organisation's settings is not offered for them.
+    return [...picks.map((m) => option(m.id, m)), ...others.map((id) => option(id))].filter((m) => isModelRef(m.id));
   }
 
   private models(): ModelOption[] {
@@ -169,11 +178,11 @@ export class ProviderRouter implements Provider {
     const connections = this.store.list();
     return {
       id: simulated ? 'mock' : 'router',
-      label: simulated ? 'Simulation' : connections.map((c) => c.label).join(', '),
+      label: simulated ? 'Simulation' : connections.map((c) => c.label).join(', ') || 'No key connected',
       simulated,
       defaultModel: this.defaultModel(),
       models: this.models(),
-      managed: simulated || !!this.firstAnthropic(),
+      managed: simulated || this.anthropicKeys().length > 0,
       connections: connections.map((c) => this.describe(c)),
     };
   }
@@ -220,8 +229,8 @@ export class ProviderRouter implements Provider {
   defaultModel(): string {
     if (this.simulated) return DEFAULT_MODEL;
     // A Claude key comes first where there is one: its models are the ones everything here can be done with.
-    const plain = this.firstAnthropic();
-    const order = plain ? [plain, ...this.store.list().filter((c) => c !== plain)] : this.store.list();
+    const claude = this.plainAnthropic() ?? this.anthropicKeys()[0];
+    const order = claude ? [claude, ...this.store.list().filter((c) => c !== claude)] : this.store.list();
     for (const connection of order) {
       const offered = this.optionsOf(connection);
       const starter = this.catalogueFor(connection).find((m) => m.starter && offered.some((o) => o.id === this.refOf(connection, m.id)));
@@ -254,7 +263,7 @@ export class ProviderRouter implements Provider {
 
   private connectionFor(ref: string): Connection | undefined {
     const { connectionId } = parseRef(ref);
-    return connectionId === null ? this.firstAnthropic() : this.store.get(connectionId);
+    return connectionId === null ? this.plainAnthropic() : this.store.get(connectionId);
   }
 
   private client(connection: Connection): Callable {
@@ -281,7 +290,8 @@ export class ProviderRouter implements Provider {
             ...this.options.claude,
             ...this.stateFileFor(connection),
             ...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
-            ...(connection.baseURL && connection.baseURL !== preset.regions[0]!.baseURL ? { baseURL: connection.baseURL } : {}),
+            // Always said outright: left unsaid, the client would take an address from the environment instead.
+            baseURL: connection.baseURL,
           })
         : preset.kind === 'responses'
           ? new OpenAIResponsesProvider(options)
@@ -338,12 +348,14 @@ export class ProviderRouter implements Provider {
   async executePlan(job: PlanJob): Promise<PlanOutcome> {
     if (this.simulated) return this.mock.executePlan(job);
     if (job.session) {
-      // Picking a session up needs the account it lives on, not the models: those were fixed when it started.
-      const connection = this.connectionFor(job.executiveModel) ?? this.firstAnthropic();
-      const provider = connection && this.preset(connection).kind === 'anthropic' ? this.client(connection) : this.firstAnthropic() && this.client(this.firstAnthropic()!);
-      if (!(provider instanceof ClaudeProvider)) {
+      // Picking a session up needs the account it lives on, not the models: those were fixed when it started,
+      // and the organisation's may have changed since. The key the executives are on now is asked first.
+      if (!this.anthropicKeys().length) {
         throw new ProviderError('This plan is being carried out in a hosted session, and no Anthropic key is connected to pick it up with. Add one under Models and keys.', 'auth', false);
       }
+      const now = this.connectionFor(job.executiveModel);
+      const owner = (await this.sessionOwner(job.session.id, now)) ?? (now && this.preset(now).kind === 'anthropic' ? now : this.anthropicKeys()[0]!);
+      const provider = this.client(owner) as ClaudeProvider;
       return provider.executePlan({ ...job, executiveModel: parseRef(job.executiveModel).model, workerModel: parseRef(job.workerModel).model });
     }
     if (!this.hosts(job.executiveModel, job.workerModel)) {
@@ -354,13 +366,24 @@ export class ProviderRouter implements Provider {
     return lead.provider.executePlan({ ...job, executiveModel: lead.model, workerModel: parseRef(job.workerModel).model });
   }
 
+  /**
+   * The Anthropic key whose account a hosted session is on, or undefined if none of the keys connected knows
+   * it. A session does not say which key made it, so each is asked, the likeliest first.
+   */
+  async sessionOwner(sessionId: string, first?: Connection): Promise<Connection | undefined> {
+    const keys = this.anthropicKeys();
+    const order = first && keys.includes(first) ? [first, ...keys.filter((c) => c !== first)] : keys;
+    for (const connection of order) {
+      if (await (this.client(connection) as ClaudeProvider).hasSession(sessionId).catch(() => false)) return connection;
+    }
+    return undefined;
+  }
+
   /** The Claude provider a hosted session belongs to. Sessions do not say which key made them, so each Anthropic key is tried in turn. */
   private async onAnthropic<T>(work: (provider: ClaudeProvider) => Promise<T>, missing: (result: T) => boolean): Promise<T | undefined> {
     let last: T | undefined;
-    for (const connection of this.store.list()) {
-      const provider = this.client(connection);
-      if (!(provider instanceof ClaudeProvider)) continue;
-      last = await work(provider);
+    for (const connection of this.anthropicKeys()) {
+      last = await work(this.client(connection) as ClaudeProvider);
       if (!missing(last)) return last;
     }
     return last;
@@ -377,6 +400,8 @@ export class ProviderRouter implements Provider {
 
   async archiveSession(sessionId: string): Promise<'archived' | 'busy' | 'gone'> {
     if (this.simulated) return this.mock.archiveSession(sessionId);
+    // With no Anthropic key there is nobody to ask. That is not the same as the session being gone.
+    if (!this.anthropicKeys().length) throw new ProviderError('No Anthropic key is connected to archive this session with. Add one under Models and keys.', 'auth', false);
     return (await this.onAnthropic((provider) => provider.archiveSession(sessionId), (result) => result === 'gone')) ?? 'gone';
   }
 
@@ -419,7 +444,12 @@ export class ProviderRouter implements Provider {
     if (!connection) throw new ValidationError('There is no such connection.');
     const looked: Connection = { ...connection };
     await this.look(looked, false);
-    return (await this.store.update(id, (c) => Object.assign(c, { models: looked.models, checkedAt: looked.checkedAt, listingError: looked.listingError })))!;
+    const updated = await this.store.update(id, (c) => {
+      // The key may have been changed while the provider was answering for the old one. Its answer is then of no use.
+      if (c.apiKey === looked.apiKey && c.baseURL === looked.baseURL) Object.assign(c, { models: looked.models, checkedAt: looked.checkedAt, listingError: looked.listingError });
+    });
+    if (!updated) throw new ValidationError('There is no such connection.');
+    return updated;
   }
 
   /**
@@ -447,7 +477,7 @@ export class ProviderRouter implements Provider {
     try {
       if (preset.kind === 'anthropic') {
         // Claude's models are the ones this project has prices for; the call is only to see that the key is good.
-        const client = new Anthropic({ ...(connection.apiKey ? { apiKey: connection.apiKey } : {}), ...(connection.baseURL !== preset.regions[0]!.baseURL ? { baseURL: connection.baseURL } : {}), maxRetries: 1 });
+        const client = new Anthropic({ ...(connection.apiKey ? { apiKey: connection.apiKey } : {}), baseURL: connection.baseURL, maxRetries: 1 });
         await client.models.list({ limit: 1 });
         connection.models = [];
       } else {
@@ -475,18 +505,25 @@ export class ProviderRouter implements Provider {
     connection.checkedAt = new Date().toISOString();
   }
 
-  /** Change a connection's name, key or address. A new key or address is checked before it is kept. */
-  async update(id: string, patch: { label?: string; apiKey?: string; baseURL?: string }): Promise<Connection> {
+  /**
+   * Change a connection's name or its key. A new key is checked, at the address the connection has, before it
+   * is kept. The address itself cannot be changed: the key held for it would be sent wherever the new one
+   * pointed. A key for another address is added as a connection of its own.
+   */
+  async update(id: string, patch: { label?: string; apiKey?: string }): Promise<Connection> {
     const connection = this.store.get(id);
     if (!connection) throw new ValidationError('There is no such connection.');
-    if (connection.source === 'env' && (patch.apiKey !== undefined || patch.baseURL !== undefined)) {
+    if (connection.source === 'env' && patch.apiKey !== undefined) {
       throw new ValidationError('This key comes from the environment the server was started in. Change it there and restart.');
     }
     const next: Connection = { ...connection };
     if (patch.label !== undefined) next.label = patch.label.trim().slice(0, 60) || connection.label;
-    if (patch.apiKey !== undefined && patch.apiKey.trim()) next.apiKey = patch.apiKey.trim();
-    if (patch.baseURL !== undefined && patch.baseURL.trim()) next.baseURL = address(patch.baseURL);
-    if (next.apiKey !== connection.apiKey || next.baseURL !== connection.baseURL) await this.look(next, true);
+    if (patch.apiKey !== undefined && patch.apiKey.trim()) {
+      const apiKey = patch.apiKey.trim();
+      if (apiKey.length > 500 || /\s/.test(apiKey)) throw new ValidationError('That does not look like an API key: it has spaces in it or is far too long.');
+      next.apiKey = apiKey;
+    }
+    if (next.apiKey !== connection.apiKey) await this.look(next, true);
     return (await this.store.update(id, (c) => Object.assign(c, next)))!;
   }
 
@@ -508,7 +545,7 @@ export class ProviderRouter implements Provider {
     const connection = this.store.get(id);
     if (!connection) throw new ValidationError('There is no such connection.');
     const name = model.trim();
-    if (!name || name.length > 200 || /\s/.test(name)) throw new ValidationError('Give the model id exactly as the provider’s API takes it.');
+    if (!name || /\s/.test(name) || !isModelRef(`${connection.id}:${name}`)) throw new ValidationError('Give the model id exactly as the provider’s API takes it.');
     return (await this.store.update(id, (c) => {
       if (!c.extraModels.includes(name)) c.extraModels.push(name);
     }))!;

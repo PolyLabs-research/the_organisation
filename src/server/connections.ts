@@ -39,6 +39,8 @@ interface FileShape {
   connections: Connection[];
   /** What was learned about connections that come from the environment, by connection id. */
   environment: Record<string, Remembered>;
+  /** True once this server has had a key of any kind. From then on, having none is a lack of keys, not a simulation. */
+  hadKeys?: boolean;
 }
 
 const ID = /^[a-z][a-z0-9-]{0,39}$/;
@@ -47,6 +49,7 @@ export class ConnectionStore {
   private stored: Connection[] = [];
   private fromEnv: Connection[] = [];
   private remembered: Record<string, Remembered> = {};
+  private everHadKeys = false;
   private writing: Promise<void> = Promise.resolve();
 
   constructor(
@@ -57,12 +60,24 @@ export class ConnectionStore {
   ) {}
 
   async load(): Promise<void> {
+    let text: string | null = null;
     try {
-      const parsed = JSON.parse(await fs.readFile(this.file, 'utf8')) as Partial<FileShape>;
-      this.stored = Array.isArray(parsed.connections) ? parsed.connections.filter((c) => c && ID.test(c.id) && typeof c.apiKey === 'string').map(tidy) : [];
-      this.remembered = parsed.environment && typeof parsed.environment === 'object' ? parsed.environment : {};
+      text = await fs.readFile(this.file, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    if (text !== null) {
+      let parsed: Partial<FileShape>;
+      try {
+        parsed = JSON.parse(text) as Partial<FileShape>;
+      } catch {
+        // Carrying on as if there were no keys would run organisations on the simulator, and the next
+        // save would write over whatever keys the file still holds. Better to stop and say so.
+        throw new Error(`${this.file} cannot be read: it is not valid JSON. Repair it, or move it aside and add the keys again, then start the server.`);
+      }
+      this.stored = Array.isArray(parsed.connections) ? parsed.connections.filter((c) => c && ID.test(c.id) && typeof c.apiKey === 'string' && !!address(String(c.baseURL ?? ''))).map(tidy) : [];
+      this.remembered = parsed.environment && typeof parsed.environment === 'object' ? parsed.environment : {};
+      this.everHadKeys = parsed.hadKeys === true || this.stored.length > 0;
     }
     this.fromEnv = [];
     for (const preset of PRESETS) {
@@ -86,6 +101,18 @@ export class ConnectionStore {
         }),
       );
     }
+    if (this.fromEnv.length && !this.everHadKeys) {
+      this.everHadKeys = true;
+      await this.save();
+    }
+  }
+
+  /**
+   * True once this server has had a key, even if it has none now. A server that has never had one simulates;
+   * one that has lost its keys must say so, not carry real organisations on with made-up answers.
+   */
+  get hadKeys(): boolean {
+    return this.everHadKeys || this.list().length > 0;
   }
 
   /** Every connection, the ones from the environment first, each group in the order it was added. */
@@ -107,6 +134,7 @@ export class ConnectionStore {
   async add(connection: Connection): Promise<void> {
     if (!ID.test(connection.id) || this.get(connection.id)) throw new Error(`A connection called ${connection.id} already exists.`);
     this.stored.push(tidy({ ...connection, source: 'stored' }));
+    this.everHadKeys = true;
     await this.save();
   }
 
@@ -137,7 +165,7 @@ export class ConnectionStore {
     this.writing = this.writing
       .catch(() => {})
       .then(async () => {
-        const shape: FileShape = { version: 1, connections: this.stored, environment: this.remembered };
+        const shape: FileShape = { version: 1, connections: this.stored, environment: this.remembered, hadKeys: this.everHadKeys };
         await fs.mkdir(path.dirname(this.file), { recursive: true });
         const tmp = `${this.file}.${process.pid}.tmp`;
         await fs.writeFile(tmp, JSON.stringify(shape, null, 2), { encoding: 'utf8', mode: 0o600 });

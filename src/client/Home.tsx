@@ -47,6 +47,14 @@ export function Home({ meta }: { meta: Meta }) {
         </a>
       </div>
 
+      {!meta.provider.simulated && meta.provider.connections && meta.provider.connections.length === 0 ? (
+        <div className="note note-warn">
+          <span>
+            <strong>No API key is connected.</strong> Organisations pause when they next need a model, and say which key is missing. Add one under{' '}
+            <a href="#/models">Models and keys</a>.
+          </span>
+        </div>
+      ) : null}
       {meta.provider.simulated ? (
         <div className="note note-info">
           <span>

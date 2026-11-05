@@ -136,8 +136,17 @@ describe('the routes for keys', () => {
     await call('POST', '/api/connections/custom/refresh');
     expect(endpoint.seen[0]!.headers.authorization).toBe(`Bearer ${SECRET}`);
 
+    // The address a key is held for cannot be changed: that would send the key somewhere new.
+    endpoint.seen.length = 0;
+    const moved = await call('PATCH', '/api/connections/custom', { baseURL: 'http://127.0.0.1:9/v1' });
+    expect(moved.status).toBe(400);
+    expect(moved.data.error).toMatch(/address of a connection cannot be changed/);
+    expect((await call('GET', '/api/connections')).data.connections[0].baseURL).toBe(endpoint.baseURL);
+    expect(endpoint.seen).toHaveLength(0);
+
+    // With the last key gone the server is short of a key. It does not go back to simulating.
     const removed = await call('DELETE', '/api/connections/custom');
-    expect(removed.data).toMatchObject({ connections: [], provider: { simulated: true } });
+    expect(removed.data).toMatchObject({ connections: [], provider: { simulated: false, label: 'No key connected', models: [] } });
     expect((await call('DELETE', '/api/connections/custom')).status).toBe(400);
 
     // Through all of that, neither key appeared in anything the server sent.
@@ -188,6 +197,23 @@ describe('the routes for keys', () => {
     await runner.idle();
     expect(runner.org.status).toBe('paused');
     expect(runner.org.lastError).toMatch(/No API key is connected for the "custom" connection/);
+  });
+
+  it('keeps a model under whatever name its key lists it by', async () => {
+    // A server of the user's own can call its models anything.
+    endpoint.models = [{ id: 'My Model (Q4)' }, { id: 'model=b' }, { id: 'x'.repeat(250) }];
+    await connect();
+    const offered = (await call('GET', '/api/connections')).data.provider.models.map((m: any) => m.id);
+    // What cannot be kept in an organisation's settings is not offered for them.
+    expect(offered).toEqual(['custom:model=b', 'custom:My Model (Q4)']);
+    const made = await call<OrgView>('POST', '/api/orgs', { name: 'Fernery', idea: IDEA, executives: TEAM, settings: { executiveModel: 'custom:My Model (Q4)', workerModel: 'custom:model=b' } });
+    expect(made.status).toBe(201);
+    // Not quietly swapped for the default, which is what a name the settings would not hold used to become.
+    expect(made.data.org.settings).toMatchObject({ executiveModel: 'custom:My Model (Q4)', workerModel: 'custom:model=b' });
+    const changed = await call<OrgView>('PATCH', `/api/orgs/${made.data.org.id}/settings`, { workerModel: 'custom:My Model (Q4)' });
+    expect(changed.data.org.settings.workerModel).toBe('custom:My Model (Q4)');
+    expect((await call('PATCH', `/api/orgs/${made.data.org.id}/settings`, { workerModel: '' })).status).toBe(400);
+    expect((await call('POST', '/api/orgs', { name: 'Fernery', idea: IDEA, executives: TEAM, settings: { executiveModel: 42 } })).status).toBe(400);
   });
 
   it('has a team recommended by the model new organisations start on, or by one that is named', async () => {

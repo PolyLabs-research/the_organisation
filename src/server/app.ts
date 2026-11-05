@@ -116,11 +116,13 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
   app.patch('/api/connections/:connectionId', async (req, res) => {
     const body = req.body ?? {};
     const id = String(req.params.connectionId);
-    if (body.label !== undefined || body.apiKey !== undefined || body.baseURL !== undefined) {
+    // A connection's address is fixed when it is made. Changing it here would send the key held for the old
+    // address to the new one, which nobody who cannot already read the key should be able to bring about.
+    if (body.baseURL !== undefined) throw new ValidationError('The address of a connection cannot be changed. Remove it and add the key again at the new address.');
+    if (body.label !== undefined || body.apiKey !== undefined) {
       await keys().update(id, {
         ...(typeof body.label === 'string' ? { label: body.label } : {}),
         ...(typeof body.apiKey === 'string' ? { apiKey: body.apiKey } : {}),
-        ...(typeof body.baseURL === 'string' ? { baseURL: body.baseURL } : {}),
       });
     }
     if (typeof body.addModel === 'string') await keys().addModel(id, body.addModel);

@@ -150,13 +150,58 @@ describe('fitting a request to what a model takes', () => {
     api.seen.length = 0;
     await ask(p, undefined, 'odd-model');
     await ask(p, undefined, 'odd-model');
-    // Refused as sent, refused again without the effort level, accepted without the request for encrypted reasoning.
+    // Refused as sent, twice; refused without the effort level; accepted without the request for encrypted
+    // reasoning, which is then the only thing left out from there on.
     expect(api.asked.map((b) => [b.reasoning?.effort, b.include?.[0]])).toEqual([
+      ['high', 'reasoning.encrypted_content'],
       ['high', 'reasoning.encrypted_content'],
       [undefined, 'reasoning.encrypted_content'],
       ['high', undefined],
       ['high', undefined],
     ]);
+  });
+
+  it('reports what a response cost even when the response is no use', async () => {
+    const usage: CallUsage[] = [];
+    api.responses = [{ refusal: 'I cannot help with that.', usage: { input_tokens: 1000, output_tokens: 20 } }];
+    expect(await ask(provider(), (u) => usage.push(u)).catch((e) => e)).toMatchObject({ code: 'refusal' });
+    expect(usage).toEqual([expect.objectContaining({ inputTokens: 1000, outputTokens: 20, costUsd: expect.closeTo((1000 * 2 + 20 * 10) / 1e6, 10) })]);
+    // A response that failed and says nothing of tokens is taken to have cost none.
+    api.responses = [{ failed: { code: 'server_error', message: 'Something went wrong.' }, usage: null }];
+    await ask(provider(), (u) => usage.push(u)).catch(() => {});
+    expect(usage).toHaveLength(1);
+    // One that was cut off was paid for as far as it got.
+    api.responses = [{ text: '{"verdict":"pa', incomplete: 'max_output_tokens', usage: { input_tokens: 500, output_tokens: 32000 } }];
+    await ask(provider(), (u) => usage.push(u)).catch(() => {});
+    expect(usage[1]).toMatchObject({ inputTokens: 500, outputTokens: 32000 });
+  });
+
+  it('makes room when the exchange and its reply together overflow the model, and gives the work up when it cannot fit', async () => {
+    const overflow = 'Your input exceeds the context window of this model. Please adjust your input and try again.';
+    api.rules = [(b) => (b.max_output_tokens > 8000 ? overflow : undefined)];
+    api.responses = [{ text: GOOD }];
+    const p = provider();
+    expect(await ask(p)).toMatchObject({ verdict: 'pass' });
+    expect(api.asked.map((b) => b.max_output_tokens)).toEqual([32000, 4096]);
+    // For that request alone: nothing is concluded about the model.
+    api.rules = [];
+    api.responses = [{ text: GOOD }];
+    await ask(p);
+    expect(api.asked.at(-1).max_output_tokens).toBe(32000);
+
+    api.rules = [() => overflow];
+    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'invalid_output', retryable: false });
+  });
+
+  it('does not mistake a refusal about a reasoning item for one about the effort level', async () => {
+    // As when an item of the model's reasoning is sent back without what has to follow it.
+    api.rules = [(b) => (b.model === 'big-model' && api.asked.length <= 1 ? "Item 'rs_123' of type 'reasoning' was provided without its required following item." : undefined)];
+    api.responses = [{ text: GOOD }, { text: GOOD }];
+    const p = provider();
+    await ask(p);
+    await ask(p);
+    // The effort level went out every time: it was never what was objected to.
+    expect(api.asked.map((b) => b.reasoning?.effort)).toEqual(['xhigh', 'xhigh', 'xhigh']);
   });
 
   it('lowers the output cap to the limit the endpoint names', async () => {
@@ -290,7 +335,8 @@ describe('an agent run through the Responses API', () => {
     // Five requests for two turns: the second turn was sent four times, each time with the same exchange.
     expect(api.asked).toHaveLength(5);
     for (const again of api.asked.slice(2)) expect(again.input).toEqual(api.asked[1].input);
-    expect(usage).toHaveLength(2);
+    // Two turns, and the response that failed after it had been charged for.
+    expect(usage).toHaveLength(3);
 
     // A failure that keeps coming is given up on.
     api.seen.length = 0;
