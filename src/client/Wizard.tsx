@@ -1,9 +1,10 @@
 import { ArrowLeft, Plus, Sparkles, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { hueFor } from '../shared/profiles';
 import type { ExecutiveDraft, OperatingProfile, OrgSettings, SopPhase } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
+import { ModelPicker, canHost, canSearch } from './ModelPicker';
 import { ErrorNote, Field, HostedNotes, SeatBadge, Sop, Stepper, money } from './ui';
 
 interface Seat {
@@ -87,6 +88,7 @@ export function Wizard({ meta }: { meta: Meta }) {
   const [adding, setAdding] = useState(false);
   const [custom, setCustom] = useState({ title: '', function: '', remit: '', phases: '' });
   const [settings, setSettings] = useState<OrgSettings>(meta.defaults);
+  const [fellBack, setFellBack] = useState(false);
   const [limitCycles, setLimitCycles] = useState(false);
   const [steer, setSteer] = useState('');
   const [startNow, setStartNow] = useState(true);
@@ -98,6 +100,31 @@ export function Wizard({ meta }: { meta: Meta }) {
   const full = seats.length >= meta.limits.maxLeads;
   const customPhases = parsePhases(custom.phases);
   const set = <K extends keyof OrgSettings>(key: K, value: OrgSettings[K]) => setSettings((s) => ({ ...s, [key]: value }));
+
+  const models = meta.provider.models;
+  const hostable = meta.provider.managed && canHost(models, settings.executiveModel, settings.workerModel);
+  const searchable = canSearch(models, settings.workerModel);
+  /** Hosted sessions need both models on one Anthropic key. A choice that rules them out puts the work back on this machine, and says so. */
+  const setModel = (key: 'executiveModel' | 'workerModel', value: string) => {
+    const next = { ...settings, [key]: value };
+    const lost = next.execution === 'managed' && !canHost(models, next.executiveModel, next.workerModel);
+    setSettings(lost ? { ...next, execution: 'local' } : next);
+    if (lost) setFellBack(true);
+  };
+  // The models on offer change when a key is added or removed in another tab. A choice that is no longer
+  // on offer goes back to the default, so the form never holds a model that cannot be called.
+  useEffect(() => {
+    setSettings((s) => {
+      const known = (id: string) => models.some((m) => m.id === id);
+      if (known(s.executiveModel) && known(s.workerModel)) return s;
+      const next = {
+        ...s,
+        executiveModel: known(s.executiveModel) ? s.executiveModel : meta.defaults.executiveModel,
+        workerModel: known(s.workerModel) ? s.workerModel : meta.defaults.workerModel,
+      };
+      return next.execution === 'managed' && !canHost(models, next.executiveModel, next.workerModel) ? { ...next, execution: 'local' } : next;
+    });
+  }, [models, meta.defaults.executiveModel, meta.defaults.workerModel]);
   const patchSeat = (key: number, patch: Partial<Seat>) => setSeats((list) => list.map((s) => (s.key === key ? { ...s, ...patch } : s)));
 
   const askForTeam = () =>
@@ -316,7 +343,15 @@ export function Wizard({ meta }: { meta: Meta }) {
             <fieldset className="choice">
               <legend>The leads’ agents do their work:</legend>
               <label>
-                <input type="radio" name="execution" checked={settings.execution === 'local'} onChange={() => set('execution', 'local')} />
+                <input
+                  type="radio"
+                  name="execution"
+                  checked={settings.execution === 'local'}
+                  onChange={() => {
+                    set('execution', 'local');
+                    setFellBack(false);
+                  }}
+                />
                 <span>
                   <strong>On this machine.</strong> They read and write files in the organisation’s workspace folder and cannot run anything. The cheapest way to work.
                 </span>
@@ -326,13 +361,16 @@ export function Wizard({ meta }: { meta: Meta }) {
                   type="radio"
                   name="execution"
                   checked={settings.execution === 'managed'}
-                  onChange={() => set('execution', 'managed')}
-                  disabled={!meta.provider.managed}
+                  onChange={() => {
+                    set('execution', 'managed');
+                    setFellBack(false);
+                  }}
+                  disabled={!hostable}
                 />
                 <span>
                   <strong>In hosted sessions</strong> (Claude Managed Agents). Each plan gets a sandbox on Anthropic’s side where the lead and its agents can run and test what they
                   build. It costs more: agents work for longer on each task, and the sandbox’s running time is billed as well.
-                  {meta.provider.managed ? '' : ' Not available with this provider.'}
+                  {hostable ? '' : ' It needs Claude models from one Anthropic key, for both the executives and the agents.'}
                 </span>
               </label>
             </fieldset>
@@ -352,7 +390,7 @@ export function Wizard({ meta }: { meta: Meta }) {
                     undone.
                   </span>
                 </label>
-                <HostedNotes web={settings.webResearch} runs={settings.workflowRuns} archive={settings.archiveSessions} simulated={meta.provider.simulated} />
+                <HostedNotes web={settings.webResearch && searchable} runs={settings.workflowRuns} archive={settings.archiveSessions} simulated={meta.provider.simulated} />
               </>
             ) : null}
 
@@ -377,31 +415,40 @@ export function Wizard({ meta }: { meta: Meta }) {
                   <option value={3}>Three rounds</option>
                 </select>
               </Field>
-              <Field label="Model for the executives">
-                <select value={settings.executiveModel} onChange={(e) => set('executiveModel', e.target.value)}>
-                  {meta.provider.models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label} (${m.inputPerMTok} in / ${m.outputPerMTok} out per million tokens)
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Model for the agents" hint="Agents do most of the work, so this choice drives most of the spend.">
-                <select value={settings.workerModel} onChange={(e) => set('workerModel', e.target.value)}>
-                  {meta.provider.models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label} (${m.inputPerMTok} in / ${m.outputPerMTok} out per million tokens)
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              <ModelPicker label="Model for the executives" value={settings.executiveModel} models={models} onChange={(id) => setModel('executiveModel', id)} />
+              <ModelPicker
+                label="Model for the agents"
+                hint="Agents do most of the work, so this choice drives most of the spend."
+                value={settings.workerModel}
+                models={models}
+                onChange={(id) => setModel('workerModel', id)}
+              />
             </div>
+            {fellBack ? (
+              <div className="note note-warn">
+                <span>
+                  Hosted sessions need Claude models from one Anthropic key, for both the executives and the agents. With this choice the agents work on this machine instead.
+                </span>
+              </div>
+            ) : null}
+            {meta.keys ? (
+              <p className="muted">
+                {meta.provider.simulated ? 'These are the simulator’s models. To call real ones, add' : 'To use another provider’s models, add'} an API key under{' '}
+                <a href="#/models" target="_blank" rel="noreferrer noopener">
+                  Models and keys
+                </a>{' '}
+                (it opens in a new tab, and this list follows when you come back).
+              </p>
+            ) : null}
 
             <label className="check">
-              <input type="checkbox" checked={settings.webResearch} onChange={(e) => set('webResearch', e.target.checked)} />
+              <input type="checkbox" checked={settings.webResearch && searchable} disabled={!searchable} onChange={(e) => set('webResearch', e.target.checked)} />
               <span>
                 <strong>Let agents search the web.</strong> Without it they work from what the model already knows and must mark facts as
-                assumptions. Searches are billed separately by Anthropic.
+                assumptions.{' '}
+                {searchable
+                  ? 'Searches are billed separately by Anthropic.'
+                  : 'Not available with the model chosen for the agents: here, only agents on Claude models can search.'}
               </span>
             </label>
             <label className="check">

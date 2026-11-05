@@ -3,9 +3,15 @@
 //   npm run establish -- "A marketplace where local bakeries sell surplus bread"
 //   npm run establish -- --no-start --budget 20 "…"
 //   npm run establish -- --hosted --budget 40 "…"   (plans carried out in hosted sessions)
+//   npm run establish -- --model openai:gpt-6.1-sol --agent-model deepseek:deepseek-flash "…"
 //
 // It asks for a recommended executive team, establishes the organisation with
 // it, starts the loop (unless --no-start) and prints where to watch it.
+//
+// --model names the model for the executives, and for the agents too unless
+// --agent-model names another. A model is named as on the Models and keys
+// page: "<key>:<model id>", or a bare Claude model id. Without either, the
+// organisation starts on the server's default, which depends on its keys.
 import type { OrgView, TeamRecommendation } from '../src/shared/types';
 
 const args = process.argv.slice(2);
@@ -15,7 +21,7 @@ const value = (name: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const skip = new Set<number>();
-for (const name of ['--budget', '--steer', '--url']) {
+for (const name of ['--budget', '--steer', '--url', '--model', '--agent-model']) {
   const i = args.indexOf(name);
   if (i >= 0) skip.add(i).add(i + 1);
 }
@@ -43,14 +49,18 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 async function main(): Promise<void> {
   if (!idea || flag('--help')) {
-    console.log('Usage: npm run establish -- [--no-start] [--hosted] [--budget <usd>] [--steer "<text>"] [--url <server>] "<the idea>"');
+    console.log('Usage: npm run establish -- [--no-start] [--hosted] [--budget <usd>] [--model <model>] [--agent-model <model>] [--steer "<text>"] [--url <server>] "<the idea>"');
     process.exit(idea ? 0 : 1);
   }
   const budget = value('--budget');
   if (budget !== undefined && !(Number(budget) > 0)) throw new Error('--budget takes a positive number of US dollars.');
 
+  const model = value('--model');
+  const agentModel = value('--agent-model') ?? model;
+  if (flag('--model') && !model) throw new Error('--model takes a model, such as openai:gpt-6.1-sol or claude-opus-5-5.');
+
   console.log('Asking for a recommended executive team…');
-  const team = await call<TeamRecommendation>('POST', '/api/recommend', { idea });
+  const team = await call<TeamRecommendation>('POST', '/api/recommend', { idea, ...(model ? { model } : {}) });
   const view = await call<OrgView>('POST', '/api/orgs', {
     name: team.name,
     idea,
@@ -59,6 +69,8 @@ async function main(): Promise<void> {
     settings: {
       ...(budget === undefined ? {} : { budgetUsd: Number(budget) }),
       ...(flag('--hosted') ? { execution: 'managed' as const } : {}),
+      ...(model ? { executiveModel: model } : {}),
+      ...(agentModel ? { workerModel: agentModel } : {}),
     },
     steer: value('--steer'),
   });
@@ -70,6 +82,7 @@ async function main(): Promise<void> {
     console.log(`  ${seat.short.padEnd(6)} ${seat.title.padEnd(38)} ${seat.phases.map((p) => p.name).join(' → ')}  (${agents})`);
   }
   console.log(`\nBudget: $${org.settings.budgetUsd.toFixed(2)}. The organisation pauses itself when it is reached.`);
+  console.log(`Executives on ${org.settings.executiveModel}, agents on ${org.settings.workerModel}.`);
   console.log(org.settings.execution === 'managed' ? 'Plans are carried out in hosted sessions.' : 'Plans are carried out on this machine.');
 
   if (flag('--no-start')) {

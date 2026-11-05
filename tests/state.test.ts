@@ -98,13 +98,23 @@ describe('establishing an organisation', () => {
 });
 
 describe('settings', () => {
+  it('takes a model by the connection it is reached through and the provider\'s id for it', () => {
+    // Whether the model can be called is for the provider to say; here only the form is checked.
+    for (const ref of ['claude-opus-5-5', 'openai:gpt-5', 'deepseek:deepseek-chat', 'openrouter:moonshotai/kimi-k2:free', 'custom:qwen3-30b@q4']) {
+      expect(sanitiseSettings({ executiveModel: ref }).executiveModel).toBe(ref);
+    }
+    for (const ref of ['', ' ', 'two words', ':leading', 'x'.repeat(300), 42 as never, null as never]) {
+      expect(sanitiseSettings({ executiveModel: ref }).executiveModel).toBe(DEFAULT_SETTINGS.executiveModel);
+    }
+  });
+
   it('keeps every value inside its range', () => {
     const s = sanitiseSettings({
       budgetUsd: -5,
       maxCycles: 0,
       maxFollowUpDepth: 99,
       maxConcurrentCalls: 500,
-      executiveModel: 'gpt-4',
+      executiveModel: 'not a model',
       workerModel: 'claude-haiku-5-5',
       executiveEffort: 'extreme' as never,
       arbiter: 'king' as never,

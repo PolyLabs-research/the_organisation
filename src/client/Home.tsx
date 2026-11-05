@@ -51,8 +51,14 @@ export function Home({ meta }: { meta: Meta }) {
         <div className="note note-info">
           <span>
             <strong>Running in simulation.</strong> Every seat gives a scripted answer, so you can watch the whole loop work without
-            spending anything. To run on Claude, put <code>ANTHROPIC_API_KEY=…</code> in a <code>.env</code> file in the project folder
-            and restart the server.
+            spending anything.{' '}
+            {meta.keys?.forcedSimulation ? (
+              <>The server was started with <code>ORG_PROVIDER=mock</code>, so it stays that way whatever keys are added.</>
+            ) : meta.keys ? (
+              <>
+                To call real models, add an API key under <a href="#/models">Models and keys</a>.
+              </>
+            ) : null}
           </span>
         </div>
       ) : null}

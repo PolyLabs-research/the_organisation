@@ -479,15 +479,87 @@ export interface OrgView {
   draining: boolean;
 }
 
+/** A model an organisation can be set to run on. */
+export interface ModelOption {
+  /**
+   * What an organisation's settings hold: "<connection>:<model id>" (e.g. "openai:gpt-5"), or a bare Claude
+   * model id for the first Anthropic connection.
+   */
+  id: string;
+  label: string;
+  /** List price in US dollars per million tokens. A stand-in rate when `priced` is false. */
+  inputPerMTok: number;
+  outputPerMTok: number;
+  /** The connection (API key) the model is reached through. */
+  connectionId?: string;
+  /** The provider's name, for grouping models in a list. */
+  provider?: string;
+  /** False when the model's price is not known, so its spend is counted at a stand-in rate until one is set. */
+  priced?: boolean;
+  /** One of the models picked out for this provider: its strongest, its best-value, its quickest. */
+  recommended?: boolean;
+  tier?: 'flagship' | 'balanced' | 'fast';
+  /** Whether plans can be carried out in hosted sessions on it. */
+  hosted?: boolean;
+  /** Whether agents on it can search the web. */
+  web?: boolean;
+  note?: string;
+}
+
+/** An API key the server holds, as the browser is told about it. The key itself never leaves the server. */
+export interface ConnectionInfo {
+  id: string;
+  presetId: string;
+  label: string;
+  baseURL: string;
+  /** The last characters of the key. */
+  keyHint: string;
+  /** stored: added here and kept on disk. env: read from the environment when the server started. */
+  source: 'stored' | 'env';
+  modelCount: number;
+  checkedAt: string | null;
+  /** Why the provider's list of models could not be read, if it could not. */
+  listingError: string | null;
+}
+
+/** A provider the server knows how to reach, for the form that adds a key. */
+export interface PresetInfo {
+  id: string;
+  label: string;
+  family?: string;
+  /** anthropic: Claude's own API. responses: OpenAI's Responses API. openai: an endpoint that speaks OpenAI's Chat Completions. */
+  kind: 'anthropic' | 'responses' | 'openai';
+  regions: Array<{ id: string; label: string; baseURL: string }>;
+  keysUrl: string;
+  note?: string;
+  /** Environment variables a key can be given in instead. */
+  env: string[];
+  /** The models picked out for this provider, with list prices in US dollars per million tokens as they stand today. */
+  models: Array<{
+    id: string;
+    label: string;
+    tier: 'flagship' | 'balanced' | 'fast';
+    inputPerMTok: number;
+    outputPerMTok: number;
+    /** The regions (by id) whose platform has the model, where the provider's platforms differ. */
+    only?: string[];
+    note?: string;
+  }>;
+  /** The pages the prices were read from. */
+  sources: string[];
+}
+
 export interface ProviderInfo {
-  id: 'claude' | 'mock';
+  id: 'claude' | 'mock' | 'router';
   label: string;
   /** True when no real model is being called and spend figures are simulated. */
   simulated: boolean;
   defaultModel: string;
-  models: Array<{ id: string; label: string; inputPerMTok: number; outputPerMTok: number }>;
+  models: ModelOption[];
   /** True when plans can be run as hosted sessions (Claude Managed Agents). */
   managed: boolean;
+  /** The API keys the server holds. Absent for a provider that is not a set of connections. */
+  connections?: ConnectionInfo[];
 }
 
 // ---- API payloads ----

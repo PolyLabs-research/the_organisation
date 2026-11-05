@@ -9,9 +9,15 @@ export interface Config {
   port: number;
   host: string;
   dataDir: string;
-  provider: 'claude' | 'mock';
+  /**
+   * mock: always simulate, whatever keys there are. auto: call real models once any key is connected, and
+   * simulate until then. `claude` is the old name for auto and means the same.
+   */
+  provider: 'claude' | 'mock' | 'auto';
   /** Why that provider was chosen, for the startup log and the UI. */
   providerReason: string;
+  /** True when Anthropic credentials can be found without a key being handed over (a login profile, say). */
+  anthropicAmbient: boolean;
   production: boolean;
   /** The Anthropic workspace the API key belongs to, as it appears in Console links to hosted sessions. */
   workspace: string;
@@ -35,12 +41,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   } else if (requested === 'claude') {
     provider = 'claude';
     providerReason = 'ORG_PROVIDER=claude';
-  } else if (claudeCredentialsPresent(env)) {
-    provider = 'claude';
-    providerReason = 'Anthropic credentials found';
   } else {
-    provider = 'mock';
-    providerReason = 'no Anthropic credentials found (set ANTHROPIC_API_KEY to use Claude)';
+    provider = 'auto';
+    providerReason = 'models are called once a key is connected';
   }
   return {
     port: Number(env.PORT ?? 4780),
@@ -48,6 +51,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir: path.resolve(env.ORG_DATA_DIR ?? path.join(ROOT_DIR, 'data')),
     provider,
     providerReason,
+    // A key in the environment is picked up by name like any other provider's. This is for the other ways the
+    // Anthropic client finds credentials by itself.
+    anthropicAmbient: !env.ANTHROPIC_API_KEY && claudeCredentialsPresent(env),
     production: env.NODE_ENV === 'production',
     workspace: (env.ANTHROPIC_WORKSPACE_ID ?? '').trim() || 'default',
   };

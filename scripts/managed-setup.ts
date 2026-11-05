@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Effort } from '../src/shared/types';
 import { ROOT_DIR, loadConfig } from '../src/server/config';
+import { ConnectionStore } from '../src/server/connections';
 import { TEAM_AGENT_NAME, teamAgentSystem } from '../src/server/engine/prompts';
 import { DEFAULT_SETTINGS } from '../src/server/engine/state';
 import { ClaudeProvider } from '../src/server/providers/claude';
@@ -42,8 +43,19 @@ async function main(): Promise<void> {
   if (!isKnownModel(model)) throw new Error(`"${model}" is not a model this project knows. See src/server/providers/pricing.ts.`);
   if (!EFFORTS.includes(effort)) throw new Error(`--effort takes one of: ${EFFORTS.join(', ')}.`);
 
+  // The same Anthropic key the server would use: one from the environment, or one added under "Models and keys".
+  const connections = new ConnectionStore(path.join(config.dataDir, 'connections.json'), process.env, config.anthropicAmbient);
+  await connections.load();
+  const anthropic = connections.list().find((c) => c.presetId === 'anthropic');
+  if (!anthropic) throw new Error('No Anthropic key is connected. Add one under "Models and keys" in the interface, or set ANTHROPIC_API_KEY in .env.');
+
   const file = path.join(config.dataDir, 'managed.json');
-  const provider = new ClaudeProvider({ managedStateFile: file, workspace: config.workspace });
+  const provider = new ClaudeProvider({
+    managedStateFile: file,
+    workspace: config.workspace,
+    ...(anthropic.apiKey ? { apiKey: anthropic.apiKey } : {}),
+    ...(anthropic.baseURL !== 'https://api.anthropic.com' ? { baseURL: anthropic.baseURL } : {}),
+  });
   const made = await provider.prepareManaged({ workerModel: model, workerEffort: effort, workerName: TEAM_AGENT_NAME, workerSystem: teamAgentSystem(web), web, workflows });
 
   console.log(`Ready for agents on ${model} at ${effort} effort, ${web ? 'with the web (the sandbox network is open)' : 'without the web (the sandbox reaches package registries only)'}.`);

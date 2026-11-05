@@ -176,7 +176,15 @@ export class OrgRunner {
   updateSettings(patch: Partial<OrgSettings>): void {
     const org = this.org;
     const before = org.settings.execution;
-    org.settings = sanitiseSettings(patch, org.settings);
+    const next = sanitiseSettings(patch, org.settings);
+    // A model that cannot be called would stop the organisation at its next call. Better to say so now.
+    for (const [seat, model] of [['executives', next.executiveModel], ['agents', next.workerModel]] as const) {
+      const changed = model !== (seat === 'executives' ? org.settings.executiveModel : org.settings.workerModel);
+      if (changed && this.provider.knows && !this.provider.knows(model)) {
+        throw new ValidationError(`The model chosen for the ${seat}, "${model}", is not one a connected key can call. Add its key under Models and keys, or pick another model.`);
+      }
+    }
+    org.settings = next;
     if (org.settings.execution !== before) {
       // A plan keeps the way of working it started with. One that has not yet begun follows the new setting.
       for (const plan of org.plans) {
@@ -390,11 +398,19 @@ export class OrgRunner {
     return !plan || sessionAllowance(this.org, plan, plan.managed?.spentUsd ?? 0) !== null;
   }
 
-  /** With a provider that has no hosted sessions, plans marked for one are carried out on this machine instead. */
+  /**
+   * Where hosted sessions cannot be had (the provider has none, or the organisation's models are not ones it
+   * can host), plans marked for one are carried out on this machine instead. A plan already in a session
+   * stays there: its session was started with models that could be hosted.
+   */
   private keepToWhatTheProviderCan(): void {
-    if (this.provider.executePlan) return;
+    const { executiveModel, workerModel } = this.org.settings;
+    const can = !!this.provider.executePlan && (this.provider.hosts?.(executiveModel, workerModel) ?? true);
+    if (can) return;
     for (const plan of this.org.plans) {
-      if (plan.execution === 'managed' && isPlanActive(plan)) this.toLocal(plan);
+      if (plan.execution !== 'managed' || !isPlanActive(plan)) continue;
+      if (this.provider.executePlan && plan.managed?.sessionId) continue;
+      this.toLocal(plan);
     }
   }
 

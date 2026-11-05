@@ -3,6 +3,7 @@ import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
 import { hasCause, translate } from './errors';
+import { strictSchema, type JsonSchema } from './schema';
 import { ManagedResources } from './managed/resources';
 import { DEFAULT_TIMINGS, PlanSession, archiveSession, threadDetail, type SessionTimings } from './managed/session';
 import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webSearchToolFor } from './pricing';
@@ -107,7 +108,7 @@ export class ClaudeProvider implements Provider {
       label: 'Claude',
       simulated: false,
       defaultModel: DEFAULT_MODEL,
-      models: MODELS.map((m) => ({ id: m.id, label: m.label, inputPerMTok: m.input, outputPerMTok: m.output })),
+      models: MODELS.map((m) => ({ id: m.id, label: m.label, inputPerMTok: m.input, outputPerMTok: m.output, provider: 'Anthropic', priced: true, recommended: true, hosted: true, web: true })),
       managed: true,
     };
   }
@@ -332,45 +333,6 @@ function afterFallback(blocks: Anthropic.Beta.BetaContentBlock[]): {
   const kept = before.filter((block) => block.type === 'text' || resultFor(block) !== null || (block.type === 'server_tool_use' && answered.has(block.id)));
   const after = blocks.slice(boundary + 1);
   return { content: [...kept, ...after], calls: after.filter(isCall) };
-}
-
-// JSON Schema keywords that structured outputs do not accept. Zod adds numeric bounds to every integer.
-const UNSUPPORTED_KEYWORDS = new Set([
-  '$schema',
-  'minimum',
-  'maximum',
-  'exclusiveMinimum',
-  'exclusiveMaximum',
-  'multipleOf',
-  'minLength',
-  'maxLength',
-  'pattern',
-  'minItems',
-  'maxItems',
-  'uniqueItems',
-  'default',
-]);
-
-type JsonSchema = Record<string, unknown>;
-
-/** The schema as structured outputs take it: unsupported keywords removed, objects closed, enums kept. */
-function strictSchema(node: JsonSchema): JsonSchema {
-  const out: JsonSchema = {};
-  for (const [key, value] of Object.entries(node)) {
-    if (UNSUPPORTED_KEYWORDS.has(key)) continue;
-    if (key === 'properties' || key === '$defs') {
-      // The keys here are property names, not keywords, so none of them is dropped.
-      out[key] = Object.fromEntries(Object.entries(value as Record<string, JsonSchema>).map(([name, sub]) => [name, strictSchema(sub)]));
-    } else if (key === 'items') {
-      out[key] = strictSchema(value as JsonSchema);
-    } else if (key === 'anyOf' || key === 'allOf' || key === 'oneOf') {
-      out[key === 'oneOf' ? 'anyOf' : key] = (value as JsonSchema[]).map(strictSchema);
-    } else {
-      out[key] = value;
-    }
-  }
-  if (out.type === 'object') out.additionalProperties = false;
-  return out;
 }
 
 function outputFormat(schema: z.ZodType, plain: boolean): Anthropic.Beta.BetaJSONOutputFormat {

@@ -22,7 +22,7 @@ beforeAll(async () => {
   const store = new Store(dir);
   await store.init();
   registry = new Registry(store, new MockProvider(QUIET), { retryDelayMs: 1, emitIntervalMs: 1 });
-  const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default' };
+  const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false };
   server = createApp(registry, config).listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -191,7 +191,7 @@ describe('the API', () => {
     const steered = await api<OrgView>('POST', `${url}/steer`, { text: 'Stay profitable.' });
     expect(steered.data.org.steers.map((s) => s.text)).toEqual(['Stay profitable.']);
 
-    const settings = await api<OrgView>('PATCH', `${url}/settings`, { budgetUsd: 12.5, arbiter: 'judge', workerModel: 'claude-haiku-5-5', executiveModel: 'not-a-model' });
+    const settings = await api<OrgView>('PATCH', `${url}/settings`, { budgetUsd: 12.5, arbiter: 'judge', workerModel: 'claude-haiku-5-5', executiveModel: 'not a model' });
     expect(settings.data.org.settings).toMatchObject({ budgetUsd: 12.5, arbiter: 'judge', workerModel: 'claude-haiku-5-5', executiveModel: 'claude-opus-5-5' });
     expect(settings.data.org.executives.some((e) => e.kind === 'judge')).toBe(true);
     const back = await api<OrgView>('PATCH', `${url}/settings`, { arbiter: 'ceo' });
@@ -256,7 +256,7 @@ describe('who may call the API', () => {
   });
 
   it('applies the localhost rule when bound to the IPv6 loopback address too', async () => {
-    const config: Config = { port: 0, host: '::1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default' };
+    const config: Config = { port: 0, host: '::1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false };
     const other = createApp(registry, config).listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => other.once('listening', resolve));
     const { port } = other.address() as AddressInfo;

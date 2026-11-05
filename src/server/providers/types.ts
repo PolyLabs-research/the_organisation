@@ -241,6 +241,14 @@ export type PlanOutcome =
 
 export interface Provider {
   info(): ProviderInfo;
+  /** Whether a model can be called right now. Absent on a provider that takes any model it is given. */
+  knows?(model: string): boolean;
+  /** The model a new organisation starts on. */
+  defaultModel?(): string;
+  /** Whether plans can be carried out in hosted sessions with these models for the executives and the agents. */
+  hosts?(executiveModel: string, workerModel: string): boolean;
+  /** Whether agents on this model can search the web. */
+  searches?(model: string): boolean;
   /** One call that returns data matching `schema`. */
   structured<T>(req: StructuredRequest<T>): Promise<T>;
   /** A tool-using agent run that ends with a closing message. */

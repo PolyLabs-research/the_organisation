@@ -3,8 +3,8 @@ import path from 'node:path';
 import express from 'express';
 import { createApp } from './app';
 import { ROOT_DIR, loadConfig } from './config';
-import { ClaudeProvider } from './providers/claude';
-import { MockProvider } from './providers/mock';
+import { ConnectionStore } from './connections';
+import { ProviderRouter } from './providers/router';
 import { Registry } from './registry';
 import { Store } from './store';
 
@@ -15,15 +15,21 @@ async function main(): Promise<void> {
 
   const store = new Store(config.dataDir);
   await store.init();
-  // The simulator answers in about a second so the dashboard has something to show as it runs.
-  const provider =
-    config.provider === 'claude'
-      ? new ClaudeProvider({ managedStateFile: path.join(config.dataDir, 'managed.json'), workspace: config.workspace })
-      : new MockProvider({ delayMs: [500, 1600] });
+  // The keys this server can call models with: those in the environment, and those added through the interface.
+  const connections = new ConnectionStore(path.join(config.dataDir, 'connections.json'), process.env, config.anthropicAmbient);
+  await connections.load();
+  const provider = new ProviderRouter(connections, {
+    forceMock: config.provider === 'mock',
+    // The simulator answers in about a second so the dashboard has something to show as it runs.
+    mock: { delayMs: [500, 1600] },
+    claude: { managedStateFile: path.join(config.dataDir, 'managed.json'), workspace: config.workspace },
+  });
   const registry = new Registry(store, provider);
   await registry.load();
+  // What each key can call is asked for in the background: the server does not wait on other people's APIs to start.
+  void provider.refreshStale();
 
-  const app = createApp(registry, config);
+  const app = createApp(registry, config, provider);
   const clientDir = path.join(ROOT_DIR, 'dist', 'client');
   if (config.production) {
     if (!existsSync(path.join(clientDir, 'index.html'))) {
@@ -41,7 +47,8 @@ async function main(): Promise<void> {
   const server = app.listen(config.port, config.host, () => {
     const shown = config.host === '0.0.0.0' || config.host === '::' ? 'localhost' : config.host;
     console.log(`the_organisation is running at http://${shown}:${config.port}`);
-    console.log(`Provider: ${provider.info().label} (${config.providerReason})`);
+    const info = provider.info();
+    console.log(info.simulated ? `Simulating: ${config.provider === 'mock' ? 'ORG_PROVIDER=mock' : 'no API key is connected yet. Add one under "Models and keys".'}` : `Keys connected: ${info.label}`);
     console.log(`Data: ${config.dataDir}`);
   });
   server.on('error', (err: NodeJS.ErrnoException) => {

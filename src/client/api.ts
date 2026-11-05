@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type {
   ActivityEntry,
+  ConnectionInfo,
   CreateOrgRequest,
   OperatingProfile,
   OrgSettings,
   OrgSummary,
   OrgView,
+  PresetInfo,
   ProviderInfo,
   Task,
   TeamRecommendation,
@@ -18,6 +20,15 @@ export interface Meta {
   profiles: OperatingProfile[];
   defaults: OrgSettings;
   limits: { maxAgentsPerLead: number; maxLeads: number };
+  /** The providers a key can be added for. Null when this server does not manage keys. */
+  /** The providers a key can be added for, and the day their list prices were read. Null on a server that keeps no keys. */
+  keys: { presets: PresetInfo[]; forcedSimulation: boolean; pricesChecked: string } | null;
+}
+
+/** What comes back whenever keys are looked at or changed: the keys, and the models they now offer. */
+export interface KeysView {
+  connections: ConnectionInfo[];
+  provider: ProviderInfo;
 }
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -58,6 +69,12 @@ export const api = {
   task: (id: string, taskId: string) => request<{ task: Task }>('GET', `/api/orgs/${id}/tasks/${taskId}`),
   archiveSession: (id: string, planId: string) => request<{ archived: number; left: number; view: OrgView }>('POST', `/api/orgs/${id}/plans/${planId}/archive-session`),
   archiveSessions: (id: string) => request<{ archived: number; left: number; view: OrgView }>('POST', `/api/orgs/${id}/archive-sessions`),
+  connections: () => request<KeysView>('GET', '/api/connections'),
+  connect: (body: { presetId: string; apiKey: string; region?: string; baseURL?: string; label?: string }) => request<KeysView>('POST', '/api/connections', body),
+  refreshConnection: (id: string) => request<KeysView>('POST', `/api/connections/${id}/refresh`),
+  patchConnection: (id: string, body: { label?: string; apiKey?: string; addModel?: string; price?: { model: string; input: number | null; output?: number } }) =>
+    request<KeysView>('PATCH', `/api/connections/${id}`, body),
+  disconnect: (id: string) => request<KeysView>('DELETE', `/api/connections/${id}`),
   files: (id: string) => request<WorkspaceFile[]>('GET', `/api/orgs/${id}/files`),
   file: (id: string, path: string) =>
     request<{ path: string; content: string; truncated: boolean }>('GET', `/api/orgs/${id}/file?path=${encodeURIComponent(path)}`),

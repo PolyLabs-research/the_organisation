@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { CreateOrgRequest, OrgSummary } from '../shared/types';
 import { OrgRunner, type RunnerOptions } from './engine/runner';
-import { createOrganisation, normaliseLoaded, summarise } from './engine/state';
+import { ValidationError, createOrganisation, normaliseLoaded, summarise } from './engine/state';
 import type { Provider } from './providers/types';
 import type { Store } from './store';
 
@@ -33,7 +33,19 @@ export class Registry {
 
   async create(req: CreateOrgRequest): Promise<OrgRunner> {
     const id = `org_${randomBytes(5).toString('hex')}`;
-    const runner = new OrgRunner(createOrganisation(req, id), this.provider, this.store, this.options);
+    // Models not named in the request are the provider's default, which depends on which keys are connected.
+    const fallback = this.provider.defaultModel?.();
+    const settings = { ...req.settings };
+    if (fallback) {
+      settings.executiveModel ??= fallback;
+      settings.workerModel ??= fallback;
+    }
+    for (const [seat, model] of [['executives', settings.executiveModel], ['agents', settings.workerModel]] as const) {
+      if (model && this.provider.knows && !this.provider.knows(model)) {
+        throw new ValidationError(`The model chosen for the ${seat}, "${model}", is not one a connected key can call. Add its key under Models and keys, or pick another model.`);
+      }
+    }
+    const runner = new OrgRunner(createOrganisation({ ...req, settings }, id), this.provider, this.store, this.options);
     await runner.workspace.init();
     await runner.flush();
     this.runners.set(id, runner);

@@ -110,7 +110,7 @@ export class MockProvider implements Provider {
       label: 'Simulation',
       simulated: true,
       defaultModel: DEFAULT_MODEL,
-      models: MODELS.map((m) => ({ id: m.id, label: m.label, inputPerMTok: m.input, outputPerMTok: m.output })),
+      models: MODELS.map((m) => ({ id: m.id, label: m.label, inputPerMTok: m.input, outputPerMTok: m.output, provider: 'Simulation', priced: true, recommended: true, hosted: true, web: true })),
       managed: true,
     };
   }

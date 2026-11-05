@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Effort, Organisation, OrgSettings, OrgView } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
+import { ModelPicker, canHost, canSearch } from './ModelPicker';
 import { ErrorNote, Field, HostedNotes } from './ui';
 
 const EFFORTS: Array<{ id: Effort; label: string }> = [
@@ -17,6 +18,7 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
   const dialog = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<OrgSettings>(org.settings);
   const [limitCycles, setLimitCycles] = useState(org.settings.maxCycles !== null);
+  const [fellBack, setFellBack] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const save = useAction();
   const remove = useAction();
@@ -42,6 +44,15 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
     });
 
   const models = meta.provider.models;
+  const hostable = meta.provider.managed && canHost(models, draft.executiveModel, draft.workerModel);
+  const searchable = canSearch(models, draft.workerModel);
+  /** Hosted sessions need both models on one Anthropic key. A choice that rules them out puts new plans back on this machine, and says so. */
+  const setModel = (key: 'executiveModel' | 'workerModel', value: string) => {
+    const next = { ...draft, [key]: value };
+    const lost = next.execution === 'managed' && !canHost(models, next.executiveModel, next.workerModel);
+    setDraft(lost ? { ...next, execution: 'local' } : next);
+    if (lost) setFellBack(true);
+  };
   return (
     <dialog ref={dialog} className="dialog" onClose={onClose} aria-labelledby="settings-title">
       <header className="dialog-head">
@@ -72,24 +83,8 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
           <Field label="Tasks a lead may hand out per phase">
             <input type="number" min={1} max={12} value={draft.maxTasksPerPhase} onChange={(e) => set('maxTasksPerPhase', Number(e.target.value))} />
           </Field>
-          <Field label="Model for the executives">
-            <select value={draft.executiveModel} onChange={(e) => set('executiveModel', e.target.value)}>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Model for the agents">
-            <select value={draft.workerModel} onChange={(e) => set('workerModel', e.target.value)}>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </Field>
+          <ModelPicker label="Model for the executives" value={draft.executiveModel} models={models} onChange={(id) => setModel('executiveModel', id)} />
+          <ModelPicker label="Model for the agents" value={draft.workerModel} models={models} onChange={(id) => setModel('workerModel', id)} />
           <Field label="Effort for the executives">
             <select value={draft.executiveEffort} onChange={(e) => set('executiveEffort', e.target.value as Effort)}>
               {EFFORTS.map((e) => (
@@ -113,16 +108,38 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
           </Field>
           <Field
             label="The leads’ agents do their work"
-            hint="On this machine they write files and run nothing. In a hosted session they share a sandbox where work can be run. A plan under way finishes the way it began."
+            hint={`On this machine they write files and run nothing. In a hosted session they share a sandbox where work can be run. A plan under way finishes the way it began.${
+              hostable ? '' : ' Hosted sessions need Claude models from one Anthropic key, for both the executives and the agents.'
+            }`}
           >
-            <select value={draft.execution} onChange={(e) => set('execution', e.target.value as OrgSettings['execution'])}>
+            <select
+              value={draft.execution}
+              onChange={(e) => {
+                set('execution', e.target.value as OrgSettings['execution']);
+                setFellBack(false);
+              }}
+            >
               <option value="local">On this machine</option>
-              <option value="managed" disabled={!meta.provider.managed}>
+              <option value="managed" disabled={!hostable}>
                 In hosted sessions
               </option>
             </select>
           </Field>
         </div>
+        {fellBack ? (
+          <div className="note note-warn">
+            <span>Hosted sessions need Claude models from one Anthropic key, for both the executives and the agents. With this choice, new plans are carried out on this machine.</span>
+          </div>
+        ) : null}
+        {meta.keys ? (
+          <p className="muted">
+            To use another provider’s models, add an API key under{' '}
+            <a href="#/models" target="_blank" rel="noreferrer noopener">
+              Models and keys
+            </a>{' '}
+            (it opens in a new tab, and the lists here follow when you come back). A change of model applies from the next call; work already done is kept.
+          </p>
+        ) : null}
         {draft.execution === 'managed' ? (
           <>
             <label className="check">
@@ -138,13 +155,14 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
                 <strong>Archive each plan’s session once the plan is over.</strong> Otherwise sessions build up in your Anthropic Console, one for every plan. Archiving cannot be undone.
               </span>
             </label>
-            <HostedNotes web={draft.webResearch} runs={draft.workflowRuns} archive={draft.archiveSessions} simulated={meta.provider.simulated} />
+            <HostedNotes web={draft.webResearch && searchable} runs={draft.workflowRuns} archive={draft.archiveSessions} simulated={meta.provider.simulated} />
           </>
         ) : null}
         <label className="check">
-          <input type="checkbox" checked={draft.webResearch} onChange={(e) => set('webResearch', e.target.checked)} />
+          <input type="checkbox" checked={draft.webResearch && searchable} disabled={!searchable} onChange={(e) => set('webResearch', e.target.checked)} />
           <span>
-            <strong>Let agents search the web.</strong> Searches are billed separately by Anthropic.
+            <strong>Let agents search the web.</strong>{' '}
+            {searchable ? 'Searches are billed separately by Anthropic.' : 'Not available with the model chosen for the agents: here, only agents on Claude models can search.'}
           </span>
         </label>
         <label className="check">

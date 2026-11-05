@@ -12,6 +12,8 @@ interface Rates {
 export interface ModelPrice extends Rates {
   id: string;
   label: string;
+  /** flagship: the strongest. balanced: most of that for less. fast: the cheap, quick one. */
+  tier: 'flagship' | 'balanced' | 'fast';
   /** The web search tool version the model takes. */
   webSearch: 'web_search_20260209' | 'web_search_20250305';
   /** Rates that apply instead when one request's prompt is longer than `above` tokens. */
@@ -21,14 +23,15 @@ export interface ModelPrice extends Rates {
 // Anthropic first-party API list prices, as published 2026-10. Spend figures
 // derived from them are estimates: check the Console for what was billed.
 
-/** The models an organisation can be set to run on. */
+/** The models an organisation can be set to run on. The first is the one a new organisation starts on. */
 export const MODELS: ModelPrice[] = [
-  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, webSearch: 'web_search_20260209' },
-  { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, webSearch: 'web_search_20260209' },
-  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, webSearch: 'web_search_20260209' },
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', tier: 'flagship', input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, webSearch: 'web_search_20260209' },
+  { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', tier: 'flagship', input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, webSearch: 'web_search_20260209' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', tier: 'balanced', input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, webSearch: 'web_search_20260209' },
   {
     id: 'claude-haiku-5-5',
     label: 'Claude Haiku 5.5',
+    tier: 'fast',
     input: 0.1,
     output: 0.5,
     cacheRead: 0.01,

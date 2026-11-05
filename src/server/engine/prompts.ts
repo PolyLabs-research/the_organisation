@@ -78,8 +78,8 @@ export function systemFor(org: Organisation, exec: Executive): SystemPrompt {
   return { charter: charter(org), role: seatBlock(exec) };
 }
 
-export function systemForAgent(org: Organisation, lead: Executive): SystemPrompt {
-  const web = org.settings.webResearch
+export function systemForAgent(org: Organisation, lead: Executive, canSearch = org.settings.webResearch): SystemPrompt {
+  const web = canSearch
     ? 'You can search the web. Use it for facts you would otherwise have to assume, and cite the source next to anything you take from it. You cannot run code or reach any other outside system.'
     : 'You cannot run code, browse the web or reach any outside system.';
   return {

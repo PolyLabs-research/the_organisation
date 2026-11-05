@@ -4,8 +4,10 @@ import type { CreateOrgRequest } from '../shared/types';
 import type { Config } from './config';
 import type { OrgRunner } from './engine/runner';
 import { DEFAULT_SETTINGS, ValidationError } from './engine/state';
+import { PRICES_CHECKED } from './providers/catalogue';
 import { ProviderError } from './providers/types';
 import { recommendTeam } from './recommend';
+import type { ProviderRouter } from './providers/router';
 import type { Registry } from './registry';
 import { WorkspaceError } from './workspace';
 
@@ -21,7 +23,7 @@ function hostname(hostHeader: string | undefined): string {
   return hostHeader.replace(/:\d+$/, '').toLowerCase();
 }
 
-export function createApp(registry: Registry, config: Config): express.Express {
+export function createApp(registry: Registry, config: Config, router?: ProviderRouter): express.Express {
   const app = express();
   app.disable('x-powered-by');
 
@@ -59,20 +61,79 @@ export function createApp(registry: Registry, config: Config): express.Express {
   };
   const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+  /** The model a new organisation starts on: the provider's pick from the keys connected, or the built-in default. */
+  const defaultModel = () => registry.provider.defaultModel?.() ?? DEFAULT_SETTINGS.executiveModel;
+
   app.get('/api/meta', (_req, res) => {
+    const model = defaultModel();
     res.json({
       provider: registry.provider.info(),
       providerReason: config.providerReason,
       profiles: PROFILES,
-      defaults: DEFAULT_SETTINGS,
+      defaults: { ...DEFAULT_SETTINGS, executiveModel: model, workerModel: model },
       limits: { maxAgentsPerLead: MAX_AGENTS_PER_LEAD, maxLeads: MAX_LEADS },
+      // Whether keys can be added from the interface: not when the server was told to simulate regardless.
+      keys: router ? { presets: router.presets(), forcedSimulation: config.provider === 'mock', pricesChecked: PRICES_CHECKED } : null,
     });
   });
 
   app.post('/api/recommend', async (req, res) => {
     const idea = text(req.body?.idea).trim();
     if (idea.length < 10) throw new ValidationError('Describe the idea in a sentence or two first.');
-    res.json(await recommendTeam(registry.provider, idea.slice(0, 6000), DEFAULT_SETTINGS.executiveModel, DEFAULT_SETTINGS.executiveEffort));
+    // The recommendation is made by the model new organisations start on, unless the request names another.
+    const model = text(req.body?.model).trim() || defaultModel();
+    if (registry.provider.knows && !registry.provider.knows(model)) {
+      throw new ValidationError(`The model "${model}" is not one a connected key can call. Add its key under Models and keys, or name another model.`);
+    }
+    res.json(await recommendTeam(registry.provider, idea.slice(0, 6000), model, DEFAULT_SETTINGS.executiveEffort));
+  });
+
+  // ---- API keys ----
+  // A key is taken in here and never given out again: what goes back is which provider it is for, the
+  // last few characters, and what it can call.
+
+  const keys = (): ProviderRouter => {
+    if (!router) throw new NotFound('This server does not manage API keys.');
+    return router;
+  };
+  const connectionsView = () => ({ connections: keys().info().connections ?? [], provider: registry.provider.info() });
+
+  app.get('/api/connections', (_req, res) => {
+    res.json(connectionsView());
+  });
+
+  app.post('/api/connections', async (req, res) => {
+    const body = req.body ?? {};
+    await keys().connect({ presetId: text(body.presetId), apiKey: text(body.apiKey), region: text(body.region) || undefined, baseURL: text(body.baseURL) || undefined, label: text(body.label) || undefined });
+    res.status(201).json(connectionsView());
+  });
+
+  app.post('/api/connections/:connectionId/refresh', async (req, res) => {
+    await keys().refresh(String(req.params.connectionId));
+    res.json(connectionsView());
+  });
+
+  app.patch('/api/connections/:connectionId', async (req, res) => {
+    const body = req.body ?? {};
+    const id = String(req.params.connectionId);
+    if (body.label !== undefined || body.apiKey !== undefined || body.baseURL !== undefined) {
+      await keys().update(id, {
+        ...(typeof body.label === 'string' ? { label: body.label } : {}),
+        ...(typeof body.apiKey === 'string' ? { apiKey: body.apiKey } : {}),
+        ...(typeof body.baseURL === 'string' ? { baseURL: body.baseURL } : {}),
+      });
+    }
+    if (typeof body.addModel === 'string') await keys().addModel(id, body.addModel);
+    if (body.price && typeof body.price === 'object' && typeof body.price.model === 'string') {
+      const { model, input, output } = body.price as { model: string; input?: unknown; output?: unknown };
+      await keys().setPrice(id, model, input === null || input === undefined ? null : { input: Number(input), output: Number(output) });
+    }
+    res.json(connectionsView());
+  });
+
+  app.delete('/api/connections/:connectionId', async (req, res) => {
+    await keys().disconnect(String(req.params.connectionId));
+    res.json(connectionsView());
   });
 
   app.get('/api/orgs', (_req, res) => {

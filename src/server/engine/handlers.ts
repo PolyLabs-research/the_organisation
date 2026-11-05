@@ -373,14 +373,16 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         if (!written.includes(path)) written.push(path);
       });
       const files = await workspace.list();
+      // Web search is switched on for the organisation, but only some providers' models can do it.
+      const canSearch = org.settings.webResearch && (provider.searches?.(org.settings.workerModel) ?? true);
       const result = await provider.agent({
         kind: 'task',
-        system: prompts.systemForAgent(org, exec),
+        system: prompts.systemForAgent(org, exec, canSearch),
         prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files),
         model: org.settings.workerModel,
         effort: org.settings.workerEffort,
         tools,
-        webSearch: org.settings.webResearch ? { perRequest: 3, perTask: MAX_TASK_SEARCHES } : null,
+        webSearch: canSearch ? { perRequest: 3, perTask: MAX_TASK_SEARCHES } : null,
         maxTurns: MAX_TASK_TURNS,
         signal: ctx.signal,
         shouldStop: ctx.halting,

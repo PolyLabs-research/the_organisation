@@ -12,7 +12,7 @@ import type {
   PlanPhase,
   UsageTotals,
 } from '../../shared/types';
-import { DEFAULT_MODEL, isKnownModel } from '../providers/pricing';
+import { DEFAULT_MODEL } from '../providers/pricing';
 import type { CallUsage } from '../providers/types';
 
 export const DEFAULT_SETTINGS: OrgSettings = {
@@ -33,6 +33,8 @@ export const DEFAULT_SETTINGS: OrgSettings = {
 };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+/** What a model reference may look like: "claude-opus-5-5", "openai:gpt-5", "openrouter:deepseek/deepseek-chat:free". */
+const MODEL_REF = /^[A-Za-z0-9][\w.\-:/@+]{0,199}$/;
 
 /** A ceiling on the follow-up plans one lead may start in a cycle, whatever the reports say. */
 export const MAX_FOLLOW_UPS_PER_LEAD = 2;
@@ -52,7 +54,9 @@ function clamp(value: unknown, min: number, max: number, fallback: number): numb
 /** Merge a partial settings patch over `base`, keeping every field inside its allowed range. */
 export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: OrgSettings = DEFAULT_SETTINGS): OrgSettings {
   const p = patch ?? {};
-  const model = (value: unknown, fallback: string) => (typeof value === 'string' && isKnownModel(value) ? value : fallback);
+  // A model is named by the connection it is reached through and the provider's own id for it. Whether it can
+  // be called is for the provider to say, when the organisation is established and whenever it is called.
+  const model = (value: unknown, fallback: string) => (typeof value === 'string' && MODEL_REF.test(value) ? value : fallback);
   const effort = (value: unknown, fallback: OrgSettings['executiveEffort']) =>
     EFFORTS.includes(value as (typeof EFFORTS)[number]) ? (value as OrgSettings['executiveEffort']) : fallback;
   return {
