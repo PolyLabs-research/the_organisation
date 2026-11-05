@@ -80,6 +80,11 @@ export interface OrgSettings {
    * agents on the pieces of one phase. Every agent in a run uses tokens.
    */
   workflowRuns: boolean;
+  /**
+   * In hosted sessions: archive a plan's session once the plan is over. An archived session stays
+   * readable in the Console but can no longer be changed, and archiving cannot be undone.
+   */
+  archiveSessions: boolean;
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -198,6 +203,10 @@ export interface ManagedSession {
   cursor: string | null;
   /** How far the session's events have been acted on. Later than `cursor` while a call from the session awaits its answer. */
   handledTo?: string | null;
+  /** When the current session was archived, if it has been. */
+  archivedAt?: string | null;
+  /** Sessions this plan used before the current one: ones that were lost and replaced. */
+  past?: Array<{ sessionId: string; archivedAt: string | null }>;
 }
 
 export interface Plan {

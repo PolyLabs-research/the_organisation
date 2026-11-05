@@ -249,4 +249,10 @@ export interface Provider {
   executePlan?(job: PlanJob): Promise<PlanOutcome>;
   /** What one agent in a hosted session was asked and what it reported, fetched on demand. */
   agentDetail?(sessionId: string, threadId: string): Promise<{ brief: string | null; report: string | null }>;
+  /**
+   * Archive a hosted session whose plan is over: it stays readable but can no longer be changed, and this
+   * cannot be undone. Only ever called because the organisation's shareholders asked for it.
+   * archived: done (or it already was). busy: it is still working and was left alone. gone: it no longer exists.
+   */
+  archiveSession?(sessionId: string): Promise<'archived' | 'busy' | 'gone'>;
 }

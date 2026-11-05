@@ -66,6 +66,10 @@ export class OrgRunner {
   /** How many tasks each lead's agents have been given, for sharing call slots fairly. */
   private readonly served = new Map<string, number>();
   private readonly listeners = new Set<Listener>();
+  /** Hosted sessions being archived right now, so that none is asked twice. */
+  private readonly archiving = new Set<string>();
+  /** Work done beside the loop (archiving sessions), so that coming to rest can wait for it. */
+  private chores: Promise<unknown> = Promise.resolve();
   private abort = new AbortController();
   private halting = false;
   private disposed = false;
@@ -123,6 +127,8 @@ export class OrgRunner {
     }
     if (this.abort.signal.aborted) this.abort = new AbortController();
     this.halting = false;
+    // Sessions that could not be archived when their plans ended (the provider was out of reach, say) are tried again.
+    if (org.settings.archiveSessions) this.tidy();
     org.status = 'running';
     org.pauseReason = null;
     org.lastError = null;
@@ -183,8 +189,55 @@ export class OrgRunner {
       }
     }
     syncJudge(org);
+    if (org.settings.archiveSessions) this.tidy();
     this.changed();
     this.pump();
+  }
+
+  /**
+   * Archive the hosted sessions of plans that are over (reported, cancelled or failed), and of sessions that
+   * were lost and replaced. With `all`, every session the organisation has, for when it is being deleted.
+   * An archived session stays readable on the provider's side but can no longer be changed; this cannot be
+   * undone, so it is only ever done because the shareholders asked: by the setting, or by hand.
+   */
+  async archiveSessions(scope: { planId?: string; all?: boolean } = {}): Promise<{ archived: number; left: number }> {
+    const provider = this.provider;
+    let archived = 0;
+    let left = 0;
+    if (!provider.archiveSession) return { archived, left };
+    for (const plan of this.org.plans) {
+      const managed = plan.managed;
+      if (!managed || (scope.planId && plan.id !== scope.planId)) continue;
+      const targets: Array<{ id: string; mark: (at: string) => void }> = [];
+      for (const past of managed.past ?? []) if (!past.archivedAt) targets.push({ id: past.sessionId, mark: (at) => (past.archivedAt = at) });
+      const over = scope.all || !isPlanActive(plan);
+      if (managed.sessionId && !managed.archivedAt && over && !this.inFlight.has(`execute:${plan.id}`)) {
+        targets.push({ id: managed.sessionId, mark: (at) => (managed.archivedAt = at) });
+      }
+      for (const target of targets) {
+        if (this.archiving.has(target.id)) continue;
+        this.archiving.add(target.id);
+        try {
+          // A session that is gone needs no archiving; one that is still working is left for another time.
+          if ((await provider.archiveSession(target.id)) === 'busy') left += 1;
+          else {
+            target.mark(new Date().toISOString());
+            archived += 1;
+            this.changed();
+          }
+        } catch {
+          left += 1;
+        } finally {
+          this.archiving.delete(target.id);
+        }
+      }
+    }
+    return { archived, left };
+  }
+
+  /** Archive what can be archived, beside the loop. Failures wait for the next time. */
+  private tidy(): void {
+    this.chores = this.chores.then(() => this.archiveSessions()).catch(() => {});
   }
 
   setAgentCount(execId: string, count: number): void {
@@ -238,6 +291,7 @@ export class OrgRunner {
       if (Date.now() > deadline) throw new Error('timed out waiting for the organisation to come to rest');
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
+    await this.chores;
   }
 
   // ---- the loop ----
@@ -446,6 +500,8 @@ export class OrgRunner {
       error = this.fail(item, err);
     } finally {
       this.inFlight.delete(item.key);
+      // A plan's session is archived once the plan is over, if the shareholders asked for that.
+      if (item.kind === 'execute' && org.settings.archiveSessions) this.tidy();
       this.record({
         id: `a${++this.activitySeq}`,
         at: new Date().toISOString(),

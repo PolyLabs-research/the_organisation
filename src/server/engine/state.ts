@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS: OrgSettings = {
   maxConcurrentCalls: 4,
   execution: 'local',
   workflowRuns: true,
+  archiveSessions: false,
 };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -68,6 +69,7 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
     maxConcurrentCalls: Math.round(clamp(p.maxConcurrentCalls, 1, 16, base.maxConcurrentCalls)),
     execution: p.execution === 'managed' || p.execution === 'local' ? p.execution : base.execution,
     workflowRuns: typeof p.workflowRuns === 'boolean' ? p.workflowRuns : base.workflowRuns,
+    archiveSessions: typeof p.archiveSessions === 'boolean' ? p.archiveSessions : base.archiveSessions,
   };
 }
 

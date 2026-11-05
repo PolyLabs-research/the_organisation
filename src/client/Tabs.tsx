@@ -11,7 +11,7 @@ import type {
   Task,
   WorkspaceFile,
 } from '../shared/types';
-import { api } from './api';
+import { api, useAction } from './api';
 import { MESSAGE_LABEL, METHOD, PLAN_ACTION, PLAN_STATUS, RUN_STATUS, SESSION_STATE, STANCE } from './labels';
 import { Empty, Markdown, SeatBadge, Sop, clock, duration, money, seatFor, seatName, tokens } from './ui';
 
@@ -182,10 +182,16 @@ function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task;
 }
 
 /** The hosted session carrying out a plan: where it stands, what it has spent, and the workflow runs its lead started. */
-function SessionBlock({ plan, simulated, onOpenFile }: { plan: Plan; simulated: boolean; onOpenFile: (path: string) => void }) {
+function SessionBlock({ orgId, plan, simulated, onOpenFile }: { orgId: string; plan: Plan; simulated: boolean; onOpenFile: (path: string) => void }) {
+  const archive = useAction();
+  const [left, setLeft] = useState(false);
   const session = plan.managed;
   if (!session) return null;
   const live = plan.status === 'executing';
+  const past = session.past ?? [];
+  const over = plan.status === 'done' || plan.status === 'cancelled' || plan.status === 'failed';
+  // What could be archived now: this plan's session once the plan is over, and any earlier session it lost.
+  const open = (over && session.sessionId && !session.archivedAt ? 1 : 0) + past.filter((p) => !p.archivedAt).length;
   const state = live ? SESSION_STATE[session.state] : 'Finished';
   const tone = !live || session.state === 'finished' ? 'done' : session.state === 'running' || session.state === 'starting' ? 'live' : 'held';
   return (
@@ -193,6 +199,7 @@ function SessionBlock({ plan, simulated, onOpenFile }: { plan: Plan; simulated: 
       <div className="session-head">
         <span className="field-label">{simulated ? 'Hosted session (simulated)' : 'Hosted session'}</span>
         <span className={`status status-session-${tone}`}>{state}</span>
+        {session.archivedAt ? <span className="tag">Archived {clock(session.archivedAt)}</span> : null}
         {session.consoleUrl ? (
           <a href={session.consoleUrl} target="_blank" rel="noreferrer">
             Watch it in the Anthropic Console <ExternalLink size={13} aria-hidden="true" />
@@ -263,6 +270,35 @@ function SessionBlock({ plan, simulated, onOpenFile }: { plan: Plan; simulated: 
             })}
           </ul>
         </>
+      ) : null}
+      {past.length ? (
+        <p className="muted">
+          {past.length === 1 ? 'An earlier session of this plan was lost and replaced' : `${past.length} earlier sessions of this plan were lost and replaced`}
+          {past.some((p) => p.archivedAt) ? ` (${past.filter((p) => p.archivedAt).length} archived)` : ''}.
+        </p>
+      ) : null}
+      {open ? (
+        <div className="session-archive">
+          <button
+            type="button"
+            className="button"
+            disabled={archive.busy}
+            onClick={() =>
+              void archive.run(async () => {
+                const result = await api.archiveSession(orgId, plan.id);
+                setLeft(result.left > 0);
+              })
+            }
+          >
+            {archive.busy ? 'Archiving…' : open === 1 ? 'Archive this session' : `Archive these ${open} sessions`}
+          </button>
+          <span className="muted">
+            {left
+              ? 'A session was still working and was left as it is. Try again in a moment.'
+              : 'An archived session stays readable in the Console but can no longer be changed. This cannot be undone.'}
+          </span>
+          {archive.error ? <span className="note note-bad">{archive.error}</span> : null}
+        </div>
       ) : null}
       {session.files.length ? (
         <details className="session-files">
@@ -374,7 +410,7 @@ function PlanCard({ org, plan, open, simulated, onOpenFile }: { org: Organisatio
             </span>
           </div>
         ) : null}
-        <SessionBlock plan={plan} simulated={simulated} onOpenFile={onOpenFile} />
+        <SessionBlock orgId={org.id} plan={plan} simulated={simulated} onOpenFile={onOpenFile} />
         <ol className="phases">
           {plan.phases.map((phase, i) => (
             <PhaseBlock key={phase.sopPhaseId} orgId={org.id} phase={phase} index={i} held={held} onOpenFile={onOpenFile} />

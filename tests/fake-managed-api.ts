@@ -35,6 +35,8 @@ export class FakeSession {
   capCents: number;
   spentCents = 0;
   archived = false;
+  /** Set to have the session refuse to be archived, as one with a workflow run still open can. */
+  openRun = false;
   /** An error thrown by the script, for the test to see. */
   failure: unknown = null;
   readonly createdAt = new Date().toISOString();
@@ -460,6 +462,13 @@ export class FakeManagedApi {
         session.emit('session.updated', { budget: session.budget() });
         session.wake();
       }
+      return send(200, session.json());
+    }
+    if (rest === '/archive' && method === 'POST') {
+      // A session cannot be archived while it is working, or (here, always) while a workflow run in it is open.
+      if (session.status === 'running') return fail(400, 'cannot archive a session while it is running');
+      if (session.openRun) return fail(400, 'a workflow run is open (workflow_run_open)');
+      session.archived = true;
       return send(200, session.json());
     }
     if (rest === '/events' && method === 'GET') return send(200, { data: listed(session.events, url.searchParams), next_page: null });

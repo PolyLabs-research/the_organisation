@@ -345,7 +345,14 @@ export function Wizard({ meta }: { meta: Meta }) {
                     uses tokens. Without it, a lead hands every task out itself.
                   </span>
                 </label>
-                <HostedNotes web={settings.webResearch} runs={settings.workflowRuns} simulated={meta.provider.simulated} />
+                <label className="check">
+                  <input type="checkbox" checked={settings.archiveSessions} onChange={(e) => set('archiveSessions', e.target.checked)} />
+                  <span>
+                    <strong>Archive each plan’s session once the plan is over.</strong> Otherwise sessions build up in your Anthropic Console, one for every plan. Archiving cannot be
+                    undone.
+                  </span>
+                </label>
+                <HostedNotes web={settings.webResearch} runs={settings.workflowRuns} archive={settings.archiveSessions} simulated={meta.provider.simulated} />
               </>
             ) : null}
 

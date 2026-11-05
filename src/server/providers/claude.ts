@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
 import { hasCause, translate } from './errors';
 import { ManagedResources } from './managed/resources';
-import { DEFAULT_TIMINGS, PlanSession, threadDetail, type SessionTimings } from './managed/session';
+import { DEFAULT_TIMINGS, PlanSession, archiveSession, threadDetail, type SessionTimings } from './managed/session';
 import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webSearchToolFor } from './pricing';
 import {
   ProviderError,
@@ -79,6 +79,14 @@ export class ClaudeProvider implements Provider {
   async agentDetail(sessionId: string, threadId: string): Promise<{ brief: string | null; report: string | null }> {
     try {
       return await threadDetail(this.client, sessionId, threadId);
+    } catch (err) {
+      throw translate(err);
+    }
+  }
+
+  async archiveSession(sessionId: string): Promise<'archived' | 'busy' | 'gone'> {
+    try {
+      return await archiveSession(this.client, sessionId, Math.min(300, this.sessionTimings.graceMs));
     } catch (err) {
       throw translate(err);
     }

@@ -20,6 +20,15 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
   const [confirmDelete, setConfirmDelete] = useState(false);
   const save = useAction();
   const remove = useAction();
+  const archive = useAction();
+  const [archived, setArchived] = useState<string | null>(null);
+  // Sessions that could be archived now: those of plans that are over, and any that were lost and replaced.
+  const archivable = org.plans.reduce((n, plan) => {
+    const session = plan.managed;
+    if (!session) return n;
+    const over = plan.status === 'done' || plan.status === 'cancelled' || plan.status === 'failed';
+    return n + (over && session.sessionId && !session.archivedAt ? 1 : 0) + (session.past ?? []).filter((p) => !p.archivedAt).length;
+  }, 0);
   const set = <K extends keyof OrgSettings>(key: K, value: OrgSettings[K]) => setDraft((s) => ({ ...s, [key]: value }));
 
   useEffect(() => {
@@ -123,7 +132,13 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
                 tokens.
               </span>
             </label>
-            <HostedNotes web={draft.webResearch} runs={draft.workflowRuns} simulated={meta.provider.simulated} />
+            <label className="check">
+              <input type="checkbox" checked={draft.archiveSessions} onChange={(e) => set('archiveSessions', e.target.checked)} />
+              <span>
+                <strong>Archive each plan’s session once the plan is over.</strong> Otherwise sessions build up in your Anthropic Console, one for every plan. Archiving cannot be undone.
+              </span>
+            </label>
+            <HostedNotes web={draft.webResearch} runs={draft.workflowRuns} archive={draft.archiveSessions} simulated={meta.provider.simulated} />
           </>
         ) : null}
         <label className="check">
@@ -152,10 +167,42 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
         </label>
         <ErrorNote onDismiss={save.clearError}>{save.error}</ErrorNote>
 
+        {archivable || archived ? (
+          <div className="row">
+            {archivable ? (
+              <button
+                type="button"
+                className="button"
+                disabled={archive.busy}
+                onClick={() =>
+                  void archive.run(async () => {
+                    const result = await api.archiveSessions(org.id);
+                    onView(result.view);
+                    setArchived(
+                      `${result.archived} session${result.archived === 1 ? '' : 's'} archived${result.left ? `; ${result.left} still working and left as ${result.left === 1 ? 'it is' : 'they are'}` : ''}.`,
+                    );
+                  })
+                }
+              >
+                {archive.busy ? 'Archiving…' : `Archive the ${archivable === 1 ? 'session' : `${archivable} sessions`} of plans that are over`}
+              </button>
+            ) : null}
+            <span className="muted">{archived ?? 'Archived sessions stay readable in the Console but can no longer be changed. This cannot be undone.'}</span>
+          </div>
+        ) : null}
+        <ErrorNote onDismiss={archive.clearError}>{archive.error}</ErrorNote>
+
         <div className="danger">
           {confirmDelete ? (
             <>
-              <span>Delete {org.name}, with every plan, decision and file it produced? This cannot be undone.</span>
+              <span>
+                Delete {org.name}, with every plan, decision and file it produced? This cannot be undone.
+                {org.plans.some((p) => p.managed?.sessionId)
+                  ? org.settings.archiveSessions
+                    ? ' Its hosted sessions are archived, not deleted: they stay readable in your Anthropic Console.'
+                    : ' Its hosted sessions are left as they are in your Anthropic Console.'
+                  : ''}
+              </span>
               <button
                 type="button"
                 className="button button-danger"

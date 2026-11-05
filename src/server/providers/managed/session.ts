@@ -1033,6 +1033,31 @@ function reached(err: unknown): boolean {
   return err instanceof Error && err.cause !== undefined && err.cause !== null;
 }
 
+/**
+ * Archive a session whose plan is over. A session cannot be archived while it is working, and its status can
+ * trail a moment behind its last event, so it is given a few seconds to come to rest. One that is still
+ * working after that is left alone: archiving it could cut off work in progress.
+ */
+export async function archiveSession(client: Anthropic, sessionId: string, waitMs = 300): Promise<'archived' | 'busy' | 'gone'> {
+  const { sessions } = client.beta;
+  try {
+    for (let look = 0; ; look++) {
+      const session = await sessions.retrieve(sessionId);
+      if (session.archived_at) return 'archived';
+      if (session.status !== 'running' && session.status !== 'rescheduling') break;
+      if (look >= 10) return 'busy';
+      await sleep(waitMs);
+    }
+    await sessions.archive(sessionId);
+    return 'archived';
+  } catch (err) {
+    if (err instanceof Anthropic.NotFoundError) return 'gone';
+    // Refused: the session started working again, or a workflow run in it is still open.
+    if (err instanceof Anthropic.BadRequestError || err instanceof Anthropic.ConflictError) return 'busy';
+    throw err;
+  }
+}
+
 /** What one agent in a session was asked and what it returned, read from its own thread. */
 export async function threadDetail(client: Anthropic, sessionId: string, threadId: string): Promise<{ brief: string | null; report: string | null }> {
   let brief: string | null = null;

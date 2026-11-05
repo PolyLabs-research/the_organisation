@@ -401,6 +401,15 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
     return this.sessions.get(sessionId)?.threads.get(threadId) ?? { brief: null, report: null };
   }
 
+  /** Session ids that were archived, in order, for tests to look at. */
+  readonly archived: string[] = [];
+
+  async archiveSession(sessionId: string): Promise<'archived' | 'busy' | 'gone'> {
+    await this.options.onCall?.('archive_session', { sessionId });
+    if (!this.archived.includes(sessionId)) this.archived.push(sessionId);
+    return 'archived';
+  }
+
   private answer(kind: string, c: Record<string, unknown>): unknown {
     const seat = c.seat as Seat | undefined;
     const org = String(c.organisation ?? '');

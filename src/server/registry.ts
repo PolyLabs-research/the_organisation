@@ -47,6 +47,9 @@ export class Registry {
     this.runners.delete(id);
     runner.stop();
     await runner.idle().catch(() => {});
+    // Its hosted sessions would be left with nothing to say what they were for. Where the organisation was
+    // set to archive sessions, the ones still open are archived with it.
+    if (runner.org.settings.archiveSessions) await runner.archiveSessions({ all: true }).catch(() => {});
     await runner.flush();
     runner.dispose();
     await this.store.remove(id);

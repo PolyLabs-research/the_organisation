@@ -526,6 +526,115 @@ describe('a hosted session that goes wrong', () => {
   });
 });
 
+describe('archiving hosted sessions', () => {
+  const sessionsOf = (org: Organisation) => org.plans.map((p) => p.managed!.sessionId!);
+
+  it('leaves sessions as they are unless the organisation is set to archive them', async () => {
+    h = await harness({ settings: HOSTED });
+    await runToRest(h.runner);
+    expect((h.provider as MockProvider).archived).toEqual([]);
+    expect(h.org.plans.every((p) => p.managed!.archivedAt == null)).toBe(true);
+  });
+
+  it('archives each plan\'s session once the plan has reported, and not before', async () => {
+    const states: string[] = [];
+    h = await harness({
+      settings: { ...HOSTED, archiveSessions: true },
+      mock: {
+        onCall: (kind, c) => {
+          if (kind !== 'archive_session') return;
+          const plan = h!.org.plans.find((p) => p.managed?.sessionId === c.sessionId)!;
+          states.push(`${plan.status}, report ${plan.reportId ? 'filed' : 'missing'}`);
+        },
+      },
+    });
+    await runToRest(h.runner);
+    const { org } = h;
+    expect(states).toEqual(Array(3).fill('done, report filed'));
+    expect([...(h.provider as MockProvider).archived].sort()).toEqual(sessionsOf(org).sort());
+    expect(org.plans.every((p) => !!p.managed!.archivedAt)).toBe(true);
+    expect(org.reports).toHaveLength(3);
+  });
+
+  it('archives the session of a plan the CEO cancelled', async () => {
+    h = await harness({ settings: { ...HOSTED, archiveSessions: true }, executives: ONE_LEAD, mock: { delayMs: 3, runs: 'never' } });
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.phases[0]?.status === 'done', 'the first phase');
+    h.runner.steer('Stop the engineering work.');
+    await h.runner.idle();
+    const plan = planOf(h.org);
+    expect(plan.status).toBe('cancelled');
+    expect((h.provider as MockProvider).archived).toEqual([plan.managed!.sessionId]);
+    expect(plan.managed!.archivedAt).toBeTruthy();
+  });
+
+  it('archives a session that was lost as well as the one that replaced it', async () => {
+    h = await harness({ settings: { ...HOSTED, archiveSessions: true }, executives: ONE_LEAD, mock: { lostSessions: 1, runs: 'never' } });
+    await runToRest(h.runner);
+    const plan = planOf(h.org);
+    expect(plan.status).toBe('done');
+    expect(plan.managed!.past).toHaveLength(1);
+    expect(plan.managed!.past![0]!.sessionId).toMatch(/_1$/);
+    expect(plan.managed!.past![0]!.archivedAt).toBeTruthy();
+    expect(plan.managed!.archivedAt).toBeTruthy();
+    expect([...(h.provider as MockProvider).archived].sort()).toEqual([plan.managed!.past![0]!.sessionId, plan.managed!.sessionId].sort());
+  });
+
+  it('does not archive the session of a plan that is still under way', async () => {
+    h = await harness({ settings: { ...HOSTED, archiveSessions: true }, executives: ONE_LEAD, mock: { delayMs: 3, runs: 'never' } });
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.phases[0]?.status === 'done', 'the first phase');
+    h.runner.pause();
+    await h.runner.idle();
+    // Held, not over: asking by hand changes nothing either.
+    expect(await h.runner.archiveSessions()).toEqual({ archived: 0, left: 0 });
+    expect((h.provider as MockProvider).archived).toEqual([]);
+    await runToRest(h.runner);
+    expect((h.provider as MockProvider).archived).toEqual([planOf(h.org).managed!.sessionId]);
+  });
+
+  it('tries again later when a session was still working', async () => {
+    let busy = true;
+    class Slow extends MockProvider {
+      override async archiveSession(sessionId: string): Promise<'archived' | 'busy' | 'gone'> {
+        return busy ? 'busy' : super.archiveSession(sessionId);
+      }
+    }
+    const provider = new Slow({ ...QUIET, runs: 'never' });
+    h = await harness({ settings: { ...HOSTED, archiveSessions: true, maxCycles: 2 }, executives: ONE_LEAD, provider });
+    await runToRest(h.runner);
+    const first = plansOf(h.org, 1)[0]!;
+    expect(first.status).toBe('done');
+    expect(first.managed!.archivedAt == null).toBe(true);
+
+    busy = false;
+    expect(await h.runner.archiveSessions()).toEqual({ archived: 2, left: 0 });
+    expect(provider.archived).toHaveLength(2);
+    expect(h.org.plans.every((p) => !!p.managed!.archivedAt)).toBe(true);
+    // Nothing is asked twice.
+    expect(await h.runner.archiveSessions()).toEqual({ archived: 0, left: 0 });
+  });
+
+  it('archives every session, open ones included, when an organisation set to archive is deleted', async () => {
+    h = await harness({ settings: { ...HOSTED, archiveSessions: true }, executives: ONE_LEAD, mock: { delayMs: 3, runs: 'never' } });
+    const provider = h.provider as MockProvider;
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.phases[0]?.status === 'done', 'the first phase');
+    const session = planOf(h.org).managed!.sessionId;
+    expect(await h.registry.remove(h.org.id)).toBe(true);
+    expect(provider.archived).toEqual([session]);
+  });
+
+  it('leaves the sessions of a deleted organisation alone when it was not set to archive', async () => {
+    h = await harness({ settings: HOSTED, executives: ONE_LEAD, mock: { delayMs: 3, runs: 'never' } });
+    const provider = h.provider as MockProvider;
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.phases[0]?.status === 'done', 'the first phase');
+    expect(await h.registry.remove(h.org.id)).toBe(true);
+    expect(provider.archived).toEqual([]);
+  });
+});
+
 describe('a provider that misbehaves', () => {
   it('is retried with a delay, then stopped, when it lets go of a session nobody asked it to hold', async () => {
     let calls = 0;

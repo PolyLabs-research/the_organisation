@@ -516,6 +516,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     const lose = (reason: string) => {
       closeOpenWork(plan, managed, 'failed', 'The session ended before this was finished.');
       managed.pendingReport = null;
+      // The session is given up, not forgotten: it is still there on the provider's side.
+      if (managed.sessionId) (managed.past ??= []).push({ sessionId: managed.sessionId, archivedAt: managed.archivedAt ?? null });
+      managed.archivedAt = null;
       managed.sessionId = null;
       managed.budgetUsd = 0;
       managed.state = 'paused';

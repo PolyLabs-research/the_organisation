@@ -1309,6 +1309,53 @@ describe('files a session produces', () => {
   });
 });
 
+describe('archiving a session', () => {
+  const finished = async () => {
+    api.script = wholePlan;
+    await provider.executePlan(job(recorder().hooks));
+    return api.session();
+  };
+
+  it('archives a session that has come to rest, and says so again if asked twice', async () => {
+    const session = await finished();
+    expect(await provider.archiveSession(session.id)).toBe('archived');
+    expect(session.archived).toBe(true);
+    expect(await provider.archiveSession(session.id)).toBe('archived');
+    expect(api.count('POST', `/v1/sessions/${session.id}/archive`)).toBe(1);
+    // Nothing is ever deleted.
+    expect(api.requests.some((x) => x.method === 'DELETE')).toBe(false);
+  });
+
+  it('waits a moment for a session whose status has not caught up with its last event', async () => {
+    const session = await finished();
+    session.statusLagMs = 60;
+    session.running();
+    session.idle({ type: 'end_turn' });
+    expect(await provider.archiveSession(session.id)).toBe('archived');
+    expect(session.archived).toBe(true);
+  });
+
+  it('leaves a session that is still working alone', async () => {
+    const session = await finished();
+    session.running();
+    expect(await provider.archiveSession(session.id)).toBe('busy');
+    expect(session.archived).toBe(false);
+    expect(api.count('POST', `/v1/sessions/${session.id}/archive`)).toBe(0);
+  });
+
+  it('leaves alone a session that refuses, as one with a workflow run still open can', async () => {
+    const session = await finished();
+    session.openRun = true;
+    expect(await provider.archiveSession(session.id)).toBe('busy');
+    expect(session.archived).toBe(false);
+  });
+
+  it('says a session that no longer exists is gone', async () => {
+    await finished();
+    expect(await provider.archiveSession('sesn_missing')).toBe('gone');
+  });
+});
+
 describe('the organisation on hosted sessions, end to end', () => {
   /** Board work from the simulator; plans carried out through the Claude provider against the stand-in API. */
   class Hybrid extends MockProvider {
@@ -1320,6 +1367,9 @@ describe('the organisation on hosted sessions, end to end', () => {
     }
     override agentDetail(sessionId: string, threadId: string) {
       return this.claude.agentDetail(sessionId, threadId);
+    }
+    override archiveSession(sessionId: string) {
+      return this.claude.archiveSession(sessionId);
     }
   }
   const setup = (settings = {}) =>
@@ -1363,6 +1413,32 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(Number(created.budget.max_list_cost.amount) / 100).toBeLessThanOrEqual(5);
     expect(Number(created.budget.max_list_cost.amount) / 100).toBeGreaterThan(4);
     expect(body('POST', '/v1/agents', 0).system).toContain('/mnt/session/outputs/');
+  });
+
+  it('archives the session once its plan has reported, when the organisation is set to', async () => {
+    api.script = wholePlan;
+    h = await setup({ archiveSessions: true });
+    await runToRest(h.runner);
+    const plan = h.org.plans[0]!;
+    expect(plan.status).toBe('done');
+    expect(api.session().archived).toBe(true);
+    expect(plan.managed!.archivedAt).toBeTruthy();
+    // The report was filed from the session before it was archived, and the files were already home.
+    expect(h.org.reports[0]!.headline).toBe('Shipped');
+    expect((await h.runner.workspace.list()).length).toBe(4);
+  });
+
+  it('leaves a finished session as it is unless archiving was asked for', async () => {
+    api.script = wholePlan;
+    h = await setup();
+    await runToRest(h.runner);
+    expect(h.org.plans[0]!.status).toBe('done');
+    expect(api.session().archived).toBe(false);
+    expect(api.count('POST', /\/archive$/)).toBe(0);
+
+    // Asked for by hand, afterwards.
+    expect(await h.runner.archiveSessions({ planId: h.org.plans[0]!.id })).toEqual({ archived: 1, left: 0 });
+    expect(api.session().archived).toBe(true);
   });
 
   it('holds the session when the organisation is paused and carries on in it when started again', async () => {

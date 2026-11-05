@@ -1888,6 +1888,13 @@ input[type='radio'] {
   color: var(--ok);
 }
 
+.session-archive {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
 .session-files summary {
   cursor: pointer;
   color: var(--ink-2);

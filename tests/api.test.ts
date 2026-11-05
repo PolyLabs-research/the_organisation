@@ -115,7 +115,7 @@ describe('the API', () => {
   it('runs an organisation on hosted sessions, and reads a run agent\'s task from the session when asked', async () => {
     const meta = await api('GET', '/api/meta');
     expect(meta.data.provider.managed).toBe(true);
-    expect(meta.data.defaults).toMatchObject({ execution: 'local', workflowRuns: true });
+    expect(meta.data.defaults).toMatchObject({ execution: 'local', workflowRuns: true, archiveSessions: false });
 
     const { org } = await establish({
       executives: [{ profileId: 'engineering', agentCount: 2 }],
@@ -133,6 +133,14 @@ describe('the API', () => {
     expect(plan).toMatchObject({ status: 'done', execution: 'managed' });
     expect(plan.managed).toMatchObject({ state: 'finished', synced: {} });
     expect(plan.managed!.runs).toHaveLength(1);
+
+    // The session can be archived by hand now that the plan is over, once.
+    const archived = await api('POST', `/api/orgs/${org.id}/plans/${plan.id}/archive-session`);
+    expect(archived.status).toBe(200);
+    expect(archived.data).toMatchObject({ archived: 1, left: 0 });
+    expect(archived.data.view.org.plans[0].managed.archivedAt).toBeTruthy();
+    expect((await api('POST', `/api/orgs/${org.id}/archive-sessions`)).data).toMatchObject({ archived: 0, left: 0 });
+    expect((await api('POST', `/api/orgs/${org.id}/plans/p999/archive-session`)).status).toBe(404);
 
     // An agent in a workflow run got its work from the run, so the plan holds neither its brief nor what it returned.
     const inRun = plan.phases[2]!.tasks.find((t) => t.agent === null)!;

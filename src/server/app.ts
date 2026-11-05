@@ -148,6 +148,25 @@ export function createApp(registry: Registry, config: Config): express.Express {
     res.json(detail);
   });
 
+  // Archiving is asked for by hand here, for one plan's session or for every plan that is over.
+  app.post('/api/orgs/:id/plans/:planId/archive-session', async (req, res) => {
+    const runner = runnerOf(req);
+    const plan = runner.org.plans.find((p) => p.id === req.params.planId);
+    if (!plan) throw new NotFound('No such plan.');
+    if (!plan.managed) throw new ValidationError('This plan was not carried out in a hosted session.');
+    if (!['done', 'cancelled', 'failed'].includes(plan.status) && !(plan.managed.past ?? []).some((p) => !p.archivedAt)) {
+      throw new ValidationError('This plan is still under way. Its session can be archived once the plan has reported or been cancelled.');
+    }
+    const result = await runner.archiveSessions({ planId: plan.id });
+    res.json({ ...result, view: runner.view() });
+  });
+
+  app.post('/api/orgs/:id/archive-sessions', async (req, res) => {
+    const runner = runnerOf(req);
+    const result = await runner.archiveSessions();
+    res.json({ ...result, view: runner.view() });
+  });
+
   app.get('/api/orgs/:id/files', async (req, res) => {
     res.json(await runnerOf(req).workspace.list());
   });

@@ -172,7 +172,7 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
 }
 
 /** What changes when plans are carried out in hosted sessions, shown wherever that is chosen. */
-export function HostedNotes({ web, runs, simulated }: { web: boolean; runs: boolean; simulated: boolean }) {
+export function HostedNotes({ web, runs, archive, simulated }: { web: boolean; runs: boolean; archive: boolean; simulated: boolean }) {
   return (
     <>
       <div className="note note-info">
@@ -182,7 +182,11 @@ export function HostedNotes({ web, runs, simulated }: { web: boolean; runs: bool
             <li>Each plan runs in one session with a spend cap. What is left of the budget is shared between the plans, and a session cannot spend past its share.</li>
             {runs ? <li>A lead can start a workflow run to put its agents on a phase that has many pieces. Every agent in a run uses tokens, and the session’s cap covers them.</li> : null}
             <li>The number of agents you give a lead is an instruction to it there. The spend cap is the hard limit.</li>
-            <li>A session stays in your Anthropic Console after its plan ends, as the plan’s record. Nothing here archives or deletes it.</li>
+            <li>
+              {archive
+                ? 'A session is archived once its plan is over: it stays readable in your Anthropic Console, as the plan’s record, but can no longer be changed. Nothing is ever deleted.'
+                : 'A session stays in your Anthropic Console after its plan ends, as the plan’s record. It is left as it is unless you archive it, from the plan or by switching on archiving here.'}
+            </li>
             {simulated ? <li>In simulation no session is created anywhere: the dashboard shows what one would look like.</li> : null}
           </ul>
         </div>
