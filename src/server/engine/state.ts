@@ -31,6 +31,9 @@ export const DEFAULT_SETTINGS: OrgSettings = {
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
+/** A ceiling on the follow-up plans one lead may start in a cycle, whatever the reports say. */
+export const MAX_FOLLOW_UPS_PER_LEAD = 2;
+
 /** How many cycles of plans, decisions and reports stay in live state; older ones are archived to disk. */
 export const LIVE_CYCLES = 3;
 const MAX_BOARD_MESSAGES = 400;
@@ -123,6 +126,12 @@ export function planById(org: Organisation, id: string): Plan | undefined {
 /** The directory in the shared workspace where a seat's team keeps its files. */
 export function teamDir(exec: Executive): string {
   return slugify(exec.function, exec.id);
+}
+
+/** How many more follow-up plans a lead may start in the current cycle. */
+export function followUpsLeft(org: Organisation, leadId: string): number {
+  const started = org.plans.filter((p) => p.ownerId === leadId && p.cycle === org.cycle.number && p.origin.type === 'follow_up').length;
+  return Math.max(0, MAX_FOLLOW_UPS_PER_LEAD - started);
 }
 
 export function isPlanActive(plan: Plan): boolean {

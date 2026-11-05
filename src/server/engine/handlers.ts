@@ -4,7 +4,7 @@ import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from 
 import { Workspace, workspaceTools } from '../workspace';
 import * as prompts from './prompts';
 import * as schemas from './schemas';
-import { arbiterOf, execById, isPlanActive, leadsOf, nextId, planById, postToBoard, teamDir } from './state';
+import { arbiterOf, execById, followUpsLeft, isPlanActive, leadsOf, nextId, planById, postToBoard, teamDir } from './state';
 import type { WorkItem } from './work';
 
 export interface EngineContext {
@@ -548,7 +548,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           const sources = f.reportIds.filter((id) => item.reportIds.includes(id));
           const from = sources.length ? sources : item.reportIds;
           const depth = Math.max(...from.map(depthOf)) + 1;
-          if (depth > org.settings.maxFollowUpDepth) continue;
+          if (depth > org.settings.maxFollowUpDepth || followUpsLeft(org, exec.id) === 0) continue;
           const plan = newPlan(org, exec, { ...f, priority: 'medium' }, { type: 'follow_up', reportIds: from }, depth);
           postToBoard(org, 'reaction', exec.id, `${exec.short} follows up`, `${plan.objective}\n\n**Because:** ${plan.rationale}`, { planId: plan.id });
         }

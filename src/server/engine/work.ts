@@ -1,5 +1,5 @@
 import type { Decision, Organisation, Plan, ReviewRound } from '../../shared/types';
-import { ceoOf, arbiterOf, currentPhase, execById, isPlanActive, leadsOf, nextId, planById, postToBoard } from './state';
+import { ceoOf, arbiterOf, currentPhase, execById, followUpsLeft, isPlanActive, leadsOf, nextId, planById, postToBoard } from './state';
 
 /**
  * One unit of work the organisation can do next. Each maps to a single model
@@ -123,6 +123,15 @@ export function settle(org: Organisation): boolean {
     for (const decision of org.decisions) {
       if (decision.status === 'open' && decision.participantIds.every((id) => decision.positions[id])) {
         decision.status = 'deliberated';
+        stepped = true;
+      }
+    }
+
+    // A lead that has started all the follow-ups it may this cycle has nothing left to decide
+    // about further reports. They stay on the board for the CEO's next cycle.
+    for (const lead of leadsOf(org)) {
+      if ((org.inbox[lead.id]?.length ?? 0) > 0 && followUpsLeft(org, lead.id) === 0) {
+        org.inbox[lead.id] = [];
         stepped = true;
       }
     }

@@ -314,6 +314,22 @@ describe('board reports as triggers', () => {
     expect(h.org.plans.every((p) => p.status === 'done')).toBe(true);
   });
 
+  it('caps the follow-ups one lead may start in a cycle, however many reports call for one', async () => {
+    h = await harness({
+      mock: { followUps: 'always', delayMs: [0, 3] },
+      executives: [{ profileId: 'engineering', agentCount: 3 }, { profileId: 'product' }, { profileId: 'marketing' }, { profileId: 'finance' }, { profileId: 'operations' }],
+      settings: { maxConcurrentCalls: 8 },
+    });
+    await runToRest(h.runner);
+    const { org } = h;
+    expect(org.pauseReason).toBe('cycle_limit');
+    for (const lead of org.executives.filter((e) => e.kind === 'lead')) {
+      const followUps = org.plans.filter((p) => p.ownerId === lead.id && p.origin.type === 'follow_up');
+      expect(followUps.length).toBeLessThanOrEqual(2);
+    }
+    expect(org.plans.every((p) => p.status === 'done')).toBe(true);
+  });
+
   it('skips reactions entirely when follow-ups are switched off', async () => {
     const kinds: string[] = [];
     h = await harness({ mock: { followUps: 'always', onCall: (kind) => void kinds.push(kind) }, settings: { maxFollowUpDepth: 0 } });

@@ -13,7 +13,10 @@ function sop(exec: Executive): string {
 function charter(org: Organisation): string {
   const arbiter = arbiterOf(org);
   const board = org.executives.map((e) => {
-    if (e.kind === 'ceo') return `- ${e.id}: ${e.title} (${e.short}). ${e.remit}`;
+    if (e.kind === 'ceo') {
+      const signsOff = arbiter.kind === 'ceo' ? ' Signs off decisions where leads disagree.' : '';
+      return `- ${e.id}: ${e.title} (${e.short}). Represents the shareholders: sets priorities, directs the leads and enforces shareholder steer.${signsOff}`;
+    }
     if (e.kind === 'judge') return `- ${e.id}: ${e.title}. ${e.remit}`;
     return `- ${e.id}: ${e.title} (${e.short}), leads ${e.function}. Remit: ${e.remit} Operating profile: ${sop(e)}.`;
   });
@@ -314,9 +317,7 @@ Purpose: ${phase.purpose}
 Deliverable: ${phase.deliverable}
 What you said it would produce: ${phase.intent}
 
-${phaseSummaries(plan, index)}
-
-${filesBlock(files)}
+${[phaseSummaries(plan, index), filesBlock(files)].filter(Boolean).join('\n\n')}
 
 # Your task
 Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.`;

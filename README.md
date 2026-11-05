@@ -77,7 +77,7 @@ The library lives in [`src/shared/profiles.ts`](src/shared/profiles.ts); add or 
 
 **Agents.** Each lead is allocated a number of agents (1 to 8, adjustable while the organisation runs). For each phase the lead hands out tasks; its agents work them in parallel, never more at once than the lead has agents, and report back to the lead. Agents put their work products in a shared workspace as files, which every seat and agent can read.
 
-**Reports as triggers.** When a plan has run every phase, the lead reports to the whole board. Each other lead reads the report once their own plan is off their desk and may start follow-up work in their own remit. How many rounds of follow-up one cycle allows is a setting.
+**Reports as triggers.** When a plan has run every phase, the lead reports to the whole board. Each other lead reads the report once their own plan is off their desk and may start follow-up work in their own remit. How many rounds of follow-up one cycle allows is a setting, and no lead starts more than two follow-ups in a cycle; anything further waits for the CEO.
 
 **Decisions.**
 
@@ -111,7 +111,7 @@ What drives spend, and where to change it (wizard or settings):
 - **The model for the agents.** Agents do most of the work. Executives and agents default to `claude-opus-5-5`; each can be set separately.
 - **Effort** for executives and agents (default medium).
 - **Agents per lead** and **tasks per phase** (default at most 4 tasks).
-- **Follow-up work per cycle** (default one round).
+- **Follow-up work per cycle** (default one round, and never more than two follow-up plans per lead).
 - **Web search** for agents (off by default; billed per search by Anthropic).
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
@@ -153,7 +153,7 @@ npm run typecheck
 npm run dev         # server with hot-reloading client on one port
 ```
 
-The tests run whole organisations through the loop on the simulator. The Claude provider is tested against a local stand-in for the Messages API that speaks its streaming protocol: that checks what is sent and how replies are handled, not that the live API accepts it.
+The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against a local stand-in for the Messages API that speaks its streaming protocol: that checks what is sent and how replies are handled, not that the live API accepts it.
 
 ```
 src/shared/      types and the profile library, used by server and client
