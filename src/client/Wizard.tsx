@@ -341,6 +341,23 @@ export function Wizard({ meta }: { meta: Meta }) {
             </fieldset>
 
             <fieldset className="choice">
+              <legend>The organisation cannot pay for anything or sign anything itself. Requests for either go to the Authorised Signatory, a seat held by:</legend>
+              <label>
+                <input type="radio" name="signatory" checked={settings.signatory === 'human'} onChange={() => set('signatory', 'human')} />
+                <span>
+                  <strong>You.</strong> You pay or sign outside this system, and tell the organisation in its Signatory tab what you did, or why you refused.
+                </span>
+              </label>
+              <label>
+                <input type="radio" name="signatory" checked={settings.signatory === 'ai'} onChange={() => set('signatory', 'ai')} />
+                <span>
+                  <strong>An AI seat</strong>, which authorises or declines each request by what the shareholders want. What it authorises still waits for you to carry out: nothing here can
+                  move money.
+                </span>
+              </label>
+            </fieldset>
+
+            <fieldset className="choice">
               <legend>The leads’ agents do their work:</legend>
               <label>
                 <input

@@ -1,5 +1,6 @@
-import { Gavel, Send } from 'lucide-react';
+import { Gavel, PenLine, Send } from 'lucide-react';
 import { useState } from 'react';
+import { waitingOnPerson, waitsOnAi } from '../shared/signatory';
 import type { ActiveWork, Executive, Organisation, OrgView, Plan, Steer } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { CEO_QUESTION_TEXT, PLAN_STATUS, SESSION_STATE } from './labels';
@@ -247,17 +248,23 @@ export function Hierarchy({
   meta,
   onView,
   onOpenPlan,
+  onOpenSignatory,
 }: {
   view: OrgView;
   meta: Meta;
   onView: (view: OrgView) => void;
   onOpenPlan: (planId: string) => void;
+  onOpenSignatory: () => void;
 }) {
   const { org, active } = view;
   const ceo = org.executives.find((e) => e.kind === 'ceo')!;
   const judge = org.executives.find((e) => e.kind === 'judge');
   const leads = org.executives.filter((e) => e.kind === 'lead');
   const judging = judge ? active.filter((a) => a.execId === judge.id) : [];
+  const signatory = org.executives.find((e) => e.kind === 'signatory');
+  const deciding = signatory ? active.filter((a) => a.execId === signatory.id) : [];
+  const waiting = waitingOnPerson(org).length;
+  const withAi = org.signatory.requests.filter((r) => waitsOnAi(r, org.settings.signatory)).length;
   return (
     <div className="hierarchy">
       <Shareholders org={org} onView={onView} />
@@ -277,6 +284,30 @@ export function Hierarchy({
           {judging.map((a) => (
             <Working key={a.key} label={a.label} />
           ))}
+        </section>
+      ) : null}
+      {signatory ? (
+        <section className="judge seat-card" style={hueStyle(signatory.hue)} aria-label={signatory.title}>
+          <header className="tier-head">
+            <SeatBadge seat={signatory} />
+            <div>
+              <strong>
+                <PenLine size={14} aria-hidden="true" /> {signatory.title}
+              </strong>
+              <p className="muted">
+                Signs and pays, which nothing else here can. {org.settings.signatory === 'human' ? 'Held by you.' : 'Held by an AI; you carry out what it authorises.'}
+              </p>
+            </div>
+          </header>
+          {deciding.map((a) => (
+            <Working key={a.key} label={a.label} />
+          ))}
+          <p>
+            <button type="button" className="link" onClick={onOpenSignatory}>
+              {waiting ? `${waiting} request${waiting === 1 ? '' : 's'} waiting for you` : 'Nothing waiting for you'}
+            </button>
+            {withAi ? <span className="muted"> · {withAi} with the AI</span> : null}
+          </p>
         </section>
       ) : null}
       <div className="tier-link" aria-hidden="true" />

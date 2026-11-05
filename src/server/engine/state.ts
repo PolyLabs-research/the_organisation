@@ -1,4 +1,5 @@
 import { PROFILE_BY_ID, MAX_LEADS, executiveFromDraft } from '../../shared/profiles';
+import { describeRequest, isOpen, waitingOnPerson } from '../../shared/signatory';
 import type {
   BoardMessage,
   BoardMessageType,
@@ -30,6 +31,7 @@ export const DEFAULT_SETTINGS: OrgSettings = {
   execution: 'local',
   workflowRuns: true,
   archiveSessions: false,
+  signatory: 'human',
 };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -92,6 +94,7 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
     execution: p.execution === 'managed' || p.execution === 'local' ? p.execution : base.execution,
     workflowRuns: typeof p.workflowRuns === 'boolean' ? p.workflowRuns : base.workflowRuns,
     archiveSessions: typeof p.archiveSessions === 'boolean' ? p.archiveSessions : base.archiveSessions,
+    signatory: p.signatory === 'ai' || p.signatory === 'human' ? p.signatory : base.signatory,
   };
 }
 
@@ -212,7 +215,7 @@ export function postToBoard(
   fromId: string,
   title: string,
   body: string,
-  refs: Pick<BoardMessage, 'planId' | 'decisionId' | 'reportId'> = {},
+  refs: Pick<BoardMessage, 'planId' | 'decisionId' | 'reportId' | 'requestId'> = {},
 ): BoardMessage {
   const message: BoardMessage = {
     id: nextId(org, 'm'),
@@ -260,6 +263,8 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
   if (leadCount === 0) throw new ValidationError('Seat at least one executive lead besides the CEO.');
   if (leadCount > MAX_LEADS) throw new ValidationError(`An executive team can seat at most ${MAX_LEADS} leads.`);
   if (settings.arbiter === 'judge') executives.push(executiveFromDraft({ profileId: 'judge' }, seatId('judge'))!);
+  // Someone has to be able to sign and pay. The seat is always there; who holds it is a setting.
+  executives.push(executiveFromDraft({ profileId: 'signatory' }, seatId('signatory'))!);
 
   const now = new Date().toISOString();
   const org: Organisation = {
@@ -284,6 +289,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     inbox: {},
     board: [],
     steers: [],
+    signatory: { requests: [], messages: [] },
     usage: emptyUsage(),
     usageByExec: {},
   };
@@ -292,7 +298,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     'system',
     'system',
     'Organisation established',
-    `${name} is established with ${leadCount} executive lead${leadCount === 1 ? '' : 's'} under the CEO. Decisions that leads cannot settle between them are signed off by the ${settings.arbiter === 'judge' ? 'independent judge' : 'CEO'}.`,
+    `${name} is established with ${leadCount} executive lead${leadCount === 1 ? '' : 's'} under the CEO. Decisions that leads cannot settle between them are signed off by the ${settings.arbiter === 'judge' ? 'independent judge' : 'CEO'}. Anything that has to be paid for or signed goes to the Authorised Signatory, a seat held by ${settings.signatory === 'ai' ? 'an AI, with a person carrying out what it authorises' : 'a person'}.`,
   );
   const steer = (req.steer ?? '').trim();
   if (steer) addSteer(org, steer);
@@ -316,10 +322,23 @@ export function addSteer(org: Organisation, text: string): void {
 export function syncJudge(org: Organisation): void {
   const hasJudge = org.executives.some((e) => e.kind === 'judge');
   if (org.settings.arbiter === 'judge' && !hasJudge) {
-    org.executives.push(executiveFromDraft({ profileId: 'judge' }, 'judge')!);
+    // Beside the board, ahead of the signatory, where a judge seated at the start would be.
+    const at = org.executives.findIndex((e) => e.kind === 'signatory');
+    org.executives.splice(at < 0 ? org.executives.length : at, 0, executiveFromDraft({ profileId: 'judge' }, 'judge')!);
   } else if (org.settings.arbiter === 'ceo' && hasJudge) {
     org.executives = org.executives.filter((e) => e.kind !== 'judge');
   }
+}
+
+/** Seat the signatory in an organisation that was established before there was one. */
+export function syncSignatory(org: Organisation): void {
+  org.signatory ??= { requests: [], messages: [] };
+  org.signatory.requests ??= [];
+  org.signatory.messages ??= [];
+  if (org.executives.some((e) => e.kind === 'signatory')) return;
+  let id = 'signatory';
+  for (let n = 2; org.executives.some((e) => e.id === id); n++) id = `signatory-${n}`;
+  org.executives.push(executiveFromDraft({ profileId: 'signatory' }, id)!);
 }
 
 /**
@@ -332,6 +351,7 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.seq ??= 0;
   org.inbox ??= {};
   org.usageByExec ??= {};
+  syncSignatory(org);
   for (const plan of org.plans) {
     plan.execution ??= null;
     plan.managed ??= null;
@@ -374,6 +394,17 @@ export function digestCycle(org: Organisation, endedAt: string): CycleRecord {
       lines.push(`- ${who}: "${plan.objective}" ended ${plan.status} without a report`);
     }
   }
+  // What was paid for or signed, refused, or left waiting is part of what the cycle came to.
+  for (const request of org.signatory.requests) {
+    const asker = execById(org, request.fromId)?.short ?? request.fromId;
+    if (request.outcome?.cycle === cycle.number) {
+      const said = request.outcome.note ? ` (${request.outcome.note.slice(0, 200)})` : '';
+      const how = request.outcome.result === 'done' ? 'done' : request.outcome.result === 'rejected' ? 'REJECTED' : 'withdrawn';
+      lines.push(`- Signatory, for ${asker}: ${describeRequest(request)}: ${how}${said}`);
+    } else if (isOpen(request) && request.cycle <= cycle.number) {
+      lines.push(`- Signatory, for ${asker}: ${describeRequest(request)}: still waiting, so it has not happened`);
+    }
+  }
   return {
     number: cycle.number,
     intent: cycle.intent ?? '',
@@ -404,6 +435,7 @@ export function summarise(org: Organisation): OrgSummary {
       kind: e.kind,
       agentCount: e.agentCount,
     })),
+    waiting: waitingOnPerson(org).length,
     createdAt: org.createdAt,
     updatedAt: org.updatedAt,
   };

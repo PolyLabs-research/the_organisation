@@ -98,6 +98,8 @@ export interface PhaseRecord {
   phase: string;
   summary: string;
   decisions: Array<{ title: string; decision: string; rationale: string }>;
+  /** Payments to make or documents to sign that the plan now needs from the signatory. */
+  requests?: Array<{ kind: string; title: string; detail: string; amount: string; party: string; files: string[] }>;
 }
 
 export interface BoardReportDraft {

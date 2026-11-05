@@ -1,4 +1,5 @@
-import type { BoardReport, Decision, Executive, Organisation, Plan, PlanPhase, ReviewRound, Task, WorkspaceFile } from '../../shared/types';
+import { describeRequest, isOpen, waitsOnAi } from '../../shared/signatory';
+import type { BoardReport, Decision, Executive, Organisation, Plan, PlanPhase, ReviewRound, SignatoryRequest, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, type SystemPrompt } from '../providers/types';
 import { CEO_QUESTION, arbiterOf, execById, leadsOf, teamDir } from './state';
 
@@ -18,8 +19,13 @@ function charter(org: Organisation): string {
       return `- ${e.id}: ${e.title} (${e.short}). Represents the shareholders: sets priorities, directs the leads and enforces shareholder steer.${signsOff}`;
     }
     if (e.kind === 'judge') return `- ${e.id}: ${e.title}. ${e.remit}`;
+    if (e.kind === 'signatory') return `- ${e.id}: ${e.title}. Signs and pays on request. Holds no remit and takes no part in the board's decisions.`;
     return `- ${e.id}: ${e.title} (${e.short}), leads ${e.function}. Remit: ${e.remit} Operating profile: ${sop(e)}.`;
   });
+  const signatory =
+    org.settings.signatory === 'ai'
+      ? 'The signatory is an AI seat that authorises or declines each request by what the shareholders want. What it authorises is carried out by a person, outside this system, who confirms it or refuses it.'
+      : 'The signatory is a person, who acts outside this system and tells the organisation when a request is done or why it is refused.';
   return `You are part of "${org.name}", an organisation run by AI agents on behalf of its shareholders.
 
 # Mission
@@ -32,6 +38,7 @@ ${org.mission}
 - Agents report to their lead. When a plan is complete the lead reports to the whole board, and that report may prompt other leads to act.
 - A lead decides anything inside their own remit. When leads have competing priorities, the board states its positions and the ${arbiter.title} signs off.
 - Work products are files in a shared workspace that every seat and agent can read.
+- The organisation cannot sign a document or pay for anything itself. A lead whose plan needs either puts a request to the Authorised Signatory. ${signatory} Until a request is marked done, the payment or signature has not happened, and nothing may be planned, written or reported as though it had.
 - When all work is done, the CEO asks "${CEO_QUESTION}" and the cycle begins again.
 
 # The board
@@ -57,6 +64,14 @@ You are the ${exec.title}. You hold no remit and favour no function.
 - You are called on when leads have competing priorities. Hear each position as its holder states it, weigh it against the mission and the shareholder steer, and rule.
 - If the board is already agreed, ratify the agreement unless it conflicts with the mission or the steer.
 - Your ruling binds the board. Give reasons a lead who lost can accept.
+${HOUSE_STYLE}`;
+  }
+  if (exec.kind === 'signatory') {
+    return `# Your seat
+You are the ${exec.title}. You hold no remit and run no work. Leads put requests to you: payments to be made and documents to be signed on the organisation's behalf.
+- Authorise a request only if the shareholders would want it: its purpose is clear and serves the plan it is for, the amount and the other party are stated, the amount is in proportion to the purpose, and nothing in the shareholder steer or the cycle's priorities speaks against it.
+- Decline what is vague, larger than its purpose warrants, a repeat of something already asked, or at odds with the steer. Say what would have to change for you to agree, so the lead can ask again properly.
+- You cannot pay or sign anything yourself. A person carries out what you authorise, and may still refuse it. To authorise is to say the organisation should commit, not to record that it has.
 ${HOUSE_STYLE}`;
   }
   const phases = exec.phases.map((p, i) => `${i + 1}. ${p.name}: ${p.purpose} Deliverable: ${p.deliverable}`).join('\n');
@@ -167,6 +182,43 @@ function phaseSummaries(plan: Plan, upTo: number): string {
     .join('\n\n')}`;
 }
 
+function requestLine(org: Organisation, request: SignatoryRequest): string {
+  return `${request.id}, asked by ${who(org, request.fromId)}${request.planId ? ` for plan ${request.planId}` : ''}: ${describeRequest(request)}`;
+}
+
+function outcomeLine(request: SignatoryRequest): string {
+  const outcome = request.outcome!;
+  const said = outcome.note ? ` ${outcome.note}` : '';
+  if (outcome.result === 'done') return `DONE.${said ? ` The signatory adds:${said}` : ''}`;
+  if (outcome.result === 'withdrawn') return `withdrawn.${said}`;
+  return `REJECTED${outcome.by === 'ai' ? ' by the signatory' : ' by the person who would have carried it out'}:${said || ' no reason given.'}`;
+}
+
+/**
+ * What has been asked of the signatory and what became of it: what is still waiting, what was settled in this
+ * cycle or the last, and anything else the signatory has said. This is how the organisation hears.
+ */
+export function signatoryBlock(org: Organisation): string {
+  const { requests, messages } = org.signatory;
+  const holder = org.settings.signatory;
+  const open = requests.filter(isOpen);
+  const settled = requests.filter((r) => r.outcome && r.outcome.cycle >= org.cycle.number - 1).slice(-12);
+  const notes = messages.filter((m) => m.kind === 'note' && m.cycle >= org.cycle.number - 1).slice(-5);
+  if (!open.length && !settled.length && !notes.length) return '# Signing and paying\nNothing is waiting for the signatory, and nothing has been asked lately.';
+  const parts = ['# Signing and paying'];
+  if (open.length) {
+    const state = (r: SignatoryRequest) =>
+      r.status === 'authorised' ? 'authorised; waiting for a person to carry it out' : waitsOnAi(r, holder) ? 'waiting for the signatory to decide' : 'waiting for a person to decide and carry it out';
+    parts.push(`Waiting, and so not yet done:\n${open.map((r) => `- ${requestLine(org, r)} [${state(r)}]`).join('\n')}`);
+  }
+  if (settled.length) parts.push(`Settled in this cycle or the last:\n${settled.map((r) => `- ${requestLine(org, r)}: ${outcomeLine(r)}`).join('\n')}`);
+  if (notes.length) parts.push(`The signatory has also said:\n${notes.map((n) => `- ${n.text}`).join('\n')}`);
+  parts.push(
+    'Only what is marked DONE has happened. Do not ask again for what is waiting or done. What was rejected is not to be asked for again as it stood: work around it, or ask for something that answers the reason given.',
+  );
+  return parts.join('\n');
+}
+
 const today = () => `Today is ${new Date().toISOString().slice(0, 10)}.`;
 
 // ---- one builder per kind of work ----
@@ -177,6 +229,8 @@ export function consultPrompt(org: Organisation, lead: Executive): string {
 ${steerBlock(org)}
 
 ${historyBlock(org)}
+
+${signatoryBlock(org)}
 
 # Your task
 Propose the single most valuable thing ${lead.function} should do in this cycle. It must fit your remit and be something your ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'} can deliver as files in the workspace within one plan. Say why the shareholders would want it now, and what you would need from other leads or the board.`;
@@ -199,6 +253,8 @@ export function directPrompt(org: Organisation): string {
 ${steerBlock(org)}
 
 ${historyBlock(org)}
+
+${signatoryBlock(org)}
 
 # What your leads propose
 ${proposals}
@@ -225,6 +281,8 @@ ${steerBlock(org)}
 
 # What other leads are doing this cycle
 ${others.length ? others.join('\n') : 'Nothing else is under way.'}
+
+${signatoryBlock(org)}
 
 ${filesBlock(files)}
 
@@ -321,7 +379,7 @@ Purpose: ${phase.purpose}
 Deliverable: ${phase.deliverable}
 What you said it would produce: ${phase.intent}
 
-${[phaseSummaries(plan, index), filesBlock(files)].filter(Boolean).join('\n\n')}
+${[phaseSummaries(plan, index), signatoryBlock(org), filesBlock(files)].filter(Boolean).join('\n\n')}
 
 # Your task
 Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.`;
@@ -383,8 +441,12 @@ ${phase.tasks.map(taskReport).join('\n\n')}
 
 ${reviewFiles(files)}
 
+${signatoryBlock(org)}
+
 # Your task
-Review the phase as its gate. Judge the files themselves, not only what the agents say about them. ${gate} Your summary is what later phases and your board report will be built on, so state what was actually produced, not what was intended.`;
+Review the phase as its gate. Judge the files themselves, not only what the agents say about them. ${gate} Your summary is what later phases and your board report will be built on, so state what was actually produced, not what was intended.
+
+If the plan has reached a point where something must be paid for or signed for its work to take effect, put it to the signatory as a request: what it is, how much and to whom, why now, and the files to read first. Ask only for what this plan needs next, and never for anything already listed above. At most gates there is nothing to ask for: return an empty list.`;
 }
 
 function phaseOutcome(phase: PlanPhase): string {
@@ -402,6 +464,8 @@ ${planHeader(org, plan)}
 ${plan.phases.map(phaseOutcome).join('\n\n')}
 
 ${cycleBlock(org)}
+
+${signatoryBlock(org)}
 
 # Your task
 Report to the board. Give a headline, a short summary of what was delivered measured against the success criteria, the outcomes as a list, and anything you now need other leads or the board to do. Other leads will read this and may act on it, so say what they need to know and say it accurately: do not claim more than the phases delivered.`;
@@ -451,6 +515,42 @@ ${inProgress.length ? inProgress.join('\n') : 'Nothing is in progress.'}
 Enforce the steer. For each plan in progress decide whether it continues as it is, continues under a new instruction, or is cancelled. List only the plans that must change. Then reply to the shareholders: say what changes now, and what you will take into the next cycle.`;
 }
 
+/** What an AI in the signatory's seat is shown when a lead asks for a payment or a signature. */
+export function authorisePrompt(org: Organisation, request: SignatoryRequest, plan: Plan | undefined, files: ReviewFile[]): string {
+  const others = org.signatory.requests.filter((r) => r.id !== request.id).slice(-15);
+  const before = others.length
+    ? others.map((r) => `- ${requestLine(org, r)}: ${r.outcome ? outcomeLine(r) : r.status === 'authorised' ? 'authorised, not yet carried out' : 'waiting'}`).join('\n')
+    : 'Nothing.';
+  const read = files.length
+    ? files
+        .map((f) => (f.content === null ? `<file path="${f.path}">${f.note ?? ''}</file>` : `<file path="${f.path}"${f.note ? ` note="${f.note}"` : ''}>\n${f.content}\n</file>`))
+        .join('\n\n')
+    : 'The lead named no files.';
+  return `${today()} A request has been put to you.
+
+# The request
+${request.kind === 'payment' ? 'A payment to make' : 'A document to sign'}: ${request.title}
+Asked by: ${who(org, request.fromId)}${request.phase ? `, at the ${request.phase} gate of its plan` : ''}
+${request.kind === 'payment' ? `Amount: ${request.amount || 'not stated'}\nTo: ${request.party || 'not stated'}` : `With: ${request.party || 'not stated'}`}
+Why, and what you are asked to do: ${request.detail || 'not stated'}
+
+# What the lead asked you to read
+${read}
+
+# The plan it is for
+${plan ? planHeader(org, plan) : 'The plan is no longer in the live record.'}
+
+${cycleBlock(org)}
+
+${steerBlock(org)}
+
+# What else has been asked of the signatory
+${before}
+
+# Your task
+Authorise this request or decline it, and give your reason in a sentence or two for the lead who asked. If you decline, say what would have to change for you to agree.`;
+}
+
 // ---- plans carried out in a hosted session ----
 
 /** Where a session finds the organisation's earlier work, and where it must leave its own. */
@@ -486,6 +586,7 @@ ${
       : '- Many pieces: when a phase has more pieces of work than your agents can take at once, hand them out in turn as agents come free. You cannot start workflow runs in this organisation.'
   }
 - Decisions: decide what is inside your remit, and record each decision with the phase it belongs to.
+- Signing and paying: neither you nor your agents can pay for anything or sign anything, in the sandbox or out of it. If the plan needs a payment made or a document signed for its work to take effect, ask for it when you record the phase that needs it: what it is, how much and to whom, why now, and the files to read first. It goes to the Authorised Signatory. Until you are told a request is done it has not happened, so do not build on it or report it as done.
 - Reporting: when every phase is recorded, call ${PLAN_TOOLS.reportToBoard} once and end your turn. Do not report before then, and do not claim more than the phases delivered.
 - Instructions from the board can arrive while you work. They are binding: comply, and say how in your next phase record.`;
 }
@@ -540,6 +641,8 @@ ${sessionPhases(plan)}
 ${cycleBlock(org)}
 
 ${steerBlock(org)}
+
+${signatoryBlock(org)}
 
 # Your team and the sandbox
 You have ${agents(Math.max(lead.agentCount, 1))}.

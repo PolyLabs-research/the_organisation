@@ -67,6 +67,10 @@ export const api = {
   agents: (id: string, execId: string, agentCount: number) => request<OrgView>('PATCH', `/api/orgs/${id}/executives/${execId}`, { agentCount }),
   activity: (id: string) => request<ActivityEntry[]>('GET', `/api/orgs/${id}/activity`),
   task: (id: string, taskId: string) => request<{ task: Task }>('GET', `/api/orgs/${id}/tasks/${taskId}`),
+  /** Answer a request to the signatory: it is done, it is rejected (with the reason), or the answer is taken back. */
+  answerRequest: (id: string, requestId: string, action: 'done' | 'rejected' | 'reopen', note: string) =>
+    request<OrgView>('POST', `/api/orgs/${id}/requests/${requestId}`, { action, note }),
+  signatoryNote: (id: string, text: string) => request<OrgView>('POST', `/api/orgs/${id}/signatory/notes`, { text }),
   archiveSession: (id: string, planId: string) => request<{ archived: number; left: number; view: OrgView }>('POST', `/api/orgs/${id}/plans/${planId}/archive-session`),
   archiveSessions: (id: string) => request<{ archived: number; left: number; view: OrgView }>('POST', `/api/orgs/${id}/archive-sessions`),
   connections: () => request<KeysView>('GET', '/api/connections'),

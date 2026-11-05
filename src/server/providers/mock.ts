@@ -25,6 +25,10 @@ export interface MockOptions {
   runs?: 'third_phase' | 'never';
   /** How many hosted sessions of each plan end early, without a report, before one is allowed to finish. */
   lostSessions?: number;
+  /** Whether a lead asks the signatory for something. second_phase: once per directed plan, at the gate of its second phase. */
+  requests?: 'second_phase' | 'never';
+  /** What an AI in the signatory's seat decides. */
+  signatory?: 'authorise' | 'decline';
   /** Called before each call is answered; throw from it to simulate a failure. */
   onCall?: (kind: string, context: Record<string, unknown>) => void | Promise<void>;
 }
@@ -380,6 +384,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
         phase: phase.name,
         summary: `${phase.name} is complete: ${tasks.length} work product${tasks.length === 1 ? '' : 's'} under ${dir}/. The next phase can rely on them as written. Nothing was run: this session is simulated.`,
         decisions: [],
+        requests: this.requestsAt(plan, seat, phase.name, index, [`${dir}/${plan.id}-${slug(phase.name)}-1.md`]),
       });
       if (!reply.ok) throw new ProviderError(`The simulated lead's phase record was refused: ${reply.message}`, 'invalid_output', false);
     }
@@ -408,6 +413,39 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
     await this.options.onCall?.('archive_session', { sessionId });
     if (!this.archived.includes(sessionId)) this.archived.push(sessionId);
     return 'archived';
+  }
+
+  /**
+   * What a simulated lead asks the signatory for at a phase gate: one thing per directed plan, at the gate of its
+   * second phase. A payment for most functions, a signature for the ones that deal in agreements.
+   */
+  private requestsAt(plan: PlanRef, seat: Seat, phaseName: string, phaseIndex: number, files: string[]) {
+    // A phase passes its gate once, so this asks once for each plan. Nothing is remembered here: a simulator
+    // that kept its own note of who had asked would get it wrong for two organisations of the same name.
+    if ((this.options.requests ?? 'second_phase') === 'never' || phaseIndex !== 1 || plan.depth > 0) return [];
+    const fn = seat.function.toLowerCase();
+    if (/legal|sales|operations|partner|procure/.test(fn)) {
+      return [
+        {
+          kind: 'signature',
+          title: `Terms with the first ${fn} supplier`,
+          detail: `The ${phaseName} phase drafted terms that mean nothing until someone with authority signs them. Read the draft, and sign it if the organisation should be bound by it. This request is simulated: there is no real agreement.`,
+          amount: '',
+          party: 'The first supplier (simulated)',
+          files,
+        },
+      ];
+    }
+    return [
+      {
+        kind: 'payment',
+        title: `The service the ${fn} ${phaseName.toLowerCase()} relies on`,
+        detail: `What the ${phaseName} phase produced assumes a paid service that the organisation does not yet have. Pay for the first month so that the next phase is working with something real. This request is simulated: nothing real is being asked for.`,
+        amount: '40 USD a month (simulated)',
+        party: 'A supplier named in the phase files (simulated)',
+        files,
+      },
+    ];
   }
 
   private answer(kind: string, c: Record<string, unknown>): unknown {
@@ -469,6 +507,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
         const consults = c.consults as Record<string, { proposal: string }>;
         const steer = (c.newSteer as string[]) ?? [];
         const latest = steer.at(-1);
+        const desk = (c.signatory as { waiting: string[]; done: string[]; rejected: string[] } | undefined) ?? { waiting: [], done: [], rejected: [] };
         return {
           shareholderIntent: latest
             ? `What they have just said: ${brief(latest, 200)}`
@@ -479,6 +518,10 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
             latest ? `Deliver on the shareholders’ steer: ${brief(latest, 120)}` : 'Get a first version in front of the board that can be judged.',
             'Test the assumption most likely to sink the plan.',
             'Keep every function’s work visible in the workspace.',
+            // What the signatory did or refused since the last cycle changes what can be built on.
+            ...desk.rejected.slice(0, 1).map((r) => `Work round what the signatory refused: ${brief(r, 140)}`),
+            ...desk.done.slice(0, 1).map((r) => `Build on what has now been paid for or signed: ${brief(r, 140)}`),
+            ...(desk.waiting.length ? [`Do not depend on the ${desk.waiting.length} request${desk.waiting.length === 1 ? '' : 's'} still waiting for the signatory.`] : []),
           ],
           steerResponse: latest ? `Understood. This cycle’s directives are set to deliver on your steer: "${brief(latest, 160)}".` : '',
           directives: leads.map((lead, i) => ({
@@ -586,6 +629,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
               },
             ],
             decisions: [],
+            requests: [],
           };
         }
         return {
@@ -593,7 +637,18 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
           summary: `${phase.name} is complete: ${done} work product${done === 1 ? '' : 's'} in the workspace${failed ? `, ${failed} task${failed === 1 ? '' : 's'} failed and ${failed === 1 ? 'is' : 'are'} carried as an open point` : ''}. The next phase can rely on them as written.`,
           reworkTasks: [],
           decisions: [],
+          requests: this.requestsAt(plan!, seat!, phase.name, phase.index, tasks.flatMap((t) => t.files).slice(0, 1)),
         };
+      }
+
+      case 'authorise': {
+        const request = c.request as { kind: string; title: string; amount: string };
+        return this.options.signatory === 'decline'
+          ? { verdict: 'decline', reason: `Not yet: the request for "${brief(request.title, 80)}" does not say what the shareholders get for it. Ask again with the alternative that was considered and why this one is better.` }
+          : {
+              verdict: 'authorise',
+              reason: `"${brief(request.title, 80)}" serves the plan it is for and nothing in the steer speaks against it${request.kind === 'payment' && request.amount ? `; ${request.amount} is in proportion to the purpose` : ''}.`,
+            };
       }
 
       case 'report': {

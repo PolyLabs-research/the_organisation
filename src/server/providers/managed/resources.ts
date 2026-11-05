@@ -90,6 +90,23 @@ const RECORD_PHASE: CustomTool = {
           required: ['title', 'decision', 'rationale'],
         },
       },
+      requests: {
+        type: 'array',
+        description:
+          'Payments to be made or documents to be signed that the plan now needs for its work to take effect. Neither you nor your agents can do either: each request goes to the Authorised Signatory, and has not happened until you are told it is done. Ask only for what the plan needs next. Leave empty if there is nothing to ask for, which is usual.',
+        items: {
+          type: 'object',
+          properties: {
+            kind: { type: 'string', enum: ['payment', 'signature'] },
+            title: { type: 'string', description: 'What is to be paid for or signed, in a few words.' },
+            detail: { type: 'string', description: 'Why the plan needs it now, and exactly what the signatory is asked to do.' },
+            amount: { type: 'string', description: 'For a payment: the amount with its currency and how often, e.g. "12 GBP a year". Say so if it is an estimate. Empty for a signature.' },
+            party: { type: 'string', description: 'Who is to be paid, or who the agreement is with.' },
+            files: { type: 'array', items: { type: 'string' }, description: 'Paths of files the signatory should read first, such as the agreement to sign or a quote.' },
+          },
+          required: ['kind', 'title', 'detail'],
+        },
+      },
     },
     required: ['phase', 'summary'],
   },

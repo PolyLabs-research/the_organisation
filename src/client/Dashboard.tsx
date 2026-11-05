@@ -4,11 +4,13 @@ import type { OrgView } from '../shared/types';
 import { api, useAction, useOrgStream, type Meta } from './api';
 import { Hierarchy } from './Hierarchy';
 import { EXECUTION, STAGES } from './labels';
+import { waitingOnPerson } from '../shared/signatory';
 import { SettingsPanel } from './SettingsPanel';
+import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
 
-type Tab = 'board' | 'plans' | 'decisions' | 'files' | 'activity';
+type Tab = 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
 
 function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
   const { org } = view;
@@ -68,6 +70,8 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
     setTab('files');
   };
 
+  // What the organisation has asked to have paid or signed, and that only a person can now do.
+  const waiting = waitingOnPerson(org).length;
   const share = Math.min(100, (org.usage.costUsd / org.settings.budgetUsd) * 100);
   const stage = STAGES.find((s) => s.id === org.cycle.stage)!;
   const openDecisions = org.decisions.filter((d) => d.status !== 'resolved').length;
@@ -81,6 +85,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
     { id: 'board', label: 'Board' },
     { id: 'plans', label: 'Plans', count: livePlans || undefined },
     { id: 'decisions', label: 'Decisions', count: openDecisions || undefined },
+    { id: 'signatory', label: 'Signatory', count: waiting || undefined },
     { id: 'files', label: 'Files' },
     { id: 'activity', label: 'Activity' },
   ];
@@ -157,10 +162,23 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
 
       <ErrorNote onDismiss={control.clearError}>{control.error}</ErrorNote>
       <Banner view={view} onSettings={() => setSettingsOpen(true)} />
+      {waiting && tab !== 'signatory' ? (
+        <div className="note note-warn">
+          <span>
+            <strong>
+              {waiting} request{waiting === 1 ? ' is' : 's are'} waiting for you to pay or sign.
+            </strong>{' '}
+            The organisation carries on meanwhile, but treats nothing as paid or signed until you say it is.
+          </span>
+          <button type="button" className="button" onClick={() => setTab('signatory')}>
+            Open
+          </button>
+        </div>
+      ) : null}
 
       <div className="org-body">
         <aside className="org-side">
-          <Hierarchy view={view} meta={meta} onView={setView} onOpenPlan={openPlan} />
+          <Hierarchy view={view} meta={meta} onView={setView} onOpenPlan={openPlan} onOpenSignatory={() => setTab('signatory')} />
         </aside>
         <section className="org-main">
           <div className="tabs" role="tablist">
@@ -175,6 +193,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
             {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
             {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
             {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
+            {tab === 'signatory' ? <Signatory org={org} onView={setView} onOpenPlan={openPlan} onOpenFile={openFile} onSettings={() => setSettingsOpen(true)} /> : null}
             {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
             {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
           </div>

@@ -24,6 +24,7 @@ const FILTERS: Array<{ id: string; label: string; types: BoardMessageType[] | nu
   { id: 'decisions', label: 'Decisions', types: ['decision'] },
   { id: 'reports', label: 'Reports', types: ['report', 'reaction'] },
   { id: 'steer', label: 'Steer', types: ['steer', 'steer_response'] },
+  { id: 'signatory', label: 'Signing and paying', types: ['signatory'] },
 ];
 
 export function Board({ org, onOpenPlan }: { org: Organisation; onOpenPlan: (planId: string) => void }) {

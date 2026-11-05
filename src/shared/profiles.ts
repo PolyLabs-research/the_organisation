@@ -268,9 +268,27 @@ export const PROFILES: OperatingProfile[] = [
   },
 ];
 
+PROFILES.push({
+  id: 'signatory',
+  kind: 'signatory',
+  short: 'SIGN',
+  title: 'Authorised Signatory',
+  function: 'Signing and payments',
+  remit:
+    'Signs agreements and makes payments on the organisation’s behalf, which nothing else in it can do. Holds no remit of their own: acts only on requests from the leads, and may refuse them.',
+  phases: [
+    phase('Check', 'Read what is to be paid or signed, for whom and why.', 'A request understood well enough to decide on.'),
+    phase('Authorise', 'Decide whether the organisation should commit to it.', 'An authorisation, or a refusal with its reason.'),
+    phase('Carry out', 'Make the payment or sign the document.', 'The payment made or the document signed.'),
+    phase('Confirm', 'Tell the organisation what was done.', 'A confirmation on the record.'),
+  ],
+  defaultAgents: 0,
+  hue: 158,
+});
+
 export const PROFILE_BY_ID: Record<string, OperatingProfile> = Object.fromEntries(PROFILES.map((p) => [p.id, p]));
 
-/** Profiles a founder can seat on the executive team (the CEO is always seated; the judge follows the arbiter setting). */
+/** Profiles a founder can seat on the executive team (the CEO and the signatory are always seated; the judge follows the arbiter setting). */
 export const LEAD_PROFILES = PROFILES.filter((p) => p.kind === 'lead');
 
 export const MAX_AGENTS_PER_LEAD = 8;

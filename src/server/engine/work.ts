@@ -1,4 +1,6 @@
+import { waitsOnAi } from '../../shared/signatory';
 import type { Decision, Organisation, Plan, ReviewRound } from '../../shared/types';
+import { signatoryOf } from './signatory';
 import { ceoOf, arbiterOf, currentPhase, execById, followUpsLeft, isPlanActive, leadsOf, nextId, planById, postToBoard } from './state';
 
 /**
@@ -20,6 +22,8 @@ export type WorkItem =
   | { kind: 'phase_review'; key: string; execId: string; planId: string; phaseIndex: number }
   | { kind: 'report'; key: string; execId: string; planId: string }
   | { kind: 'react'; key: string; execId: string; reportIds: string[] }
+  /** An AI signatory deciding whether a payment or a signature a lead asked for is authorised. */
+  | { kind: 'authorise'; key: string; execId: string; requestId: string }
   /** Carry a whole plan through in a hosted session: every phase, and the report to the board. */
   | { kind: 'execute'; key: string; execId: string; planId: string };
 
@@ -185,6 +189,14 @@ export function nextWork(org: Organisation): WorkItem[] {
     }
   } else if (org.cycle.stage === 'direct') {
     items.push({ kind: 'direct', key: `direct:${org.cycle.number}`, execId: ceo.id });
+  }
+
+  // With an AI in the signatory's seat, each request waits for its ruling. With a person there, requests wait
+  // for the person and the organisation gets on with its work.
+  for (const request of org.signatory.requests) {
+    if (waitsOnAi(request, org.settings.signatory)) {
+      items.push({ kind: 'authorise', key: `authorise:${request.id}`, execId: signatoryOf(org).id, requestId: request.id });
+    }
   }
 
   for (const round of org.reviewRounds) {

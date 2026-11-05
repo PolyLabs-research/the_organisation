@@ -10,11 +10,13 @@ import type {
   Task,
 } from '../../shared/types';
 import { MAX_AGENTS_PER_LEAD } from '../../shared/profiles';
+import { waitsOnAi } from '../../shared/signatory';
 import { ProviderError, type CallUsage, type Provider } from '../providers/types';
 import type { Store } from '../store';
 import { Workspace } from '../workspace';
 import { StaleWork, describeWork, perform, type EngineContext } from './handlers';
 import { MAX_RESULT_CHARS, clean } from './records';
+import { addNote, reopenRequest, settleRequest } from './signatory';
 import {
   addSpend,
   addSteer,
@@ -177,6 +179,7 @@ export class OrgRunner {
   updateSettings(patch: Partial<OrgSettings>): void {
     const org = this.org;
     const before = org.settings.execution;
+    const holder = org.settings.signatory;
     assertModelRefs(patch);
     const next = sanitiseSettings(patch, org.settings);
     // A model that cannot be called would stop the organisation at its next call. Better to say so now.
@@ -199,6 +202,19 @@ export class OrgRunner {
       }
     }
     syncJudge(org);
+    if (org.settings.signatory !== holder) {
+      // What the person took back from an earlier AI ruling stays with the person, so it is not counted.
+      const waiting = org.signatory.requests.filter((r) => waitsOnAi(r, 'ai')).length;
+      postToBoard(
+        org,
+        'signatory',
+        'system',
+        org.settings.signatory === 'ai' ? 'The signatory is now an AI seat' : 'The signatory is now a person',
+        org.settings.signatory === 'ai'
+          ? `The shareholders have put an AI in the signatory's seat. It authorises or declines each request; a person still carries out what it authorises.${waiting ? ` ${waiting} request${waiting === 1 ? '' : 's'} already waiting ${waiting === 1 ? 'goes' : 'go'} to it.` : ''}`
+          : `The shareholders have put a person in the signatory's seat. Requests wait for that person to carry them out or refuse them.`,
+      );
+    }
     if (org.settings.archiveSessions) this.tidy();
     this.changed();
     this.pump();
@@ -248,6 +264,28 @@ export class OrgRunner {
   /** Archive what can be archived, beside the loop. Failures wait for the next time. */
   private tidy(): void {
     this.chores = this.chores.then(() => this.archiveSessions()).catch(() => {});
+  }
+
+  // ---- the signatory's desk ----
+
+  /** The person says a request has been carried out, or refuses it and says why. The organisation is told. */
+  settleRequest(requestId: string, result: 'done' | 'rejected', note: string): void {
+    settleRequest(this.org, requestId, result, note);
+    this.changed();
+    this.pump();
+  }
+
+  /** Take back what was recorded about a request, so that it is open again. */
+  reopenRequest(requestId: string): void {
+    reopenRequest(this.org, requestId);
+    this.changed();
+    this.pump();
+  }
+
+  /** Something the person wants the organisation to know that is not an answer to one request. */
+  noteFromSignatory(text: string): void {
+    addNote(this.org, text);
+    this.changed();
   }
 
   setAgentCount(execId: string, count: number): void {
@@ -597,6 +635,15 @@ export class OrgRunner {
     const next = finished + 1;
     const archiveUpTo = next - LIVE_CYCLES;
     const old = (cycle: number) => cycle <= archiveUpTo;
+    // A request to the signatory leaves with the cycle it was settled in, and takes everything said about it
+    // along, whenever that was said. One that is still open stays, however old: it is still waiting for someone.
+    const desk = org.signatory;
+    const settledIn = new Map(desk.requests.filter((r) => r.outcome && old(r.outcome.cycle)).map((r) => [r.id, r.outcome!.cycle]));
+    const leavesWith = (m: { cycle: number; requestId?: string }): number | null => {
+      const request = m.requestId ? desk.requests.find((r) => r.id === m.requestId) : undefined;
+      if (request) return settledIn.get(request.id) ?? null;
+      return old(m.cycle) ? m.cycle : null;
+    };
     const leaving = new Set([...org.plans, ...org.board].filter((x) => old(x.cycle)).map((x) => x.cycle));
     for (const cycle of leaving) {
       const data = {
@@ -607,6 +654,10 @@ export class OrgRunner {
         reports: org.reports.filter((r) => r.cycle === cycle),
         reviewRounds: org.reviewRounds.filter((r) => r.cycle === cycle),
         board: org.board.filter((m) => m.cycle === cycle),
+        signatory: {
+          requests: desk.requests.filter((r) => settledIn.get(r.id) === cycle),
+          messages: desk.messages.filter((m) => leavesWith(m) === cycle),
+        },
       };
       this.store.archiveCycle(org.id, cycle, data).catch((err) => console.warn(`Could not archive cycle ${cycle} of ${org.id}: ${err.message}`));
     }
@@ -615,6 +666,8 @@ export class OrgRunner {
     org.reports = org.reports.filter((r) => !old(r.cycle));
     org.reviewRounds = org.reviewRounds.filter((r) => !old(r.cycle));
     org.board = org.board.filter((m) => !old(m.cycle));
+    desk.messages = desk.messages.filter((m) => leavesWith(m) === null);
+    desk.requests = desk.requests.filter((r) => !settledIn.has(r.id));
     org.inbox = {};
 
     org.cycle = { number: next, stage: 'consult', consults: {}, intent: null, priorities: [], startedAt: endedAt };

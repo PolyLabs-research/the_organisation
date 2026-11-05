@@ -1415,6 +1415,57 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(body('POST', '/v1/agents', 0).system).toContain('/mnt/session/outputs/');
   });
 
+  it('puts what a lead asks for in a phase record to the signatory, and tells the lead it has not happened', async () => {
+    const replies: string[] = [];
+    api.script = async (s) => {
+      await phase(s, 'Spec');
+      s.says('Starting Build.');
+      s.delegate('sthr_a', 'Build: write the document', 'Wrote build.md.', { name: 'engineering/build.md', content: '# Build' });
+      await s.charge(10);
+      const asked = await s.call('record_phase', {
+        phase: 'Build',
+        summary: 'Build passed its gate.',
+        requests: [
+          { kind: 'payment', title: 'A domain name', detail: 'The release needs an address people can reach.', amount: '12 GBP a year', party: 'A registrar', files: ['engineering/build.md'] },
+          { kind: 'signature', title: 'Hosting terms', detail: 'Read them, and sign if we should be bound.', party: 'The host' },
+          'not a request',
+        ],
+      });
+      replies.push(asked.text);
+      s.says('Starting Test.');
+      s.delegate('sthr_a', 'Test: write the document', 'Wrote test.md.', { name: 'engineering/test.md', content: '# Test' });
+      await s.charge(10);
+      replies.push((await s.call('record_phase', { phase: 'Test', summary: 'Test passed its gate.' })).text);
+      await phase(s, 'Release');
+      await report(s);
+    };
+    h = await setup();
+    await runToRest(h.runner);
+    const { org } = h;
+    expect(org.lastError).toBeNull();
+    expect(org.plans[0]!.status).toBe('done');
+
+    // Both went to the signatory as the lead gave them; what was not a request at all was passed over.
+    expect(org.signatory.requests.map((r) => [r.kind, r.title, r.amount, r.party, r.files, r.fromId, r.phase, r.planId, r.status])).toEqual([
+      ['payment', 'A domain name', '12 GBP a year', 'A registrar', ['engineering/build.md'], 'cto', 'Build', org.plans[0]!.id, 'pending'],
+      ['signature', 'Hosting terms', '', 'The host', [], 'cto', 'Build', org.plans[0]!.id, 'pending'],
+    ]);
+    // The lead was told at once that they had gone, and that they are waiting, not done.
+    expect(replies[0]).toContain('Recorded. 2 requests have gone to the signatory. Test is next.');
+    expect(replies[0]).toContain('Waiting, and so not yet done:');
+    expect(replies[0]).toContain('Pay: A domain name (12 GBP a year, to A registrar) [waiting for a person to decide and carry it out]');
+    // And again at the next record, with no new request made.
+    expect(replies[1]).toMatch(/^Recorded\. Release is next\./);
+    expect(replies[1]).toContain('Only what is marked DONE has happened.');
+
+    // The lead that sessions are started from is told how to ask, in its tools and in how it is told to work.
+    const lead = [...api.agents.values()].find((a) => a.tools.some((t: { name?: string }) => t.name === 'record_phase'))!;
+    const record = lead.tools.find((t: { name?: string }) => t.name === 'record_phase');
+    expect(record.input_schema.properties.requests.items.properties.kind.enum).toEqual(['payment', 'signature']);
+    expect(record.input_schema.required).toEqual(['phase', 'summary']);
+    expect(JSON.stringify(api.requests.find((r) => r.method === 'POST' && r.path === '/v1/sessions')!.body)).toContain('Signing and paying: neither you nor your agents can pay for anything or sign anything');
+  });
+
   it('archives the session once its plan has reported, when the organisation is set to', async () => {
     api.script = wholePlan;
     h = await setup({ archiveSessions: true });

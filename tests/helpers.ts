@@ -11,7 +11,7 @@ import { Store } from '../src/server/store';
 export const TEAM: ExecutiveDraft[] = [{ profileId: 'engineering', agentCount: 2 }, { profileId: 'product' }, { profileId: 'marketing' }];
 
 /** A quiet simulator: no objections, follow-ups or rework unless a test asks for them. */
-export const QUIET: MockOptions = { delayMs: 0, objections: 'never', followUps: 'never', rework: 'never' };
+export const QUIET: MockOptions = { delayMs: 0, objections: 'never', followUps: 'never', rework: 'never', requests: 'never' };
 
 export interface Harness {
   runner: OrgRunner;

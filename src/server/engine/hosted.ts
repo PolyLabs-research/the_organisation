@@ -1,10 +1,12 @@
 import path from 'node:path';
+import { isOpen } from '../../shared/signatory';
 import type { Executive, ManagedSession, Plan, PlanPhase, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, ProviderError, type PlanHooks, type PlanJob, type PlanOutcome } from '../providers/types';
 import { WorkspaceError } from '../workspace';
 import type { Commit, EngineContext } from './handlers';
 import * as prompts from './prompts';
 import { MAX_RESULT_CHARS, clean, fileReport, logRemitDecisions, newTask, now } from './records';
+import { raiseRequests } from './signatory';
 import { execById, isPlanActive, postToBoard, sessionAllowance, teamDir } from './state';
 
 // A plan carried out in a hosted session: the lead and its agents work in a
@@ -192,15 +194,20 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       current.status = 'done';
       current.summary = clean(record.summary, 4000);
       logRemitDecisions(org, lead, plan, record.decisions);
+      // What the plan now needs paid for or signed goes to the signatory. The session does not wait for it.
+      const asked = raiseRequests(org, lead, plan, current.name, record.requests ?? []);
       const next = plan.phases[index + 1];
       // The record's reply is a sure way to reach the lead, so anything the board has since ruled goes with it.
       const pending = pendingInstructions();
       managed.instructionsSent = plan.amendments.length;
       changed();
       const binding = pending.length ? `\n\n${prompts.sessionInstructions(pending)}` : '';
+      const put = asked.length ? ` ${asked.length} request${asked.length === 1 ? ' has' : 's have'} gone to the signatory.` : '';
+      // The reply is also where the lead hears what became of what it asked for earlier.
+      const desk = org.signatory.requests.some((r) => isOpen(r) || (r.outcome && r.outcome.cycle >= org.cycle.number - 1)) ? `\n\n${prompts.signatoryBlock(org)}` : '';
       return {
         ok: true,
-        message: `Recorded. ${next ? `${next.name} is next.` : `Every phase is now recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`}${binding}`,
+        message: `Recorded.${put} ${next ? `${next.name} is next.` : `Every phase is now recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`}${binding}${desk}`,
       };
     },
 

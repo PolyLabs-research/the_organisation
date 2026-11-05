@@ -123,6 +123,11 @@ export function Home({ meta }: { meta: Meta }) {
                   </div>
                   <div className="org-row-side">
                     <span className={`status status-${org.status}${org.pauseReason === 'error' ? ' status-bad' : ''}`}>{statusText(org)}</span>
+                    {org.waiting ? (
+                      <span className="tag tag-warn" title="Requests to the signatory that only a person can now carry out">
+                        {org.waiting} to pay or sign
+                      </span>
+                    ) : null}
                     <span className="muted">Cycle {org.cycle}</span>
                     <span className="meter-line" title={`${money(org.costUsd)} of ${money(org.budgetUsd)}`}>
                       <span className="meter">

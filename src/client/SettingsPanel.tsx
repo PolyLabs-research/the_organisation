@@ -72,6 +72,19 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
               <option value="judge">An independent judge</option>
             </select>
           </Field>
+          <Field
+            label="The signatory, who signs and pays, is"
+            hint={
+              draft.signatory === 'ai'
+                ? 'An AI seat authorises or declines each request by what the shareholders want. Nothing here can move money or sign a document, so what it authorises still waits for you to carry out.'
+                : 'Requests come to you. You pay or sign outside this system, and tell the organisation in the Signatory tab what you did or why you refused.'
+            }
+          >
+            <select value={draft.signatory} onChange={(e) => set('signatory', e.target.value as OrgSettings['signatory'])}>
+              <option value="human">You: a person</option>
+              <option value="ai">An AI seat</option>
+            </select>
+          </Field>
           <Field label="Follow-up work per cycle" hint="How far one board report may set off further plans before the CEO takes stock.">
             <select value={draft.maxFollowUpDepth} onChange={(e) => set('maxFollowUpDepth', Number(e.target.value))}>
               <option value={0}>None</option>

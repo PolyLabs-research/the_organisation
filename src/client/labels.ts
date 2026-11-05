@@ -1,4 +1,4 @@
-import type { BoardMessageType, CycleStage, DecisionOutcome, ExecutionMode, ManagedSession, PlanStatus, Stance, WorkflowRun } from '../shared/types';
+import type { BoardMessageType, CycleStage, DecisionOutcome, ExecutionMode, ManagedSession, PlanStatus, SignatoryRequest, Stance, WorkflowRun } from '../shared/types';
 
 export const CEO_QUESTION_TEXT = 'What would the shareholders want now?';
 
@@ -27,6 +27,7 @@ export const MESSAGE_LABEL: Record<BoardMessageType, string> = {
   reaction: 'Follow-up',
   steer: 'Steer',
   steer_response: 'Steer',
+  signatory: 'Signing and paying',
   system: 'Notice',
 };
 
@@ -53,6 +54,14 @@ export const PLAN_ACTION: Record<DecisionOutcome['planAction'], string> = {
   proceed: 'The plan proceeds as drafted',
   amend: 'The plan proceeds with changes',
   cancel: 'The plan is cancelled',
+};
+
+export const REQUEST_STATUS: Record<SignatoryRequest['status'], string> = {
+  pending: 'Waiting',
+  authorised: 'Authorised, not yet done',
+  done: 'Done',
+  rejected: 'Rejected',
+  withdrawn: 'Withdrawn',
 };
 
 export const EXECUTION: Record<ExecutionMode, string> = {

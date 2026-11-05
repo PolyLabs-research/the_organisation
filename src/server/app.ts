@@ -201,6 +201,24 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(runner.view());
   });
 
+  // The signatory's desk: the person answers a request (it is done, or it is refused and why), takes an answer
+  // back, or leaves the organisation a message.
+  app.post('/api/orgs/:id/requests/:requestId', (req, res) => {
+    const runner = runnerOf(req);
+    const requestId = String(req.params.requestId);
+    const action = text(req.body?.action);
+    if (action === 'done' || action === 'rejected') runner.settleRequest(requestId, action, text(req.body?.note));
+    else if (action === 'reopen') runner.reopenRequest(requestId);
+    else throw new ValidationError('Say what became of the request: "done", "rejected" or "reopen".');
+    res.json(runner.view());
+  });
+
+  app.post('/api/orgs/:id/signatory/notes', (req, res) => {
+    const runner = runnerOf(req);
+    runner.noteFromSignatory(text(req.body?.text));
+    res.json(runner.view());
+  });
+
   app.get('/api/orgs/:id/activity', (req, res) => {
     res.json(runnerOf(req).activity);
   });

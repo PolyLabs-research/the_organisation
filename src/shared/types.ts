@@ -19,7 +19,11 @@ export interface SopPhase {
   deliverable: string;
 }
 
-export type ExecutiveKind = 'ceo' | 'lead' | 'judge';
+/**
+ * ceo and lead are the executive team. judge is seated when the organisation uses one to sign off decisions.
+ * signatory is the seat that signs and pays: it is always there, and is held by a person unless set otherwise.
+ */
+export type ExecutiveKind = 'ceo' | 'lead' | 'judge' | 'signatory';
 
 /** A profile type from the library: a role plus the operating profile it always follows. */
 export interface OperatingProfile {
@@ -49,7 +53,7 @@ export interface Executive {
   remit: string;
   /** This seat's standard operating profile. Every plan it owns runs these phases in order. */
   phases: SopPhase[];
-  /** Number of agents under this lead's control. Zero for the CEO and the judge. */
+  /** Number of agents under this lead's control. Zero for every seat that is not a lead. */
   agentCount: number;
   hue: number;
 }
@@ -85,6 +89,69 @@ export interface OrgSettings {
    * readable in the Console but can no longer be changed, and archiving cannot be undone.
    */
   archiveSessions: boolean;
+  /**
+   * Who holds the seat that signs and pays.
+   * human: a person, who acts outside this system and says here what was done or why it was refused.
+   * ai: an AI seat authorises or declines each request. What it authorises still has to be carried out by a
+   * person, since nothing here can move money or sign a document.
+   */
+  signatory: SignatoryHolder;
+}
+
+export type SignatoryHolder = 'human' | 'ai';
+
+/**
+ * A payment to make or a document to sign, put to the signatory by a lead. The organisation cannot do either
+ * for itself, so this is the only way such a thing happens, and until a request is done it has not happened.
+ */
+export interface SignatoryRequest {
+  id: string;
+  /** The cycle it was raised in. */
+  cycle: number;
+  kind: 'payment' | 'signature';
+  /** The lead who asked. */
+  fromId: string;
+  planId: string | null;
+  /** The phase of the plan at whose gate it was raised. */
+  phase: string | null;
+  title: string;
+  /** Why the organisation needs it now, and what exactly the signatory is asked to do. */
+  detail: string;
+  /** For a payment: the amount and its currency, in the lead's words. Empty for a signature. */
+  amount: string;
+  /** Who is to be paid, or who the agreement is with. */
+  party: string;
+  /** Workspace files to read first: the agreement to sign, a quote, the reasoning. */
+  files: string[];
+  /**
+   * pending: waiting for the signatory to decide. authorised: an AI signatory has agreed to it, and it waits for a
+   * person to carry it out. done: carried out. rejected: turned down, by the AI signatory or by the person.
+   * withdrawn: the organisation no longer wants it (its plan was cancelled).
+   */
+  status: 'pending' | 'authorised' | 'done' | 'rejected' | 'withdrawn';
+  raisedAt: string;
+  /** What an AI signatory decided, when one holds the seat. */
+  ruling: { verdict: 'authorised' | 'declined'; reason: string; at: string } | null;
+  /** How it ended, who ended it, and what they said. */
+  outcome: { result: 'done' | 'rejected' | 'withdrawn'; by: 'person' | 'ai' | 'organisation'; note: string; at: string; cycle: number } | null;
+}
+
+/** One line of the conversation between the organisation and whoever signs and pays for it. */
+export interface SignatoryMessage {
+  id: string;
+  at: string;
+  cycle: number;
+  /** An executive id (the lead who asked, or the signatory's seat when an AI speaks for it), "person" for the human, or "system". */
+  fromId: string;
+  kind: 'request' | 'authorised' | 'declined' | 'done' | 'rejected' | 'withdrawn' | 'reopened' | 'note';
+  text: string;
+  requestId?: string;
+}
+
+/** What has been put to the signatory and what has been said about it. */
+export interface SignatoryDesk {
+  requests: SignatoryRequest[];
+  messages: SignatoryMessage[];
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed';
@@ -314,6 +381,7 @@ export type BoardMessageType =
   | 'reaction'
   | 'steer'
   | 'steer_response'
+  | 'signatory'
   | 'system';
 
 /** One entry in the board feed. `fromId` is an executive id, "shareholders" or "system". */
@@ -328,6 +396,7 @@ export interface BoardMessage {
   planId?: string;
   decisionId?: string;
   reportId?: string;
+  requestId?: string;
 }
 
 export interface Steer {
@@ -407,6 +476,8 @@ export interface Organisation {
   inbox: Record<string, string[]>;
   board: BoardMessage[];
   steers: Steer[];
+  /** Payments and signatures asked of the signatory, and the conversation about them. */
+  signatory: SignatoryDesk;
   usage: UsageTotals;
   usageByExec: Record<string, UsageTotals>;
 }
@@ -438,6 +509,7 @@ export type WorkKind =
   | 'report'
   | 'react'
   | 'steer_review'
+  | 'authorise'
   | 'execute';
 
 /** A record of one model call, for the activity log. */
@@ -467,6 +539,8 @@ export interface OrgSummary {
   costUsd: number;
   budgetUsd: number;
   executives: Array<Pick<Executive, 'id' | 'short' | 'title' | 'hue' | 'kind' | 'agentCount'>>;
+  /** Requests to the signatory that are waiting for a person to act. */
+  waiting: number;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { describeRequest, isOpen } from '../../shared/signatory';
 import type { BoardReport, Executive, Organisation, Plan, PlanOrigin } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
 import { Workspace, workspaceTools } from '../workspace';
@@ -6,6 +7,7 @@ import { executeInSession } from './hosted';
 import * as prompts from './prompts';
 import { MAX_RESULT_CHARS, bullets, clean, fileReport, logRemitDecisions, newTask, now } from './records';
 import * as schemas from './schemas';
+import { raiseRequests, ruleOnRequest, withdrawRequests } from './signatory';
 import { arbiterOf, execById, followUpsLeft, isPlanActive, leadsOf, nextId, planById, postToBoard, teamDir } from './state';
 import type { WorkItem } from './work';
 
@@ -94,6 +96,8 @@ export function cancelPlan(org: Organisation, plan: Plan, reason: string, byId: 
   plan.status = 'cancelled';
   plan.cancelReason = clean(reason, 600);
   plan.updatedAt = now();
+  // What the plan asked the signatory for is no longer wanted. Nobody should pay for work that has been stopped.
+  withdrawRequests(org, plan, plan.cancelReason);
   // A decision still open on a cancelled plan has nothing left to decide.
   const decision = org.decisions.find((d) => d.id === plan.decisionId && d.status !== 'resolved');
   if (decision) {
@@ -165,6 +169,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         leads: leads.map(seatContext),
         consults: org.cycle.consults,
         newSteer: org.steers.filter((s) => s.status === 'new').map((s) => s.text),
+        signatory: deskContext(org),
       });
       const seen = new Set<string>();
       const directives = data.directives.filter((d) => {
@@ -444,6 +449,25 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         } else {
           phase.status = 'done';
         }
+        // What the plan now needs paid for or signed goes to the signatory. The plan does not wait for it.
+        raiseRequests(org, exec, plan, phase.name, data.requests);
+      };
+    }
+
+    case 'authorise': {
+      const request = need(
+        org.signatory.requests.find((r) => r.id === item.requestId),
+        `request ${item.requestId}`,
+      );
+      const plan = request.planId ? planById(org, request.planId) : undefined;
+      const files = await readForReview(workspace, request.files);
+      const data = await ask(system, prompts.authorisePrompt(org, request, plan, files), schemas.Authorise, {
+        request: { id: request.id, kind: request.kind, title: request.title, amount: request.amount, party: request.party, detail: request.detail },
+      });
+      return () => {
+        // The seat may have been given back to a person while the AI was deciding: then it is the person's to decide.
+        if (org.settings.signatory !== 'ai') return;
+        ruleOnRequest(org, request, data.verdict, data.reason);
       };
     }
 
@@ -559,6 +583,16 @@ async function readForReview(workspace: Workspace, paths: string[]): Promise<pro
   return files;
 }
 
+/** The signatory's desk in a few lists, for a provider that answers from facts instead of from a prompt. */
+export function deskContext(org: Organisation) {
+  const lately = org.signatory.requests.filter((r) => r.outcome && r.outcome.cycle >= org.cycle.number - 1);
+  return {
+    waiting: org.signatory.requests.filter(isOpen).map(describeRequest),
+    done: lately.filter((r) => r.outcome!.result === 'done').map(describeRequest),
+    rejected: lately.filter((r) => r.outcome!.result === 'rejected').map((r) => `${describeRequest(r)}: ${r.outcome!.note}`),
+  };
+}
+
 export function seatContext(exec: Executive) {
   return {
     id: exec.id,
@@ -614,6 +648,10 @@ export function describeWork(org: Organisation, item: WorkItem): string {
       return 'Reading board reports';
     case 'steer_review':
       return 'Applying new shareholder steer';
+    case 'authorise': {
+      const request = org.signatory.requests.find((r) => r.id === item.requestId);
+      return request ? `Deciding on a ${request.kind === 'payment' ? 'payment' : 'signature'}: ${request.title}` : 'Deciding on a request';
+    }
     case 'execute':
       return 'Carrying out the plan with its team in a hosted session';
   }

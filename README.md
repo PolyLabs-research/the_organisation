@@ -2,7 +2,7 @@
 
 Describe an idea and get an organisation of AI agents that works on it: a CEO who answers to you, an executive team where every lead follows a standard operating profile, and the agents each lead directs. It runs in a loop. When all the work is done, the CEO asks "What would the shareholders want now?" and the next cycle begins.
 
-You are the shareholders. You give steer; the CEO enforces it.
+You are the shareholders. You give steer; the CEO enforces it. The organisation cannot pay for anything or sign anything: for that it asks its [Authorised Signatory](#signing-and-paying), which is you unless you seat an AI there, and you do the paying and signing yourself, outside this program.
 
 Built around Claude, and able to run on other makers' models as well (OpenAI, Google, Meta and the main Chinese labs), with a web interface for establishing organisations and watching them work.
 
@@ -54,7 +54,7 @@ flowchart TD
   Rep -- "all jobs done" --> CEO
 ```
 
-**Seats.** Every organisation has a CEO. You seat up to eight executive leads beside it, either from a recommendation (describe the idea and a team is proposed, with reasons) or by hand from the profile library. A seat that is not in the library can be added with its own title, remit and phases.
+**Seats.** Every organisation has a CEO and an [Authorised Signatory](#signing-and-paying). You seat up to eight executive leads beside them, either from a recommendation (describe the idea and a team is proposed, with reasons) or by hand from the profile library. A seat that is not in the library can be added with its own title, remit and phases.
 
 **Standard operating profiles.** Each profile type always works the same way. Every plan a lead owns runs its phases in order, and a phase must pass the lead's gate review before the next begins.
 
@@ -101,10 +101,38 @@ Agents can work in one of two ways, chosen per organisation: **on this machine**
   - **Board**: the feed of everything said at board level, newest first, with completed cycles below it.
   - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report.
   - **Decisions**: what went to the board, each lead's position and the ruling, plus the decisions leads took in their own remit.
+  - **Signatory**: what the organisation has asked to have paid for or signed, and where you tell it what you did. The tab, the dashboard and the home page show how many requests are waiting for you.
   - **Files**: the workspace.
   - **Activity**: each unit of work with its tokens, cost and duration.
 
 Start, pause, stop and settings are at the top of the dashboard. Pause lets calls in flight finish; stop cuts them off and puts the interrupted work back in the queue. Either one holds hosted sessions where they are.
+
+## Signing and paying
+
+An organisation of agents can draft a contract and choose a supplier, but it cannot sign the one or pay the other, and nothing in this program can move money or bind you to anything. What every organisation has instead is one more seat on its board, the **Authorised Signatory**, and a rule that every seat works under: until the signatory says a thing is done, it has not happened, and nothing may be planned, written or reported as though it had.
+
+![The Signatory tab: requests from three leads, one marked paid with a note, one rejected with a reason, and one still waiting with its two buttons](docs/signatory.png)
+
+*The Signatory tab, here in simulation.*
+
+**Who holds the seat.** You do, unless you choose otherwise when establishing the organisation or afterwards in its settings.
+
+- **You** (the default). A request waits until you have paid or signed, outside this program, and said so here, or have refused it.
+- **An AI seat.** The AI reads each request with the files the lead named, the plan it is for and your steer, and authorises or declines it, with a reason. To authorise is not to do: what it authorises then waits for you to carry out and confirm, and you can still refuse it. What it declines you can take back and decide yourself, and the AI is not asked a second time. Changing who holds the seat takes effect at once, for requests already waiting as well.
+
+**How a request is raised.** At each phase gate a lead is asked whether its plan now needs something paid for or signed for the work to take effect. If it does, the lead puts a request to the signatory: a payment (what for, how much, to whom) or a signature (what, and with whom), why it is needed now, and the files to read first. In a hosted session the lead asks when it records the phase. A lead can raise three requests at one gate and have ten open at a time, and asking again for something that is still open is the same request, not a second one.
+
+**The work does not wait.** A request that is waiting for you holds up neither the plan that raised it nor the cycle. The organisation carries on, and each lead and the CEO are shown what is still waiting whenever they propose, plan, hand out work, gate a phase or report, so they work round it.
+
+**Answering.** The **Signatory** tab is your conversation with the organisation. Each request that is waiting for you has two buttons: **I have paid this** (or **I have signed this**) and **Reject it**. Saying it is done takes an optional note ("Paid by card today, reference 12345"). Rejecting needs a reason, because the reason is what the organisation acts on. Either answer can be taken back if it was given to the wrong request. You can also send a message that is not about any one request ("Nothing can be paid before Monday").
+
+Answers are given with buttons on purpose. What you type in the message box is passed on as you wrote it; it is never read as "that one is paid".
+
+**How the organisation hears.** Your answer goes on the board, into what the leads and the CEO are shown the next time they act, and into the cycle's record; a plan in a hosted session is told in the reply to its next phase record. An answer or a message is repeated for the cycle it was given in and the one after. For a rule that should always hold ("no payment over 50 a month without asking first"), give it as shareholder steer instead.
+
+**When a plan is cancelled**, what it asked for is withdrawn, so nobody pays for work that has been stopped.
+
+**Check before you pay.** A request is written by a model. Its amount, its payee and its reason are what the model wrote, not facts this program has checked, and a model can be wrong about any of them. Read the files it points to and confirm the details yourself, as you would with anything a new member of staff asked you to pay.
 
 ## Models and keys
 
@@ -242,7 +270,8 @@ Everything is on disk under `data/` (set `ORG_DATA_DIR` to move it), one folder 
 
 ```
 data/orgs/<id>/
-  org.json         live state: seats, cycle, plans, decisions, board feed, usage
+  org.json         live state: seats, cycle, plans, decisions, board feed, the signatory's
+                   requests and conversation, usage
   activity.jsonl   one line per unit of work
   archive/         cycles that have left live state (the three most recent stay live)
   workspace/       the files the agents produce
@@ -252,6 +281,8 @@ data/connections.json  the API keys added in the interface, and what each was la
 ```
 
 `connections.json` holds keys in the clear, readable only by your user. Leave it out of anything you share or back up to somewhere others can read; the whole `data/` folder is already ignored by git.
+
+A request to the signatory is archived with the cycle in which it was settled, along with everything said about it. One that is still waiting stays in live state however old it is.
 
 A folder is loaded only if its name is the organisation's id, so a copy kept beside it as a backup is ignored rather than mistaken for the original.
 
@@ -285,7 +316,8 @@ src/shared/      types and the profile library, used by server and client
 src/server/
   engine/        the loop: what work is ready (work.ts), doing it (handlers.ts,
                  and hosted.ts for a plan in a hosted session), running it
-                 (runner.ts), the prompts and the output schemas
+                 (runner.ts), the signatory's desk (signatory.ts), the prompts
+                 and the output schemas
   providers/     Claude, the simulator, and pricing; the router that sends each
                  call to the provider its model is on (router.ts); the providers
                  for OpenAI-compatible endpoints and for OpenAI's Responses API;
@@ -312,7 +344,9 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - Hosted sessions have not been run against the live API (see above), and hold a lead to its allocation of agents by instruction only.
 - No provider other than the simulator has been called from this code: not Claude's API, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)).
 - Hosted sessions and web search are for Claude models only.
-- One organisation is one process's worth of state: there is no multi-user access and no login.
+- Nothing here pays or signs. The signatory's seat records what a person did elsewhere; an AI in the seat can authorise or decline a request, and no more. Paying from inside the program would need a payment service connected to it, which this version does not have.
+- Requests to the signatory are raised by leads at their phase gates. A lead cannot ask in the middle of a phase, and the CEO cannot ask at all.
+- One organisation is one process's worth of state: there is no multi-user access and no login. Whoever can open the interface can answer for the signatory.
 - A board decision is one round of positions and a ruling; there is no further debate.
 - Steer given mid-cycle changes plans, not tasks already running: an agent finishes the task it is on.
 - Seats are fixed once an organisation is established. Agent allocation, the arbiter and every limit can be changed afterwards.

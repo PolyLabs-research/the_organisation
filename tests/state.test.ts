@@ -54,30 +54,40 @@ describe('the profile library', () => {
 describe('establishing an organisation', () => {
   const base = { name: 'Fernery', idea: 'Houseplants by post.' };
 
-  it('always seats a CEO above the leads the founder chose', () => {
+  it('always seats a CEO above the leads the founder chose, and a signatory to sign and pay for them', () => {
     const org = createOrganisation({ ...base, executives: [{ profileId: 'engineering', agentCount: 4 }, { profileId: 'finance' }] }, 'org_1');
     expect(org.executives.map((e) => [e.id, e.kind, e.agentCount])).toEqual([
       ['ceo', 'ceo', 0],
       ['cto', 'lead', 4],
       ['cfo', 'lead', 1],
+      ['signatory', 'signatory', 0],
     ]);
+    // The seat is held by a person unless the founder says otherwise, and its desk starts empty.
+    expect(org.settings.signatory).toBe('human');
+    expect(org.signatory).toEqual({ requests: [], messages: [] });
+    expect(org.board[0]!.body).toContain('Authorised Signatory, a seat held by a person');
     expect(org.status).toBe('idle');
     expect(org.cycle).toMatchObject({ number: 1, stage: 'consult' });
   });
 
-  it('ignores an attempt to seat a second CEO or a judge by hand', () => {
-    const org = createOrganisation({ ...base, executives: [{ profileId: 'ceo' }, { profileId: 'judge' }, { profileId: 'product' }] }, 'org_1');
-    expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'cpo']);
+  it('ignores an attempt to seat a second CEO, a judge or a second signatory by hand', () => {
+    const org = createOrganisation({ ...base, executives: [{ profileId: 'ceo' }, { profileId: 'judge' }, { profileId: 'signatory' }, { profileId: 'product' }] }, 'org_1');
+    expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'cpo', 'signatory']);
   });
 
   it('seats the judge when the founder chooses one as arbiter', () => {
     const org = createOrganisation({ ...base, executives: [{ profileId: 'product' }], settings: { arbiter: 'judge' } }, 'org_1');
-    expect(org.executives.at(-1)).toMatchObject({ id: 'judge', kind: 'judge', agentCount: 0 });
+    expect(org.executives.map((e) => [e.id, e.kind, e.agentCount])).toEqual([
+      ['ceo', 'ceo', 0],
+      ['cpo', 'lead', 2],
+      ['judge', 'judge', 0],
+      ['signatory', 'signatory', 0],
+    ]);
   });
 
   it('gives two seats of the same profile different ids', () => {
     const org = createOrganisation({ ...base, executives: [{ profileId: 'engineering' }, { profileId: 'engineering', title: 'Platform Lead' }] }, 'org_1');
-    expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'cto', 'cto-2']);
+    expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'cto', 'cto-2', 'signatory']);
   });
 
   it('records steer given at the outset', () => {
@@ -199,7 +209,8 @@ describe('team recommendation', () => {
     expect(rec.costUsd).toBeGreaterThan(0);
     // What comes back can be used to establish the organisation as is.
     const org = createOrganisation({ name: rec.name, idea: 'x', mission: rec.mission, executives: rec.executives }, 'org_1');
-    expect(org.executives).toHaveLength(rec.executives.length + 1);
+    // The leads recommended, with the CEO above them and the signatory beside them.
+    expect(org.executives).toHaveLength(rec.executives.length + 2);
   });
 
   it('always recommends at least three leads, whatever the idea', async () => {

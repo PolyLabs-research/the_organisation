@@ -102,12 +102,16 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(
 
 function phaseRecord(input: Record<string, unknown>): PhaseRecord {
   const decisions = Array.isArray(input.decisions) ? input.decisions : [];
+  const requests = Array.isArray(input.requests) ? input.requests : [];
   return {
     phase: str(input.phase),
     summary: str(input.summary),
     decisions: decisions
       .filter((d): d is Record<string, unknown> => typeof d === 'object' && d !== null)
       .map((d) => ({ title: str(d.title), decision: str(d.decision), rationale: str(d.rationale) })),
+    requests: requests
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+      .map((r) => ({ kind: str(r.kind), title: str(r.title), detail: str(r.detail), amount: str(r.amount), party: str(r.party), files: strings(r.files) })),
   };
 }
 

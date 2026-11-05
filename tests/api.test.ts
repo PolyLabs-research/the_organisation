@@ -81,7 +81,7 @@ describe('the API', () => {
     const created = await establish({ steer: 'Start in Manchester.' });
     const id = created.org.id;
     expect(created.org.status).toBe('idle');
-    expect(created.org.executives.map((e) => e.id)).toEqual(['ceo', 'cto', 'coo']);
+    expect(created.org.executives.map((e) => e.id)).toEqual(['ceo', 'cto', 'coo', 'signatory']);
     expect((await api('GET', '/api/orgs')).data.some((o: any) => o.id === id)).toBe(true);
 
     const started = await api<OrgView>('POST', `/api/orgs/${id}/start`);

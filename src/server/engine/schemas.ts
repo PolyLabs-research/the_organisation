@@ -132,13 +132,31 @@ export const Kickoff = z.object({
 });
 export type Kickoff = z.infer<typeof Kickoff>;
 
+/** A payment to make or a document to sign, as a lead asks for it. */
+export const RequestSpec = z.object({
+  kind: z.enum(['payment', 'signature']),
+  title: z.string().describe('What is to be paid for or signed, in a few words'),
+  detail: z.string().describe('Why the plan needs it now, and exactly what the signatory is asked to do'),
+  amount: z.string().describe('For a payment: the amount with its currency and how often, e.g. "12 GBP a year"; say so if it is an estimate. For a signature: empty'),
+  party: z.string().describe('Who is to be paid, or who the agreement is with'),
+  files: z.array(z.string()).describe('Workspace paths the signatory should read first, such as the agreement to sign or a quote; may be empty'),
+});
+export type RequestSpec = z.infer<typeof RequestSpec>;
+
 export const PhaseReview = z.object({
   verdict: z.enum(['pass', 'rework']),
   summary: z.string().describe('What the phase produced and what the next phase should rely on'),
   reworkTasks: z.array(TaskSpec).describe('For "rework": the tasks that close the gap. Otherwise empty'),
   decisions: z.array(RemitDecision),
+  requests: z.array(RequestSpec).describe('Payments to be made or documents to be signed that the plan now needs from the signatory. Empty at most gates'),
 });
 export type PhaseReview = z.infer<typeof PhaseReview>;
+
+export const Authorise = z.object({
+  verdict: z.enum(['authorise', 'decline']),
+  reason: z.string().describe('Why, in a sentence or two, for the lead who asked. For "decline": what would have to change for you to agree'),
+});
+export type Authorise = z.infer<typeof Authorise>;
 
 export const ReportOut = z.object({
   headline: z.string().describe('One line the board can read at a glance'),
