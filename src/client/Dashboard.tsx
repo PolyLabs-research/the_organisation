@@ -1,0 +1,181 @@
+import { ArrowLeft, Pause, Play, Settings2, Square } from 'lucide-react';
+import { useState } from 'react';
+import type { OrgView } from '../shared/types';
+import { api, useAction, useOrgStream, type Meta } from './api';
+import { Hierarchy } from './Hierarchy';
+import { STAGES } from './labels';
+import { SettingsPanel } from './SettingsPanel';
+import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
+import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
+
+type Tab = 'board' | 'plans' | 'decisions' | 'files' | 'activity';
+
+function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
+  const { org } = view;
+  if (org.status !== 'paused' || !org.pauseReason || org.pauseReason === 'user') return null;
+  if (org.pauseReason === 'error') {
+    return (
+      <div className="note note-bad" role="alert">
+        <span>
+          <strong>The organisation paused itself because a call failed.</strong> {org.lastError} Nothing was lost: put the cause right, then
+          resume.
+        </span>
+      </div>
+    );
+  }
+  const text = {
+    budget: 'Spend has reached the budget, so the organisation paused itself. Raise the budget to let it continue.',
+    cycle_limit: 'The organisation has completed the number of cycles you set. Raise or remove the limit to let it continue.',
+    restart: 'The server restarted while this organisation was running. Resume and it carries on from where it stopped.',
+  }[org.pauseReason];
+  return (
+    <div className="note note-warn">
+      <span>{text}</span>
+      {org.pauseReason !== 'restart' ? (
+        <button type="button" className="button" onClick={onSettings}>
+          Open settings
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
+  const { view, setView, activity, connected, missing } = useOrgStream(id);
+  const control = useAction();
+  const [tab, setTab] = useState<Tab>('board');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [planTarget, setPlanTarget] = useState<string | null>(null);
+  const [file, setFile] = useState<string | null>(null);
+
+  if (missing) {
+    return (
+      <Empty title="This organisation no longer exists.">
+        <a href="#/">Back to organisations</a>
+      </Empty>
+    );
+  }
+  if (!view) return <p className="muted">Loading…</p>;
+
+  const { org, active, draining } = view;
+  const act = (call: () => Promise<OrgView>) => void control.run(async () => setView(await call()));
+  const openPlan = (planId: string) => {
+    setPlanTarget(planId);
+    setTab('plans');
+  };
+  const openFile = (path: string) => {
+    setFile(path);
+    setTab('files');
+  };
+
+  const share = Math.min(100, (org.usage.costUsd / org.settings.budgetUsd) * 100);
+  const stage = STAGES.find((s) => s.id === org.cycle.stage)!;
+  const openDecisions = org.decisions.filter((d) => d.status !== 'resolved').length;
+  const livePlans = org.plans.filter((p) => !['done', 'cancelled', 'failed'].includes(p.status)).length;
+  const statusLabel =
+    org.status === 'running' ? 'Running' : draining ? `Pausing: ${active.length} call${active.length === 1 ? '' : 's'} finishing` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
+
+  const tabs: Array<{ id: Tab; label: string; count?: number }> = [
+    { id: 'board', label: 'Board' },
+    { id: 'plans', label: 'Plans', count: livePlans || undefined },
+    { id: 'decisions', label: 'Decisions', count: openDecisions || undefined },
+    { id: 'files', label: 'Files' },
+    { id: 'activity', label: 'Activity' },
+  ];
+
+  return (
+    <div className="dashboard">
+      <a className="back" href="#/">
+        <ArrowLeft size={15} aria-hidden="true" /> Organisations
+      </a>
+      <header className="org-head">
+        <div className="org-title">
+          <h1>{org.name}</h1>
+          <p className="muted clamp-2" title={org.mission}>
+            {org.mission}
+          </p>
+        </div>
+        <div className="org-controls">
+          <span className={`status status-${org.status}${draining ? ' status-draining' : ''}${org.pauseReason === 'error' ? ' status-bad' : ''}`} aria-live="polite">
+            {org.status === 'running' || draining ? <span className="pulse" aria-hidden="true" /> : null}
+            {statusLabel}
+          </span>
+          {org.status === 'running' ? (
+            <button type="button" className="button" onClick={() => act(() => api.pause(org.id))} disabled={control.busy} title="Stop starting new work; calls in flight finish">
+              <Pause size={15} aria-hidden="true" /> Pause
+            </button>
+          ) : (
+            <button type="button" className="button button-primary" onClick={() => act(() => api.start(org.id))} disabled={control.busy || draining}>
+              <Play size={15} aria-hidden="true" /> {org.status === 'idle' ? 'Start' : 'Resume'}
+            </button>
+          )}
+          {org.status === 'running' || draining ? (
+            <button type="button" className="button" onClick={() => act(() => api.stop(org.id))} disabled={control.busy} title="Cut off the calls in flight; interrupted work is redone on resume">
+              <Square size={14} aria-hidden="true" /> Stop now
+            </button>
+          ) : null}
+          <button type="button" className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Settings">
+            <Settings2 size={18} />
+          </button>
+        </div>
+      </header>
+
+      <div className="org-strip">
+        <div className="strip-item">
+          <span className="field-label">Cycle {org.cycle.number}</span>
+          <ol className="stages" title={stage.detail}>
+            {STAGES.map((s) => (
+              <li key={s.id} className={s.id === org.cycle.stage ? 'is-current' : ''}>
+                {s.label}
+              </li>
+            ))}
+          </ol>
+        </div>
+        <div className="strip-item strip-spend">
+          <span className="field-label">{meta.provider.simulated ? 'Simulated spend' : 'Estimated spend'}</span>
+          <span className="meter-line">
+            <span className="meter">
+              <span style={{ width: `${share}%` }} className={share >= 100 ? 'is-full' : ''} />
+            </span>
+            <span className="num">
+              {money(org.usage.costUsd)} of {money(org.settings.budgetUsd)}
+            </span>
+          </span>
+        </div>
+        <div className="strip-item">
+          <span className="field-label">Decisions signed off by</span>
+          <span>{org.settings.arbiter === 'judge' ? 'An independent judge' : 'The CEO'}</span>
+        </div>
+        {!connected ? <span className="tag tag-warn">Reconnecting…</span> : null}
+      </div>
+
+      <ErrorNote onDismiss={control.clearError}>{control.error}</ErrorNote>
+      <Banner view={view} onSettings={() => setSettingsOpen(true)} />
+
+      <div className="org-body">
+        <aside className="org-side">
+          <Hierarchy view={view} meta={meta} onView={setView} onOpenPlan={openPlan} />
+        </aside>
+        <section className="org-main">
+          <div className="tabs" role="tablist">
+            {tabs.map((t) => (
+              <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={tab === t.id ? 'is-on' : ''} onClick={() => setTab(t.id)}>
+                {t.label}
+                {t.count ? <span className="count">{t.count}</span> : null}
+              </button>
+            ))}
+          </div>
+          <div className="tab-panel" role="tabpanel">
+            {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
+            {tab === 'plans' ? <Plans org={org} target={planTarget} onOpenFile={openFile} /> : null}
+            {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
+            {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
+            {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
+          </div>
+        </section>
+      </div>
+
+      {settingsOpen ? <SettingsPanel org={org} meta={meta} onClose={() => setSettingsOpen(false)} onView={setView} /> : null}
+    </div>
+  );
+}

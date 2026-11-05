@@ -1,0 +1,265 @@
+import { Gavel, Send } from 'lucide-react';
+import { useState } from 'react';
+import type { ActiveWork, Executive, Organisation, OrgView, Plan, Steer } from '../shared/types';
+import { api, useAction, type Meta } from './api';
+import { CEO_QUESTION_TEXT, PLAN_STATUS } from './labels';
+import { ErrorNote, SeatBadge, Sop, Stepper, clock, hueStyle, money } from './ui';
+
+function isActive(plan: Plan): boolean {
+  return plan.status !== 'done' && plan.status !== 'cancelled' && plan.status !== 'failed';
+}
+
+function Working({ label }: { label: string }) {
+  return (
+    <p className="working">
+      <span className="pulse" aria-hidden="true" />
+      {label}
+    </p>
+  );
+}
+
+function Shareholders({ org, onView }: { org: Organisation; onView: (view: OrgView) => void }) {
+  const [text, setText] = useState('');
+  const send = useAction();
+  const submit = () =>
+    send.run(async () => {
+      onView(await api.steer(org.id, text.trim()));
+      setText('');
+    });
+  const steers = [...org.steers].reverse();
+  const latest = steers.slice(0, 1);
+  const earlier = steers.slice(1, 8);
+  const renderSteer = (steer: Steer) => (
+    <li key={steer.id}>
+      <p>{steer.text}</p>
+      {steer.status === 'new' ? (
+        <span className="muted">
+          {clock(steer.at)} · {org.status === 'running' ? 'With the CEO' : 'The CEO will take it up when the organisation runs'}
+        </span>
+      ) : (
+        <p className="steer-reply">
+          <strong>CEO:</strong> {steer.response}
+        </p>
+      )}
+    </li>
+  );
+  return (
+    <section className="tier tier-shareholders" aria-label="Shareholders">
+      <header className="tier-head">
+        <SeatBadge seat={{ short: 'You', hue: 40 }} />
+        <div>
+          <strong>Shareholders</strong>
+          <p className="muted">Your steer is binding. The CEO enforces it.</p>
+        </div>
+      </header>
+      <form
+        className="steer-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (text.trim()) void submit();
+        }}
+      >
+        <textarea
+          rows={2}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim()) void submit();
+          }}
+          placeholder="What do you want from the organisation now?"
+          aria-label="Steer for the CEO"
+        />
+        <button type="submit" className="button button-primary" disabled={!text.trim() || send.busy}>
+          <Send size={15} aria-hidden="true" /> Send steer
+        </button>
+      </form>
+      <ErrorNote onDismiss={send.clearError}>{send.error}</ErrorNote>
+      {latest.length ? <ul className="steers">{latest.map(renderSteer)}</ul> : null}
+      {earlier.length ? (
+        <details className="steers-earlier">
+          <summary>
+            {earlier.length} earlier steer{earlier.length === 1 ? '' : 's'}
+          </summary>
+          <ul className="steers">{earlier.map(renderSteer)}</ul>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function Ceo({ org, exec, active }: { org: Organisation; exec: Executive; active: ActiveWork[] }) {
+  const mine = active.filter((a) => a.execId === exec.id);
+  const leads = org.executives.filter((e) => e.kind === 'lead');
+  const heard = leads.filter((l) => org.cycle.consults[l.id]).length;
+  return (
+    <section className="tier tier-ceo seat-card" style={hueStyle(exec.hue)} aria-label={exec.title}>
+      <header className="tier-head">
+        <SeatBadge seat={exec} size="lg" />
+        <div>
+          <strong>{exec.title}</strong>
+          <p className="muted">Asks “{CEO_QUESTION_TEXT}”, then directs the leads.</p>
+        </div>
+      </header>
+      {org.cycle.intent ? (
+        <p className="intent">
+          <span className="field-label">The shareholders want</span>
+          {org.cycle.intent}
+        </p>
+      ) : org.status === 'idle' ? (
+        <p className="muted">Waiting to be started.</p>
+      ) : org.cycle.stage === 'consult' ? (
+        <p className="muted">
+          {org.status !== 'running' && heard === 0
+            ? `Cycle ${org.cycle.number} opens when the organisation is resumed.`
+            : `Hearing from the leads: ${heard} of ${leads.length} proposals in.`}
+        </p>
+      ) : null}
+      {mine.map((a) => (
+        <Working key={a.key} label={a.label} />
+      ))}
+    </section>
+  );
+}
+
+function Lead({
+  org,
+  exec,
+  active,
+  meta,
+  onView,
+  onOpenPlan,
+}: {
+  org: Organisation;
+  exec: Executive;
+  active: ActiveWork[];
+  meta: Meta;
+  onView: (view: OrgView) => void;
+  onOpenPlan: (planId: string) => void;
+}) {
+  const change = useAction();
+  const mine = active.filter((a) => a.execId === exec.id);
+  const thinking = mine.filter((a) => a.kind !== 'task');
+  const tasks = mine.filter((a) => a.kind === 'task');
+  const plans = org.plans.filter((p) => p.ownerId === exec.id && isActive(p));
+  const plan = plans.find((p) => p.status === 'executing') ?? plans[0];
+  const done = plan ? plan.phases.filter((p) => p.status === 'done').length : 0;
+  const current = plan && (plan.status === 'executing' || plan.status === 'reporting') ? plan.phases.findIndex((p) => p.status !== 'done') : -1;
+  const spend = org.usageByExec[exec.id]?.costUsd ?? 0;
+  const waiting = (org.inbox[exec.id] ?? []).length;
+
+  return (
+    <li className="seat-card" style={hueStyle(exec.hue)}>
+      <header className="tier-head">
+        <SeatBadge seat={exec} size="lg" />
+        <div className="grow">
+          <strong>{exec.title}</strong>
+          <p className="muted clamp-2" title={exec.remit}>
+            {exec.function}: {exec.remit}
+          </p>
+        </div>
+        {spend > 0 ? (
+          <span className="num muted" title="Estimated spend by this lead and its agents">
+            {money(spend)}
+          </span>
+        ) : null}
+      </header>
+
+      {plan ? (
+        <button type="button" className="plan-peek" onClick={() => onOpenPlan(plan.id)} title="Open this plan">
+          <span className="plan-peek-status">
+            {PLAN_STATUS[plan.status]}
+            {plans.length > 1 ? ` · ${plans.length - 1} more queued` : ''}
+          </span>
+          <span className="clamp-2">{plan.objective}</span>
+        </button>
+      ) : (
+        <p className="muted">
+          {waiting ? `Reading ${waiting} board report${waiting === 1 ? '' : 's'}.` : org.cycle.stage === 'work' ? 'No plan in progress.' : 'Awaiting the CEO’s direction.'}
+        </p>
+      )}
+      <Sop phases={exec.phases} done={done} current={current} />
+      {thinking.map((a) => (
+        <Working key={a.key} label={a.label} />
+      ))}
+
+      <div className="agents">
+        <span className="field-label">Agents</span>
+        <ul className="agent-dots" aria-label={`${tasks.length} of ${exec.agentCount} agents working`}>
+          {Array.from({ length: exec.agentCount }, (_, i) => {
+            const task = tasks.find((t) => t.agent === i + 1);
+            return (
+              <li key={i} className={task ? 'is-busy' : ''} title={task ? `Agent ${i + 1}: ${task.label}` : `Agent ${i + 1}: idle`}>
+                {i + 1}
+              </li>
+            );
+          })}
+        </ul>
+        <Stepper
+          value={exec.agentCount}
+          min={1}
+          max={meta.limits.maxAgentsPerLead}
+          disabled={change.busy}
+          onChange={(count) => void change.run(async () => onView(await api.agents(org.id, exec.id, count)))}
+          label={`agents for the ${exec.short}`}
+        />
+      </div>
+      {tasks.length ? (
+        <ul className="agent-tasks">
+          {tasks.map((t) => (
+            <li key={t.key}>
+              <span className="agent-tag">Agent {t.agent}</span> {t.label}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <ErrorNote onDismiss={change.clearError}>{change.error}</ErrorNote>
+    </li>
+  );
+}
+
+export function Hierarchy({
+  view,
+  meta,
+  onView,
+  onOpenPlan,
+}: {
+  view: OrgView;
+  meta: Meta;
+  onView: (view: OrgView) => void;
+  onOpenPlan: (planId: string) => void;
+}) {
+  const { org, active } = view;
+  const ceo = org.executives.find((e) => e.kind === 'ceo')!;
+  const judge = org.executives.find((e) => e.kind === 'judge');
+  const leads = org.executives.filter((e) => e.kind === 'lead');
+  const judging = judge ? active.filter((a) => a.execId === judge.id) : [];
+  return (
+    <div className="hierarchy">
+      <Shareholders org={org} onView={onView} />
+      <div className="tier-link" aria-hidden="true" />
+      <Ceo org={org} exec={ceo} active={active} />
+      {judge ? (
+        <section className="judge seat-card" style={hueStyle(judge.hue)} aria-label={judge.title}>
+          <header className="tier-head">
+            <SeatBadge seat={judge} />
+            <div>
+              <strong>
+                <Gavel size={14} aria-hidden="true" /> {judge.title}
+              </strong>
+              <p className="muted">Signs off when leads have competing priorities.</p>
+            </div>
+          </header>
+          {judging.map((a) => (
+            <Working key={a.key} label={a.label} />
+          ))}
+        </section>
+      ) : null}
+      <div className="tier-link" aria-hidden="true" />
+      <ul className="tier tier-leads" aria-label="Executive leads">
+        {leads.map((lead) => (
+          <Lead key={lead.id} org={org} exec={lead} active={active} meta={meta} onView={onView} onOpenPlan={onOpenPlan} />
+        ))}
+      </ul>
+    </div>
+  );
+}

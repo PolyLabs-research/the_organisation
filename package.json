@@ -1,0 +1,39 @@
+{
+  "name": "the-organisation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Establish a hierarchical organisation of AI agents from a single prompt: a CEO, an executive team with standard operating profiles, and the agents they direct.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/server/main.ts",
+    "build": "vite build",
+    "start": "NODE_ENV=production tsx src/server/main.ts",
+    "establish": "tsx scripts/establish.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.5.0",
+    "express": "^5.3.0",
+    "lucide-react": "^1.68.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  }
+}

@@ -1,0 +1,171 @@
+import { describe, expect, it } from 'vitest';
+import { LEAD_PROFILES, PROFILES, executiveFromDraft } from '../src/shared/profiles';
+import { DEFAULT_SETTINGS, ValidationError, createOrganisation, sanitiseSettings } from '../src/server/engine/state';
+import { MODELS, priceUsage } from '../src/server/providers/pricing';
+import { MockProvider } from '../src/server/providers/mock';
+import { recommendTeam } from '../src/server/recommend';
+
+describe('the profile library', () => {
+  it('gives every profile type a standard operating profile', () => {
+    expect(new Set(PROFILES.map((p) => p.id)).size).toBe(PROFILES.length);
+    for (const profile of PROFILES) {
+      expect(profile.phases.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(profile.phases.map((p) => p.id)).size).toBe(profile.phases.length);
+      for (const phase of profile.phases) {
+        expect(phase.purpose).toBeTruthy();
+        expect(phase.deliverable).toBeTruthy();
+      }
+    }
+  });
+
+  it('has the engineering lead spec, build, test and release', () => {
+    const cto = PROFILES.find((p) => p.id === 'engineering')!;
+    expect(cto.phases.map((p) => p.name)).toEqual(['Spec', 'Build', 'Test', 'Release']);
+  });
+
+  it('seats exactly one CEO and one judge profile, neither with agents', () => {
+    expect(PROFILES.filter((p) => p.kind === 'ceo')).toHaveLength(1);
+    expect(PROFILES.filter((p) => p.kind === 'judge')).toHaveLength(1);
+    expect(PROFILES.filter((p) => p.kind !== 'lead').every((p) => p.defaultAgents === 0)).toBe(true);
+    expect(LEAD_PROFILES.every((p) => p.defaultAgents >= 1)).toBe(true);
+  });
+
+  it('builds a custom seat from a title and its own phases', () => {
+    const seat = executiveFromDraft(
+      {
+        profileId: 'custom',
+        title: 'Chief Sustainability Officer',
+        remit: 'Sourcing and footprint.',
+        phases: [
+          { id: '', name: 'Audit', purpose: 'Measure.', deliverable: 'A footprint.' },
+          { id: '', name: 'Reduce', purpose: 'Cut it.', deliverable: 'A plan.' },
+        ],
+        agentCount: 99,
+      },
+      'cso',
+    )!;
+    expect(seat).toMatchObject({ profileId: 'custom', kind: 'lead', short: 'CSO', agentCount: 8 });
+    expect(seat.phases.map((p) => p.id)).toEqual(['audit', 'reduce']);
+    expect(executiveFromDraft({ profileId: 'custom', title: 'No Phases' }, 'x')).toBeNull();
+    expect(executiveFromDraft({ profileId: 'nonsense' }, 'x')).toBeNull();
+  });
+});
+
+describe('establishing an organisation', () => {
+  const base = { name: 'Fernery', idea: 'Houseplants by post.' };
+
+  it('always seats a CEO above the leads the founder chose', () => {
+    const org = createOrganisation({ ...base, executives: [{ profileId: 'engineering', agentCount: 4 }, { profileId: 'finance' }] }, 'org_1');
+    expect(org.executives.map((e) => [e.id, e.kind, e.agentCount])).toEqual([
+      ['ceo', 'ceo', 0],
+      ['cto', 'lead', 4],
+      ['cfo', 'lead', 1],
+    ]);
+    expect(org.status).toBe('idle');
+    expect(org.cycle).toMatchObject({ number: 1, stage: 'consult' });
+  });
+
+  it('ignores an attempt to seat a second CEO or a judge by hand', () => {
+    const org = createOrganisation({ ...base, executives: [{ profileId: 'ceo' }, { profileId: 'judge' }, { profileId: 'product' }] }, 'org_1');
+    expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'cpo']);
+  });
+
+  it('seats the judge when the founder chooses one as arbiter', () => {
+    const org = createOrganisation({ ...base, executives: [{ profileId: 'product' }], settings: { arbiter: 'judge' } }, 'org_1');
+    expect(org.executives.at(-1)).toMatchObject({ id: 'judge', kind: 'judge', agentCount: 0 });
+  });
+
+  it('gives two seats of the same profile different ids', () => {
+    const org = createOrganisation({ ...base, executives: [{ profileId: 'engineering' }, { profileId: 'engineering', title: 'Platform Lead' }] }, 'org_1');
+    expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'cto', 'cto-2']);
+  });
+
+  it('records steer given at the outset', () => {
+    const org = createOrganisation({ ...base, executives: [{ profileId: 'product' }], steer: 'UK first.' }, 'org_1');
+    expect(org.steers).toHaveLength(1);
+    expect(org.steers[0]).toMatchObject({ text: 'UK first.', status: 'new' });
+  });
+
+  it.each([
+    [{ name: '', idea: 'x', executives: [{ profileId: 'product' }] }, /name/],
+    [{ name: 'x', idea: ' ', executives: [{ profileId: 'product' }] }, /idea/],
+    [{ name: 'x', idea: 'x', executives: [] }, /at least one/],
+    [{ name: 'x', idea: 'x', executives: Array.from({ length: 9 }, () => ({ profileId: 'product' })) }, /at most/],
+  ])('rejects an organisation that cannot work', (request, message) => {
+    expect(() => createOrganisation(request, 'org_1')).toThrow(ValidationError);
+    expect(() => createOrganisation(request, 'org_1')).toThrow(message);
+  });
+});
+
+describe('settings', () => {
+  it('keeps every value inside its range', () => {
+    const s = sanitiseSettings({
+      budgetUsd: -5,
+      maxCycles: 0,
+      maxFollowUpDepth: 99,
+      maxConcurrentCalls: 500,
+      executiveModel: 'gpt-4',
+      workerModel: 'claude-haiku-5-5',
+      executiveEffort: 'extreme' as never,
+      arbiter: 'king' as never,
+    });
+    expect(s).toMatchObject({
+      budgetUsd: 0.1,
+      maxCycles: 1,
+      maxFollowUpDepth: 3,
+      maxConcurrentCalls: 16,
+      executiveModel: DEFAULT_SETTINGS.executiveModel,
+      workerModel: 'claude-haiku-5-5',
+      executiveEffort: 'medium',
+      arbiter: 'ceo',
+    });
+  });
+
+  it('leaves untouched what a patch does not mention, and can clear the cycle limit', () => {
+    const base = sanitiseSettings({ budgetUsd: 42, maxCycles: 7, webResearch: true });
+    expect(sanitiseSettings({ arbiter: 'judge' }, base)).toMatchObject({ budgetUsd: 42, maxCycles: 7, webResearch: true, arbiter: 'judge' });
+    expect(sanitiseSettings({ maxCycles: null }, base).maxCycles).toBeNull();
+  });
+
+  it('defaults to the current Opus model, a modest budget and no web access', () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ executiveModel: 'claude-opus-5-5', workerModel: 'claude-opus-5-5', webResearch: false, maxCycles: null });
+    expect(DEFAULT_SETTINGS.budgetUsd).toBeLessThanOrEqual(10);
+  });
+});
+
+describe('pricing', () => {
+  it('prices each kind of token at the published rate', () => {
+    const usage = priceUsage({ model: 'claude-opus-5-5', inputTokens: 1e6, outputTokens: 1e6, cacheReadTokens: 1e6, cacheWriteTokens: 1e6, webSearches: 100 });
+    expect(usage.costUsd).toBeCloseTo(4 + 20 + 0.2 + 5 + 1, 6);
+  });
+
+  it('prices a model it does not know as the default model rather than as free', () => {
+    const known = priceUsage({ model: 'claude-opus-5-5', inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 });
+    const unknown = priceUsage({ model: 'claude-something-new', inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 });
+    expect(unknown.costUsd).toBe(known.costUsd);
+    expect(MODELS.map((m) => m.id)).toContain('claude-opus-5-5');
+  });
+});
+
+describe('team recommendation', () => {
+  it('turns an idea into a team of library seats', async () => {
+    const rec = await recommendTeam(new MockProvider(), 'A mobile app that helps people in regulated healthcare book appointments.', 'claude-opus-5-5', 'medium');
+    const ids = rec.executives.map((e) => e.profileId);
+    expect(ids).toContain('engineering');
+    expect(ids).toContain('legal');
+    expect(ids).not.toContain('ceo');
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(rec.executives.length).toBeGreaterThanOrEqual(3);
+    expect(rec.executives.every((e) => (e.agentCount ?? 0) >= 1 && e.rationale)).toBe(true);
+    expect(rec.name).toBeTruthy();
+    expect(rec.mission).toBeTruthy();
+    // What comes back can be used to establish the organisation as is.
+    const org = createOrganisation({ name: rec.name, idea: 'x', mission: rec.mission, executives: rec.executives }, 'org_1');
+    expect(org.executives).toHaveLength(rec.executives.length + 1);
+  });
+
+  it('always recommends at least three leads, whatever the idea', async () => {
+    const rec = await recommendTeam(new MockProvider(), 'Something vague and hard to place.', 'claude-opus-5-5', 'medium');
+    expect(rec.executives.length).toBeGreaterThanOrEqual(3);
+  });
+});
