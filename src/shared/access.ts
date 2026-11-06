@@ -11,6 +11,17 @@ export interface AccountView {
   resourceOrigins: string[]; username: string; mailboxId: string;
   ownerIds: string[]; allowSignup: boolean; enabled: boolean; createdAt: string;
 }
+/** A GitHub repository connected to the vault. The token stays on the server, as a password does. */
+export interface RepositoryView {
+  id: string; label: string;
+  /** owner/name */
+  fullName: string; defaultBranch: string; private: boolean; htmlUrl: string;
+  /** What GitHub says the token can do. */
+  canPush: boolean;
+  /** The workflow files agents may start. Anything else, such as a deployment, stays with a person. */
+  workflows: string[];
+  ownerIds: string[]; enabled: boolean; createdAt: string;
+}
 export interface MailSummary { id: string; from: string; subject: string; date: string; }
 export interface MailMessage extends MailSummary { text: string; truncated: boolean; }
 export interface MailDraft {
@@ -23,7 +34,7 @@ export interface AccessRequest {
 export interface AccessAudit { at: string; actorId: string; action: string; targetId: string; }
 export interface AccessView {
   available: boolean; reason?: string; initialised: boolean; unlocked: boolean; googleConfigured?: boolean; autoLockMinutes?: number;
-  mailboxes: MailboxView[]; accounts: AccountView[]; drafts: MailDraft[];
+  mailboxes: MailboxView[]; accounts: AccountView[]; repositories: RepositoryView[]; drafts: MailDraft[];
   requests: AccessRequest[]; audit: AccessAudit[];
 }
 export const ownersSchema = z.array(z.string().min(1).max(80)).max(20);
@@ -41,6 +52,15 @@ export const accountSchema = z.object({
   username: z.string().trim().min(1).max(254), mailboxId: z.string().max(80).default(''),
   password: z.string().max(2048).default(''), ownerIds: ownersSchema, allowSignup: z.boolean().default(false),
 }).strict();
+export const workflowFile = z.string().trim().regex(/^[A-Za-z0-9_.-]+\.ya?ml$/, 'Use the workflow’s file name, such as ci.yml');
+export const repositorySchema = z.object({
+  label: short,
+  repository: z.string().trim().min(3).max(300),
+  token: z.string().trim().min(20).max(512).regex(/^[\x21-\x7e]+$/, 'A token has no spaces'),
+  workflows: z.array(workflowFile).max(20).default([]),
+  ownerIds: ownersSchema,
+}).strict();
+export const repositoryWorkflowsSchema = z.object({ workflows: z.array(workflowFile).max(20) }).strict();
 export const draftSchema = z.object({
   mailboxId: z.string().min(1), to: z.email().max(254),
   subject: z.string().trim().min(1).max(300).regex(/^[^\r\n]*$/),

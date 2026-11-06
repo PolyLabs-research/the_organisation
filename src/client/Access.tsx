@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Organisation } from '../shared/types';
-import type { AccessView, AccountPage, AccountView, MailboxView, MailMessage, MailSummary } from '../shared/access';
+import type { AccessView, AccountPage, AccountView, MailboxView, MailMessage, MailSummary, RepositoryView } from '../shared/access';
 import { allows } from '../shared/privileges';
 import { request, useAction } from './api';
 import { ErrorNote, Field } from './ui';
@@ -21,19 +21,22 @@ function Reach({ org, ownerIds, describe }: { org: Organisation; ownerIds: strin
 }
 const canRead = (org: Organisation, id: string) => allows(org, id, 'read_mail'), canDraft = (org: Organisation, id: string) => allows(org, id, 'draft_mail');
 const mailReach = (org: Organisation) => (id: string) => canRead(org, id) && canDraft(org, id) ? 'reads and drafts' : canRead(org, id) ? 'reads only' : canDraft(org, id) ? 'drafts only' : 'no access, see Privileges';
+const codeReach = (org: Organisation) => (id: string) => allows(org, id, 'push_code') ? (allows(org, id, 'run_workflows') ? 'pushes and starts builds' : 'pushes branches') : allows(org, id, 'read_code') ? (allows(org, id, 'run_workflows') ? 'reads and starts builds' : 'reads only') : 'no access, see Privileges';
 const accountReach = (org: Organisation) => (id: string) => allows(org, id, 'act') ? 'can act' : allows(org, id, 'sign_in') ? 'signs in and reads only' : 'no access, see Privileges';
-function PasswordUpdate({ orgId, kind, id, onView }: { orgId: string; kind: 'accounts' | 'mailboxes'; id: string; onView: Update }) {
+type Kind = 'accounts' | 'mailboxes' | 'repositories';
+function PasswordUpdate({ orgId, kind, id, onView }: { orgId: string; kind: Kind; id: string; onView: Update }) {
   const action = useAction();
   const [password, setPassword] = useState('');
-  return <details className="access-details"><summary>Update saved password</summary>
+  const token = kind === 'repositories';
+  return <details className="access-details"><summary>{token ? 'Replace token' : 'Update saved password'}</summary>
     <form onSubmit={event => { event.preventDefault(); void action.run(async () => { try { onView(await call(orgId, 'POST', '/' + kind + '/' + id + '/password', { password })); } finally { setPassword(''); } }); }}>
-      <p className="muted">Save a password you have already changed at the service. This updates the vault only.</p>
-      <Field label="New saved password"><input type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} required maxLength={2048} /></Field>
-      <ErrorNote>{action.error}</ErrorNote><button className="button" disabled={action.busy}>Save password</button>
+      <p className="muted">{token ? 'GitHub is asked whether the new token works before it is saved.' : 'Save a password you have already changed at the service. This updates the vault only.'}</p>
+      <Field label={token ? 'New token' : 'New saved password'}><input type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} required maxLength={2048} /></Field>
+      <ErrorNote>{action.error}</ErrorNote><button className="button" disabled={action.busy}>{token ? 'Save token' : 'Save password'}</button>
     </form>
   </details>;
 }
-function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: 'accounts' | 'mailboxes'; record: AccountView | MailboxView; onView: Update }) {
+function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: Kind; record: AccountView | MailboxView | RepositoryView; onView: Update }) {
   const action = useAction();
   const [owners, setOwners] = useState(record.ownerIds);
   useEffect(() => setOwners(record.ownerIds), [record.ownerIds.join(',')]);
@@ -123,6 +126,50 @@ function AccountConnect({ org, view, onView }: { org: Organisation; view: Access
     <ErrorNote>{action.error}</ErrorNote><button className="button button-primary" disabled={action.busy}>Save service account</button>
   </form>;
 }
+const splitNames = (text: string) => text.split(/[\s,]+/).filter(Boolean);
+function RepositoryConnect({ org, onView }: { org: Organisation; onView: Update }) {
+  const action = useAction();
+  const [label, setLabel] = useState('');
+  const [repository, setRepository] = useState('');
+  const [token, setToken] = useState('');
+  const [workflows, setWorkflows] = useState('');
+  const [owners, setOwners] = useState<string[]>([]);
+  return <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => {
+    try {
+      onView(await call(org.id, 'POST', '/repositories', { label, repository, token, workflows: splitNames(workflows), ownerIds: owners }));
+      setLabel(''); setRepository(''); setWorkflows('');
+    } finally { setToken(''); }
+  }); }}>
+    <h3>Connect a GitHub repository</h3>
+    <p>Agents get a branch of their own for each plan. They can commit there, open a pull request and start the workflows you list, so builds and tests run on GitHub’s machines. A person merges.</p>
+    <p className="note note-warn">Use a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer">fine-grained token</a> limited to this repository, with Contents, Pull requests and Actions set to read and write, and Commit statuses to read. Add Workflows only if a role will change pipelines. Protect the main branch on GitHub as well: that lock holds whatever happens here.</p>
+    <div className="grid-2">
+      <Field label="Name"><input value={label} onChange={e => setLabel(e.target.value)} required maxLength={160} /></Field>
+      <Field label="Repository"><input value={repository} onChange={e => setRepository(e.target.value)} placeholder="owner/name" required maxLength={300} autoComplete="off" /></Field>
+      <Field label="Token"><input type="password" value={token} onChange={e => setToken(e.target.value)} required maxLength={512} autoComplete="new-password" /></Field>
+      <Field label="Workflows agents may start (optional)" hint="File names such as ci.yml. Leave out anything that deploys."><input value={workflows} onChange={e => setWorkflows(e.target.value)} placeholder="ci.yml" /></Field>
+    </div>
+    <TeamPicker org={org} value={owners} onChange={setOwners} />
+    <ErrorNote>{action.error}</ErrorNote><button className="button button-primary" disabled={action.busy}>{action.busy ? 'Checking with GitHub…' : 'Connect repository'}</button>
+  </form>;
+}
+function RepositoryCard({ org, repository, onView }: { org: Organisation; repository: RepositoryView; onView: Update }) {
+  const action = useAction();
+  const [workflows, setWorkflows] = useState(repository.workflows.join(' '));
+  useEffect(() => setWorkflows(repository.workflows.join(' ')), [repository.workflows.join(' ')]);
+  return <article className="ops-card">
+    <div className="row"><h3>{repository.label}</h3><span className="tag">{repository.private ? 'Private' : 'Public'} · {repository.enabled ? 'Enabled' : 'Disabled'}</span></div>
+    <p><a href={repository.htmlUrl} target="_blank" rel="noreferrer">{repository.fullName}</a> · main branch {repository.defaultBranch}</p>
+    <Reach org={org} ownerIds={repository.ownerIds} describe={codeReach(org)} />
+    {!repository.canPush ? <p className="note note-warn">GitHub says this token cannot push, so agents can only read here.</p> : null}
+    <form onSubmit={event => { event.preventDefault(); void action.run(async () => onView(await call(org.id, 'PATCH', '/repositories/' + repository.id + '/workflows', { workflows: splitNames(workflows) }))); }}>
+      <Field label="Workflows agents may start" hint="File names such as ci.yml. Leave out anything that deploys."><input value={workflows} onChange={e => setWorkflows(e.target.value)} /></Field>
+      <ErrorNote>{action.error}</ErrorNote><button className="button" disabled={action.busy}>Save workflows</button>
+    </form>
+    <GrantEditor org={org} kind="repositories" record={repository} onView={onView} />
+    <PasswordUpdate orgId={org.id} kind="repositories" id={repository.id} onView={onView} />
+  </article>;
+}
 function Inbox({ orgId, box }: { orgId: string; box: MailboxView }) {
   const action = useAction();
   const [messages, setMessages] = useState<MailSummary[] | null>(null);
@@ -210,14 +257,15 @@ function Drafts({ org, view, onView }: { org: Organisation; view: AccessView; on
 }
 function Unlocked({ org, view, onView }: { org: Organisation; view: AccessView; onView: Update }) {
   const action = useAction();
-  const [pane, setPane] = useState<'mail' | 'accounts' | 'drafts' | 'requests' | 'history'>('mail');
+  const [pane, setPane] = useState<'mail' | 'accounts' | 'code' | 'drafts' | 'requests' | 'history'>('mail');
   return <>
     <div className="row"><p className="muted">Unlocked · {view.autoLockMinutes === 0 ? 'stays unlocked until you lock it or the server stops.' : 'locks after 30 minutes without an access action, or when the server stops.'}</p><div className="access-actions"><a className="button" href={'/api/orgs/' + org.id + '/access/backup'} download>Download encrypted backup</a><button type="button" className="button" onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/lock', {})))} disabled={action.busy}>Lock vault</button></div></div>
     {org.settings.execution === 'managed' ? <p className="note note-warn">The email and account tools run with local task execution. Switch Execution in Settings to local to give the agents these tools.</p> : null}
     <ErrorNote>{action.error}</ErrorNote>
-    <nav className="ops-nav" aria-label="Email and account sections">{(['mail', 'accounts', 'drafts', 'requests', 'history'] as const).map(item => <button type="button" key={item} className={pane === item ? 'button button-primary' : 'button'} onClick={() => setPane(item)}>{({ mail: 'Mailboxes', accounts: 'Accounts', drafts: 'Email drafts', requests: 'Access requests', history: 'Access history' })[item]}{item === 'requests' && view.requests.some(request => request.status === 'open') ? ' (' + view.requests.filter(request => request.status === 'open').length + ')' : ''}</button>)}</nav>
+    <nav className="ops-nav" aria-label="Email and account sections">{(['mail', 'accounts', 'code', 'drafts', 'requests', 'history'] as const).map(item => <button type="button" key={item} className={pane === item ? 'button button-primary' : 'button'} onClick={() => setPane(item)}>{({ mail: 'Mailboxes', accounts: 'Accounts', code: 'Repositories', drafts: 'Email drafts', requests: 'Access requests', history: 'Access history' })[item]}{item === 'requests' && view.requests.some(request => request.status === 'open') ? ' (' + view.requests.filter(request => request.status === 'open').length + ')' : ''}</button>)}</nav>
     {pane === 'mail' ? <><details className="access-add" open={view.mailboxes.length === 0}><summary>Connect a mailbox</summary><MailConnect org={org} configured={!!view.googleConfigured} onView={onView} /></details>{view.mailboxes.map(box => <article className="ops-card" key={box.id}><div className="row"><h3>{box.label}</h3><span className="tag">{box.provider === 'gmail' ? 'Google' : 'IMAP / SMTP'} · {box.enabled ? 'Enabled' : 'Disabled'}</span></div><p>{box.address}</p><Reach org={org} ownerIds={box.ownerIds} describe={mailReach(org)} /><Inbox orgId={org.id} box={box} /><GrantEditor org={org} kind="mailboxes" record={box} onView={onView} />{box.provider === 'imap' ? <PasswordUpdate orgId={org.id} kind="mailboxes" id={box.id} onView={onView} /> : null}</article>)}</> : null}
     {pane === 'accounts' ? <><details className="access-add" open={view.accounts.length === 0}><summary>Add a service account</summary><AccountConnect org={org} view={view} onView={onView} /></details>{view.accounts.map(account => <AccountCard key={account.id} org={org} account={account} onView={onView} />)}</> : null}
+    {pane === 'code' ? <><details className="access-add" open={view.repositories.length === 0}><summary>Connect a repository</summary><RepositoryConnect org={org} onView={onView} /></details>{view.repositories.map(repository => <RepositoryCard key={repository.id} org={org} repository={repository} onView={onView} />)}</> : null}
     {pane === 'drafts' ? <Drafts org={org} view={view} onView={onView} /> : null}
     {pane === 'requests' ? <>{!view.requests.length ? <p className="muted">Agents can request a service or help with sign-in here.</p> : null}{[...view.requests].reverse().map(item => <article className="ops-card" key={item.id}><h3>{item.service}</h3><p>{item.reason}</p><p className="muted">{item.actorId} · {item.status}</p>{item.status === 'open' ? <button className="button" type="button" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/requests/' + item.id + '/resolve', {})))}>Mark handled</button> : null}</article>)}</> : null}
     {pane === 'history' ? <div className="access-history">{view.audit.map((item, i) => <p key={i}><time>{new Date(item.at).toLocaleString()}</time> · {item.actorId} · {item.action.replaceAll('_', ' ')} · <code>{item.targetId}</code></p>)}</div> : null}

@@ -1,18 +1,20 @@
 import { createCipheriv, createDecipheriv, randomBytes, scrypt as derive } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { AccessAudit, AccessRequest, AccountView, MailboxView, MailDraft } from '../shared/access';
+import type { AccessAudit, AccessRequest, AccountView, MailboxView, MailDraft, RepositoryView } from '../shared/access';
 
 export class AccessError extends Error {
   constructor(message: string, readonly status = 400) { super(message); }
 }
 export interface MailboxSecret extends MailboxView { password: string; }
 export interface AccountSecret extends AccountView { password: string; }
+/** The token sits where a password does, so that everything that keeps passwords safe keeps it safe too. */
+export interface RepositorySecret extends RepositoryView { password: string; }
 export interface VaultData {
-  mailboxes: MailboxSecret[]; accounts: AccountSecret[]; drafts: MailDraft[]; requests: AccessRequest[]; audit: AccessAudit[];
+  mailboxes: MailboxSecret[]; accounts: AccountSecret[]; repositories: RepositorySecret[]; drafts: MailDraft[]; requests: AccessRequest[]; audit: AccessAudit[];
 }
 interface Envelope { version: 1; salt: string; iv: string; tag: string; ciphertext: string; }
-const empty = (): VaultData => ({ mailboxes: [], accounts: [], drafts: [], requests: [], audit: [] });
+const empty = (): VaultData => ({ mailboxes: [], accounts: [], repositories: [], drafts: [], requests: [], audit: [] });
 const keyFor = (passphrase: string, salt: Buffer) => new Promise<Buffer>((resolve, reject) => {
   derive(passphrase, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 }, (err, key) => err ? reject(err) : resolve(key));
 });
@@ -83,6 +85,8 @@ export class AccessVault {
           decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
           data = JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]).toString('utf8')) as VaultData;
           if (!['mailboxes', 'accounts', 'drafts', 'requests', 'audit'].every(k => Array.isArray(data[k as keyof VaultData]))) throw new Error('Invalid vault');
+          // From before repositories could be connected.
+          data.repositories ??= [];
         }
         if (generation !== this.generation) throw new AccessError('Vault unlock was cancelled.', 409);
         this.key = key; this.salt = salt; this.data = data; key = undefined;

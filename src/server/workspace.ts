@@ -107,6 +107,25 @@ export class Workspace {
     return { path: rel, content: truncated ? content.slice(0, MAX_READ_CHARS) : content, truncated };
   }
 
+  /** A whole text file, for sending somewhere it must arrive complete. Refused rather than cut short or garbled. */
+  async readWhole(input: string, maxBytes: number): Promise<string> {
+    const rel = this.normalise(input);
+    const target = await this.resolveSafe(rel);
+    let bytes: Buffer;
+    try {
+      bytes = await fs.readFile(target);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') throw new WorkspaceError(`no such file: ${rel}`);
+      if (code === 'EISDIR') throw new WorkspaceError(`${rel} is a directory`);
+      throw err;
+    }
+    if (bytes.length > maxBytes) throw new WorkspaceError(`${rel} is ${bytes.length} bytes; the limit is ${maxBytes}`);
+    const text = bytes.toString('utf8');
+    if (text.includes('\0') || !Buffer.from(text, 'utf8').equals(bytes)) throw new WorkspaceError(`${rel} is not a text file`);
+    return text;
+  }
+
   /** Every file under `dir` (default: the whole workspace), oldest path first. */
   async list(dir = ''): Promise<WorkspaceFile[]> {
     const start = dir.trim().replace(/^\.?\/*$/, '') ? await this.resolveSafe(this.normalise(dir)) : this.root;

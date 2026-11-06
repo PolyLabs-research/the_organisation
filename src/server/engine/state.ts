@@ -1,4 +1,5 @@
 import { emptyBusiness } from '../../shared/business';
+import { STANDARD_APPROACH } from '../../shared/approaches';
 import { PROFILE_BY_ID, MAX_LEADS, executiveFromDraft } from '../../shared/profiles';
 import { describeRequest, isOpen, waitingOnPerson } from '../../shared/signatory';
 import type {
@@ -299,6 +300,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     steers: [],
     signatory: { requests: [], messages: [] },
     privileges: {},
+    workApproaches: {},
     usage: emptyUsage(),
     usageByExec: {},
   };
@@ -376,11 +378,18 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.usageByExec ??= {};
   // From before there were privileges: every role stands at the defaults.
   org.privileges ??= {};
+  // From before there were work approaches: every plan ran the lead's own profile.
+  org.workApproaches ??= {};
   syncSignatory(org);
   for (const plan of org.plans) {
     plan.execution ??= null;
     plan.managed ??= null;
+    plan.workApproachId ??= STANDARD_APPROACH;
+    plan.workApproachReason ??= null;
+    plan.code ??= null;
     for (const phase of plan.phases) {
+      phase.gate ??= null;
+      phase.evidence ??= null;
       for (const task of phase.tasks) {
         // Local work that was in flight is lost with the process and goes back in the queue. An agent
         // in a hosted session carries on there, and is caught up with when the session is picked up.

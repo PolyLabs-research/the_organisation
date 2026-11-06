@@ -1,3 +1,4 @@
+import type { RunnerOptions } from '../src/server/engine/runner';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,13 +31,15 @@ export async function harness(
     settings?: Partial<OrgSettings>;
     executives?: ExecutiveDraft[];
     steer?: string;
+    /** Anything further for the organisation's runner, such as a stand-in for a code host. */
+    runner?: RunnerOptions;
   } = {},
 ): Promise<Harness> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-'));
   const store = new Store(dir);
   await store.init();
   const provider = options.provider ?? new MockProvider({ ...QUIET, ...options.mock });
-  const registry = new Registry(store, provider, { retryDelayMs: 1, emitIntervalMs: 1 });
+  const registry = new Registry(store, provider, { retryDelayMs: 1, emitIntervalMs: 1, ...options.runner });
   const runner = await registry.create({
     name: 'Fernery',
     idea: 'A subscription box that sends people a new houseplant every month, with care instructions.',

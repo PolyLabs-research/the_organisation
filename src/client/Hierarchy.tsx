@@ -180,6 +180,7 @@ function Lead({
           <span className="plan-peek-status">
             {PLAN_STATUS[plan.status]}
             {session ? ` · session ${SESSION_STATE[session.state].toLowerCase()}` : ''}
+            {plan.phases.some((p) => p.evidence?.state === 'waiting' && p.status === 'working') ? ' · waiting for checks' : ''}
             {plans.length > 1 ? ` · ${plans.length - 1} more queued` : ''}
           </span>
           <span className="clamp-2">{plan.objective}</span>
@@ -189,7 +190,7 @@ function Lead({
           {waiting ? `Reading ${waiting} board report${waiting === 1 ? '' : 's'}.` : org.cycle.stage === 'work' ? 'No plan in progress.' : 'Awaiting the CEO’s direction.'}
         </p>
       )}
-      <Sop phases={exec.phases} done={done} current={current} />
+      <Sop phases={plan?.phases ?? exec.phases} done={done} current={current} />
       {thinking.map((a) => (
         <Working key={a.key} label={a.label} />
       ))}

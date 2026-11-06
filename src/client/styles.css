@@ -2708,3 +2708,12 @@ a.provider:hover {
   .privileges-scroll { scroll-padding-left: 11rem; }
   .privileges-table thead th:first-child, .privileges-table th[scope='row'] { width: 11rem; min-width: 11rem; }
 }
+
+/* What the system found at a gate, set apart from what the lead wrote about it. */
+.gate-evidence { margin-top: .6rem; padding: .6rem .75rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.gate-evidence p { margin: .2rem 0 0; }
+.gate-checks { margin: .4rem 0 0; padding: 0; list-style: none; display: grid; gap: .2rem; font-size: .85rem; }
+.gate-checks li { display: flex; justify-content: space-between; gap: .75rem; }
+.gate-evidence-passed { border-color: var(--ok-line); background: var(--ok-soft); }
+.gate-evidence-waiting { border-color: var(--warn-line); background: var(--warn-soft); }
+.gate-evidence-failed { border-color: var(--bad-line); background: var(--bad-soft); }

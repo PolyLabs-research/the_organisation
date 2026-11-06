@@ -1,13 +1,17 @@
 import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
 import { accessTools } from '../access-tools';
+import { codeTools } from '../access-code-tools';
+import { STANDARD_APPROACH, approachChoices, approachLabel } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
 import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
 import { allows } from '../../shared/privileges';
 import { describeRequest, isOpen } from '../../shared/signatory';
-import type { BoardReport, Executive, Organisation, Plan, PlanOrigin } from '../../shared/types';
+import type { BoardReport, Executive, Organisation, Plan, PlanOrigin, PlanPhase, SopPhase } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
 import { Workspace, workspaceTools } from '../workspace';
+import { AGENT_BRANCHES } from '../access';
+import { gateEvidence, type CheckTimes } from './evidence';
 import { executeInSession } from './hosted';
 import * as prompts from './prompts';
 import { MAX_RESULT_CHARS, bullets, clean, fileReport, logRemitDecisions, newTask, now } from './records';
@@ -33,6 +37,7 @@ export interface EngineContext {
   touch(): void;
   /** Where a provider may keep its own records for this organisation. */
   stateDir: string;
+  checkTimes: CheckTimes;
 }
 
 /** Applies the result of finished work to the organisation. Runs synchronously, after the model call has returned. */
@@ -41,6 +46,8 @@ export type Commit = () => void;
 const MAX_TASK_TURNS = 24;
 const MAX_TASK_SEARCHES = 8;
 const MAX_REWORK_ROUNDS = 1;
+/** A phase held to what the checks say gets more goes: seeing a build fail and fixing it is the work. */
+const MAX_GATED_REWORK_ROUNDS = 3;
 const MAX_FOLLOW_UPS = 1;
 
 function need<T>(value: T | undefined, what: string): T {
@@ -50,6 +57,36 @@ function need<T>(value: T | undefined, what: string): T {
 
 /** The state this work was for has gone (plan cancelled, cycle moved on). The result is dropped without fuss. */
 export class StaleWork extends Error {}
+
+function planPhases(phases: SopPhase[]): PlanPhase[] {
+  return phases.map((p) => ({
+    sopPhaseId: p.id,
+    name: p.name,
+    purpose: p.purpose,
+    deliverable: p.deliverable,
+    intent: p.purpose,
+    notes: '',
+    status: 'pending',
+    tasks: [],
+    reworkRounds: 0,
+    summary: null,
+    gate: p.gate ?? null,
+    evidence: null,
+  }));
+}
+
+/** Each organisation's plans have their own branch, so that several can share a repository. */
+export function planBranch(org: Organisation, plan: Plan): string {
+  return `${AGENT_BRANCHES}${org.id.replace(/[^A-Za-z0-9._-]/g, '-')}/${plan.id}`;
+}
+
+/** A plan that cannot go on: a gate says it has not done what it had to, and no more goes are left. */
+function failPlan(org: Organisation, plan: Plan, reason: string): void {
+  plan.status = 'failed';
+  plan.cancelReason = clean(reason, 600);
+  plan.updatedAt = now();
+  withdrawRequests(org, plan, plan.cancelReason);
+}
 
 function newPlan(
   org: Organisation,
@@ -70,19 +107,10 @@ function newPlan(
     priority: fields.priority,
     rationale: clean(fields.rationale, 1200),
     approach: null,
-    // The plan is the lead's standard operating profile applied to this objective.
-    phases: owner.phases.map((p) => ({
-      sopPhaseId: p.id,
-      name: p.name,
-      purpose: p.purpose,
-      deliverable: p.deliverable,
-      intent: p.purpose,
-      notes: '',
-      status: 'pending',
-      tasks: [],
-      reworkRounds: 0,
-      summary: null,
-    })),
+    workApproachId: STANDARD_APPROACH,
+    workApproachReason: null,
+    // The plan starts as the lead's standard operating profile applied to this objective. Drafting it may choose another.
+    phases: planPhases(owner.phases),
     status: 'planning',
     amendments: [],
     escalations: [],
@@ -93,6 +121,7 @@ function newPlan(
     updatedAt: at,
     execution: null,
     managed: null,
+    code: null,
   };
   const known = fields.jobId || org.business.jobs.find((j) => j.ownerId === owner.id && j.title === plan.objective.slice(0, 200) && jobReady(org, j))?.id;
   const job = known ? org.business.jobs.find((j) => j.id === known) : applyBusinessCommand(org, {
@@ -227,12 +256,23 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'plan': {
       const plan = need(planById(org, item.planId), `plan ${item.planId}`);
       const files = await workspace.list();
-      const data = await ask(system, prompts.planPrompt(org, exec, plan, files), schemas.planDraftSchema(exec.phases.map((p) => p.id)), {
+      // Repository work is local: a hosted session cannot reach the vault, so nothing could check its gates.
+      const choices = approachChoices(org, exec, org.settings.execution === 'local' && ctx.access.canCode(exec.id));
+      const draft = schemas.planDraftSchema([...new Set(choices.flatMap((c) => c.phases.map((p) => p.id)))]);
+      const schema = choices.length > 1 ? draft.extend(schemas.workApproachSchema(choices.map((c) => c.id)).shape) : draft;
+      const data = await ask(system, prompts.planPrompt(org, exec, plan, files, choices), schema as typeof draft, {
         plan: planContext(org, plan),
         otherPlans: org.plans.filter((p) => p.cycle === cycle && p.id !== plan.id).map((p) => planContext(org, p)),
       });
       return () => {
         if (plan.status !== 'planning') return;
+        const { workApproach, workApproachReason } = data as Partial<z.infer<ReturnType<typeof schemas.workApproachSchema>>>;
+        const chosen = choices.find((c) => c.id === workApproach);
+        if (chosen && chosen.id !== STANDARD_APPROACH) {
+          plan.phases = planPhases(chosen.phases);
+          plan.workApproachId = chosen.id;
+        }
+        plan.workApproachReason = chosen && workApproachReason ? clean(workApproachReason, 600) : null;
         applyBusinessUpdates(org, data.operations, { id: exec.id });
         plan.approach = clean(data.approach);
         applyIntents(plan, data.phases);
@@ -248,7 +288,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           'plan',
           exec.id,
           `${exec.short} plan: ${plan.objective.slice(0, 120)}`,
-          `${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${p.intent}`).join('\n')}`,
+          `${plan.workApproachId === STANDARD_APPROACH ? '' : `**${approachLabel(plan.workApproachId)}.** ${plan.workApproachReason ?? ''}\n\n`}${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${p.intent}`).join('\n')}`,
           { planId: plan.id },
         );
       };
@@ -346,8 +386,9 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'revise': {
       const plan = need(planById(org, item.planId), `plan ${item.planId}`);
       const decision = org.decisions.find((d) => d.id === plan.decisionId);
-      const data = await ask(system, prompts.revisePrompt(org, plan, decision), schemas.planRevisionSchema(exec.phases.map((p) => p.id)), {
+      const data = await ask(system, prompts.revisePrompt(org, plan, decision), schemas.planRevisionSchema(plan.phases.map((p) => p.sopPhaseId)), {
         plan: planContext(org, plan),
+        phases: plan.phases.map((p) => ({ id: p.sopPhaseId, name: p.name })),
         amendments: plan.amendments,
       });
       return () => {
@@ -397,13 +438,35 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       });
       tools.push(...businessTools(org, { id: exec.id, worker: true }, ctx.touch, () => !ctx.halting() && !ctx.signal.aborted && isPlanActive(plan)));
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
+      tools.push(
+        ...codeTools(
+          ctx.access,
+          exec.id,
+          {
+            branch: planBranch(org, plan),
+            code: () => plan.code,
+            record: (code) => {
+              plan.code = code;
+              plan.updatedAt = now();
+              ctx.touch();
+            },
+            open: () => {
+              const gated = plan.phases.filter((p) => p.gate);
+              return !gated.length || gated.some((p) => p.status !== 'done');
+            },
+          },
+          workspace,
+          ctx.signal,
+          () => !ctx.halting() && isPlanActive(plan),
+        ),
+      );
       const files = await workspace.list();
       // Web search is switched on for the organisation, but only some providers' models can do it.
       const canSearch = org.settings.webResearch && allows(org, exec.id, 'web_search') && (provider.searches?.(org.settings.workerModel) ?? true);
       const result = await provider.agent({
         kind: 'task',
         system: prompts.systemForAgent(org, exec, canSearch),
-        prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files) + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
+        prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files, planBranch(org, plan)) + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
         model: org.settings.workerModel,
         effort: org.settings.workerEffort,
         tools,
@@ -448,9 +511,12 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'phase_review': {
       const plan = need(planById(org, item.planId), `plan ${item.planId}`);
       const phase = need(plan.phases[item.phaseIndex], `phase ${item.phaseIndex}`);
-      const canRework = phase.reworkRounds < MAX_REWORK_ROUNDS;
+      // Before any model is called: while checks are running this waits, and costs nothing.
+      const proof = await gateEvidence(ctx, plan, phase);
+      const held = proof !== null && proof.state !== 'passed';
+      const canRework = phase.reworkRounds < (phase.gate ? MAX_GATED_REWORK_ROUNDS : MAX_REWORK_ROUNDS);
       const written = await readForReview(workspace, [...new Set(phase.tasks.flatMap((t) => t.files))]);
-      const data = await ask(system, prompts.phaseReviewPrompt(org, plan, item.phaseIndex, canRework, written), schemas.PhaseReview, {
+      const data = await ask(system, prompts.phaseReviewPrompt(org, plan, item.phaseIndex, canRework, written, proof), schemas.PhaseReview, {
         plan: planContext(org, plan),
         phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex },
         tasks: phase.tasks.map((t) => ({ title: t.title, status: t.status, files: t.files })),
@@ -463,9 +529,18 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         applyBusinessUpdates(org, data.operations, { id: exec.id });
         phase.summary = clean(data.summary, 4000);
         plan.updatedAt = now();
+        phase.evidence = proof;
         const rework = data.reworkTasks.filter((t) => t.title.trim() && t.brief.trim()).slice(0, Math.max(exec.agentCount, 1));
-        if (data.verdict === 'rework' && canRework && rework.length) {
+        if (held && (!canRework || proof.final)) {
+          // What the system found is not the lead's to wave through, however the lead rules.
+          failPlan(org, plan, `${phase.name} could not pass: ${proof.summary}`);
+          postToBoard(org, 'system', 'system', `${exec.short} plan stopped at ${phase.name}`, `${proof.summary} ${proof.final ? 'Sending the phase back cannot change that' : 'The phase has been sent back as often as it can be'}, so the plan stops here. ${phase.summary}`, { planId: plan.id });
+          return;
+        }
+        if (held || (data.verdict === 'rework' && canRework && rework.length)) {
           phase.reworkRounds += 1;
+          // Check names come from the repository, so they are left out of a brief an agent takes as its instructions.
+          if (held && !rework.length) rework.push({ title: `Clear the ${phase.name} gate`, brief: `The system did not pass this gate. Read the checks and the logs of any failed runs with read_repository, find out why, put it right and push the fix to the plan's branch.` });
           phase.tasks.push(...rework.map((t) => newTask(org, t.title, t.brief, true)));
         } else {
           phase.status = 'done';

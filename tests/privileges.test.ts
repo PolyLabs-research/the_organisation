@@ -35,7 +35,7 @@ describe('what a role may do', () => {
     h = await harness();
     const lead = leadOf(h);
     const on = PRIVILEGES.filter((p) => allows(h!.org, lead.id, p.id)).map((p) => p.id);
-    expect(on).toEqual(['web_search', 'update_records', 'ask_signatory', 'read_mail', 'draft_mail', 'sign_in']);
+    expect(on).toEqual(['web_search', 'update_records', 'ask_signatory', 'read_mail', 'draft_mail', 'sign_in', 'read_code']);
     expect(allows(h.org, lead.id, 'act')).toBe(false);
     expect(allows(h.org, lead.id, 'create_accounts')).toBe(false);
     expect(h.org.privileges).toEqual({});
@@ -58,6 +58,19 @@ describe('what a role may do', () => {
     expect(changePrivilege(org, lead.id, 'sign_in', false)).toEqual({ changed: true, removed: true });
     expect(allows(org, lead.id, 'act')).toBe(false);
     expect(allows(org, lead.id, 'create_accounts')).toBe(false);
+  });
+
+  it('follows that all the way along a chain', async () => {
+    h = await harness();
+    const lead = leadOf(h), org = h.org;
+    changePrivilege(org, lead.id, 'read_code', false);
+    changePrivilege(org, lead.id, 'edit_pipelines', true);
+    expect(allows(org, lead.id, 'push_code')).toBe(true);
+    expect(allows(org, lead.id, 'read_code')).toBe(true);
+    changePrivilege(org, lead.id, 'read_code', false);
+    expect(allows(org, lead.id, 'push_code')).toBe(false);
+    expect(allows(org, lead.id, 'edit_pipelines')).toBe(false);
+    expect(allows(org, lead.id, 'run_workflows')).toBe(false);
   });
 
   it('tells the board what changed, and says nothing when nothing did', async () => {
@@ -102,6 +115,14 @@ describe('an agent told its limits', () => {
     expect(systemForAgent(org, lead).role).toContain('you may not change business records');
     expect(sessionSystem(org, lead)).toContain('you may not change business records');
     expect(sessionSystem(org, lead)).not.toContain('read business email');
+  });
+
+  it('is not told about what its role was never given, since it is not offered that', async () => {
+    h = await harness();
+    expect(systemForAgent(h.org, leadOf(h)).role).not.toContain('Limits on your role');
+    changePrivilege(h.org, leadOf(h).id, 'push_code', true);
+    changePrivilege(h.org, leadOf(h).id, 'push_code', false);
+    expect(systemForAgent(h.org, leadOf(h)).role).toContain('you may not push code');
   });
 });
 

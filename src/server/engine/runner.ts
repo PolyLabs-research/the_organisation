@@ -18,6 +18,8 @@ import { waitsOnAi } from '../../shared/signatory';
 import { ProviderError, type CallUsage, type Provider } from '../providers/types';
 import type { Store } from '../store';
 import { Workspace } from '../workspace';
+import { changeApproach } from './approaches';
+import { CHECK_TIMES, WaitingOnChecks, type CheckTimes } from './evidence';
 import { StaleWork, describeWork, perform, type EngineContext } from './handlers';
 import { MAX_RESULT_CHARS, clean } from './records';
 import { changePrivilege } from './privileges';
@@ -50,6 +52,8 @@ export interface RunnerOptions {
   retryDelayMs?: number;
   /** Minimum gap between pushes to subscribers. */
   emitIntervalMs?: number;
+  /** How a gate waits on a repository's checks. */
+  checkTimes?: Partial<CheckTimes>;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -91,6 +95,7 @@ export class OrgRunner {
   private activitySeq = 0;
   private readonly retryDelayMs: number;
   private readonly emitIntervalMs: number;
+  private readonly checkTimes: CheckTimes;
 
   constructor(
     readonly org: Organisation,
@@ -101,6 +106,7 @@ export class OrgRunner {
     this.workspace = new Workspace(store.workspaceRoot(org.id));
     this.access = new BusinessAccess(path.join(store.orgDir(org.id), 'access-vault.json'), org.id, () => org.executives.filter(exec => exec.kind === 'lead' || exec.kind === 'ceo').map(exec => exec.id), { ...options.access, allows: (actorId, privilege) => allows(org, actorId, privilege) });
     this.retryDelayMs = options.retryDelayMs ?? 4000;
+    this.checkTimes = { ...CHECK_TIMES, ...options.checkTimes };
     this.emitIntervalMs = options.emitIntervalMs ?? 150;
   }
 
@@ -211,6 +217,8 @@ export class OrgRunner {
       for (const plan of org.plans) {
         if (plan.status !== 'executing' || !plan.execution || plan.execution === org.settings.execution) continue;
         if (this.inFlight.has(`execute:${plan.id}`)) continue;
+        // A hosted session could not be held to a plan's gates, so a plan that has them stays where they can be checked.
+        if (plan.phases.some((p) => p.gate)) continue;
         const begun = plan.execution === 'managed' ? !!plan.managed?.sessionId : plan.phases.some((p) => p.status !== 'pending' || p.tasks.length > 0);
         if (begun) continue;
         plan.execution = org.settings.execution;
@@ -310,6 +318,10 @@ export class OrgRunner {
     // Hosted sessions cannot reach the vault, so a privilege that does not apply there is one that works through it.
     if (removed && !PRIVILEGE_BY_ID[privilege as Privilege].hosted) await this.access.revoke(String(seatId));
     if (changed) this.changed();
+  }
+
+  setWorkApproach(seatId: unknown, approachId: unknown, allowed: unknown): void {
+    if (changeApproach(this.org, seatId, approachId, allowed)) this.changed();
   }
 
   setAgentCount(execId: string, count: number): void {
@@ -612,19 +624,23 @@ export class OrgRunner {
       },
       touch: () => this.changed(),
       stateDir: path.join(this.store.orgDir(org.id), 'managed'),
+      checkTimes: this.checkTimes,
     };
     let error: string | null = null;
+    let waiting = false;
     try {
       const commit = await perform(item, ctx);
       commit();
       this.attempts.delete(item.key);
     } catch (err) {
+      waiting = err instanceof WaitingOnChecks;
       error = this.fail(item, err);
     } finally {
       this.inFlight.delete(item.key);
       // A plan's session is archived once the plan is over, if the shareholders asked for that.
       if (item.kind === 'execute' && org.settings.archiveSessions) this.tidy();
-      this.record({
+      // A look at the checks costs nothing and says nothing new, however many it takes.
+      if (!waiting) this.record({
         id: `a${++this.activitySeq}`,
         at: new Date().toISOString(),
         kind: item.kind,
@@ -646,6 +662,20 @@ export class OrgRunner {
   /** Decide what a failed call means. Returns the message to log, or null if the failure needs no mention. */
   private fail(item: WorkItem, err: unknown): string | null {
     if (err instanceof StaleWork) return null;
+    if (err instanceof WaitingOnChecks) {
+      // GitHub answered, so any trouble it had earlier in a long wait is over and should not add up.
+      this.attempts.delete(item.key);
+      // Held like a retry, so that it takes no slot, a pause drops it, and resuming picks it up.
+      if (this.org.status === 'running') {
+        const timer = setTimeout(() => {
+          this.backoff.delete(item.key);
+          this.pump();
+        }, this.checkTimes.pollMs);
+        timer.unref();
+        this.backoff.set(item.key, timer);
+      }
+      return null;
+    }
     const task = this.taskOf(item);
     const requeue = () => {
       if (task && task.status === 'running') {

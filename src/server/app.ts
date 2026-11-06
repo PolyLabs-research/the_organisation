@@ -225,6 +225,13 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(runner.view());
   });
 
+  // Which work approaches a role may use.
+  app.patch('/api/orgs/:id/work-approaches', (req, res) => {
+    const runner = runnerOf(req);
+    runner.setWorkApproach(req.body?.seatId, req.body?.approachId, req.body?.allowed);
+    res.json(runner.view());
+  });
+
   // The signatory's desk: the person answers a request (it is done, or it is refused and why), takes an answer
   // back, or leaves the organisation a message.
   app.post('/api/orgs/:id/requests/:requestId', (req, res) => {

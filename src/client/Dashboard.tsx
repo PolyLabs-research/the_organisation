@@ -4,6 +4,7 @@ import type { OrgView } from '../shared/types';
 import { api, useAction, useOrgStream, type Meta } from './api';
 import { Operations } from './Operations';
 const Access = lazy(() => import('./Access').then(module => ({ default: module.Access })));
+import { Approaches } from './Approaches';
 import { Privileges } from './Privileges';
 import { Hierarchy } from './Hierarchy';
 import { EXECUTION, STAGES } from './labels';
@@ -13,7 +14,7 @@ import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
 
-type Tab = 'access' | 'privileges' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
+type Tab = 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
 
 function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
   const { org } = view;
@@ -89,6 +90,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
     { id: 'calendar', label: 'Calendar' },
     { id: 'access', label: 'Email & accounts' },
     { id: 'privileges', label: 'Privileges' },
+    { id: 'approaches', label: 'Approaches' },
     { id: 'business', label: 'Business', count: org.business.jobs.filter((j) => j.status === 'review').length || undefined },
     { id: 'plans', label: 'Plans', count: livePlans || undefined },
     { id: 'decisions', label: 'Decisions', count: openDecisions || undefined },
@@ -199,6 +201,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
           <div className="tab-panel" role="tabpanel">
             {tab === 'access' ? <Suspense fallback={<p className="muted">Loading email and accounts…</p>}><Access org={org} /></Suspense> : null}
             {tab === 'privileges' ? <Privileges org={org} onView={setView} onSettings={() => setSettingsOpen(true)} /> : null}
+            {tab === 'approaches' ? <Approaches org={org} onView={setView} /> : null}
             {tab === 'calendar' ? <Operations org={org} calendar onView={setView} onOpenPlan={openPlan} /> : null}
             {tab === 'business' ? <Operations org={org} onView={setView} onOpenPlan={openPlan} /> : null}
             {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}

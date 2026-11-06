@@ -146,7 +146,8 @@ export function settle(org: Organisation): boolean {
       if (plan.status === 'approved') {
         plan.status = 'executing';
         // How a plan is carried out is settled when it starts and does not change under it.
-        plan.execution ??= org.settings.execution;
+        // A plan with gates to check stays here: a hosted session cannot reach the repository to be checked.
+        plan.execution ??= plan.phases.some((phase) => phase.gate) ? 'local' : org.settings.execution;
         stepped = true;
       } else if (plan.status === 'executing' && plan.execution !== 'managed' && plan.phases.every((phase) => phase.status === 'done')) {
         // A plan in a hosted session reports from inside the session; this is for plans run here.

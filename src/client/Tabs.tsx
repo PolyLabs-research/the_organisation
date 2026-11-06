@@ -1,6 +1,8 @@
 import { CircleCheck, CircleDashed, CirclePause, CircleX, ExternalLink, FileText, LoaderCircle } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { STANDARD_APPROACH, approachLabel } from '../shared/approaches';
 import type {
+  GateEvidence,
   ActivityEntry,
   BoardMessage,
   BoardMessageType,
@@ -322,8 +324,36 @@ function SessionBlock({ orgId, plan, simulated, onOpenFile }: { orgId: string; p
   );
 }
 
+const EVIDENCE_HEADING: Record<GateEvidence['state'], string> = { passed: 'Checked by the system', waiting: 'Waiting on the repository', failed: 'Not passed' };
+
+/** A link from GitHub's own answer. Anything that is not a plain web address is shown as text. */
+function Outward({ url, children }: { url: string; children: ReactNode }) {
+  return /^https:\/\//.test(url) ? <a href={url} target="_blank" rel="noreferrer">{children}</a> : <>{children}</>;
+}
+
+/** What the system found at a gate, which is not what anyone reported. */
+function GateResult({ evidence }: { evidence: GateEvidence }) {
+  return (
+    <div className={`gate-evidence gate-evidence-${evidence.state}`}>
+      <span className="field-label">{EVIDENCE_HEADING[evidence.state]}</span>
+      <p>{evidence.summary}</p>
+      {evidence.checks.length ? (
+        <ul className="gate-checks">
+          {evidence.checks.map((check) => (
+            <li key={check.name + check.url}>
+              <Outward url={check.url}>{check.name}</Outward>
+              <span className="muted">{check.state}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function PhaseBlock({ orgId, phase, index, held, onOpenFile }: { orgId: string; phase: PlanPhase; index: number; held: boolean; onOpenFile: (path: string) => void }) {
-  const state = phase.status === 'done' ? 'Passed' : phase.status === 'working' ? (phase.reworkRounds ? 'Rework under way' : 'Under way') : 'Not started';
+  const waiting = phase.status === 'working' && phase.evidence?.state === 'waiting';
+  const state = phase.status === 'done' ? 'Passed' : waiting ? 'Waiting for checks' : phase.status === 'working' ? (phase.reworkRounds ? 'Rework under way' : 'Under way') : 'Not started';
   return (
     <li className={`phase phase-${phase.status}`}>
       <header>
@@ -345,6 +375,7 @@ function PhaseBlock({ orgId, phase, index, held, onOpenFile }: { orgId: string; 
           <Markdown>{phase.summary}</Markdown>
         </div>
       ) : null}
+      {phase.evidence ? <GateResult evidence={phase.evidence} /> : phase.gate ? <p className="muted">The system checks this gate for itself, against the repository.</p> : null}
     </li>
   );
 }
@@ -390,6 +421,24 @@ function PlanCard({ org, plan, open, simulated, onOpenFile }: { org: Organisatio
             <>
               <dt>Approach</dt>
               <dd>{plan.approach}</dd>
+            </>
+          ) : null}
+          {plan.workApproachId !== STANDARD_APPROACH ? (
+            <>
+              <dt>Work approach</dt>
+              <dd>
+                {approachLabel(plan.workApproachId)}
+                {plan.workApproachReason ? `: ${plan.workApproachReason}` : ''}
+              </dd>
+            </>
+          ) : null}
+          {plan.code ? (
+            <>
+              <dt>Code</dt>
+              <dd>
+                <Outward url={plan.code.branchUrl}>{plan.code.repository}, {plan.code.branch}</Outward>
+                {plan.code.pull ? <> · <Outward url={plan.code.pull.url}>pull request #{plan.code.pull.number}</Outward></> : null}
+              </dd>
             </>
           ) : null}
         </dl>
