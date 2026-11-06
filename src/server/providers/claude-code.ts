@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
@@ -81,6 +81,19 @@ export interface UsageLimits {
 
 type Json = Record<string, unknown>;
 type Killed = 'abort' | 'stop' | 'idle' | 'extra_usage';
+
+/** Runs in flight, in every provider. A run must not outlive the server that is answering its tool calls and counting its spend. */
+const LIVE = new Set<ChildProcess>();
+let watching = false;
+function track(child: ChildProcess): void {
+  LIVE.add(child);
+  child.once('close', () => LIVE.delete(child));
+  if (watching) return;
+  watching = true;
+  process.once('exit', () => {
+    for (const run of LIVE) run.kill('SIGTERM');
+  });
+}
 
 interface Tokens {
   inputTokens: number;
@@ -415,6 +428,7 @@ export class ClaudeCodeProvider implements Provider {
     this.prepared ??= (async () => {
       await fs.mkdir(this.cwd, { recursive: true });
       await fs.mkdir(path.join(this.dir, 'prompts'), { recursive: true, mode: 0o700 });
+      await fs.mkdir(path.join(this.dir, 'runs'), { recursive: true, mode: 0o700 });
     })();
     return this.prepared;
   }
@@ -470,6 +484,7 @@ export class ClaudeCodeProvider implements Provider {
     return new Promise<Outcome>((resolve, reject) => {
       if (req.signal?.aborted) return reject(new ProviderError('The call was stopped before it began.', 'aborted', false));
       const child = spawn(this.command, args, { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      track(child);
       let settled = false;
       let killed: Killed | null = null;
       let hard: NodeJS.Timeout | undefined;
@@ -752,14 +767,19 @@ export class ClaudeCodeProvider implements Provider {
       return next;
     };
 
+    await this.prepare();
     const tools = await this.bridge.open({ tools: req.tools, call });
+    // Where the run's tools are is told to it in a file only this user can read, not on its command line, which
+    // anyone on the machine can see: the address is all it takes to use the tools while the run lasts.
+    const told = path.join(this.dir, 'runs', `${randomBytes(12).toString('hex')}.json`);
     let outcome: Outcome;
     try {
+      await fs.writeFile(told, JSON.stringify({ mcpServers: { [SERVER_NAME]: { type: 'http', url: tools.url } } }), { encoding: 'utf8', mode: 0o600 });
       outcome = await this.run(
         req,
         [
           '--mcp-config',
-          JSON.stringify({ mcpServers: { [SERVER_NAME]: { type: 'http', url: tools.url } } }),
+          told,
           '--allowedTools',
           req.tools.map((tool) => `mcp__${SERVER_NAME}__${tool.name}`).join(','),
           // The engine's own limit is kept by the tool server, which can ask for a closing report. This is the backstop behind it.
@@ -770,6 +790,7 @@ export class ClaudeCodeProvider implements Provider {
       );
     } finally {
       tools.close();
+      await fs.rm(told, { force: true });
     }
     if (stopped || outcome.killed === 'stop') return { text: '', turns: outcome.turns, stopped: 'interrupted' };
     const result = this.settle(outcome, { turnLimitIsAnEnd: true });

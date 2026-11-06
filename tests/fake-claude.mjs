@@ -64,7 +64,10 @@ const prompt = readFileSync(0, 'utf8');
 const system = flags['--system-prompt-file'] ? readFileSync(flags['--system-prompt-file'], 'utf8') : '';
 const model = flags['--model'] ?? 'claude-sonnet-5-5';
 const schema = flags['--json-schema'] ? JSON.parse(flags['--json-schema']) : null;
-const servers = flags['--mcp-config'] ? (JSON.parse(flags['--mcp-config']).mcpServers ?? {}) : {};
+// Like the real command, it takes the tool servers as JSON or as the path of a file that holds it.
+const given = flags['--mcp-config'];
+const servers = given ? (JSON.parse(given.trim().startsWith('{') ? given : readFileSync(given, 'utf8')).mcpServers ?? {}) : {};
+if (given && !given.trim().startsWith('{')) flags['--mcp-config-read'] = readFileSync(given, 'utf8');
 // As the real command does, an entry with an address and no type is passed over.
 const server = Object.entries(servers).find(([, s]) => s.type === 'http' && s.url);
 

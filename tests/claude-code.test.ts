@@ -326,8 +326,13 @@ describe('an agent run through Claude Code', () => {
     const [run] = await runs();
     expect(run!.flags).toMatchObject({ '--restricted': true, '--strict-mcp-config': true, '--tools': '', '--allowedTools': 'mcp__org__list_files,mcp__org__write_file', '--max-turns': '28' });
     expect(run!.flags['--json-schema']).toBeUndefined();
-    const server = JSON.parse(String(run!.flags['--mcp-config'])).mcpServers.org;
+    const server = JSON.parse(String(run!.flags['--mcp-config-read'])).mcpServers.org;
     expect(server).toMatchObject({ type: 'http', url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/mcp\/[0-9a-f]{48}$/) });
+    // The address is all it takes to use the tools, so it is not on the command line, which anyone on the machine
+    // can see: it is in a file only this user can read, and the file is gone when the run is over.
+    expect(run!.argv.join(' ')).not.toContain('/mcp/');
+    expect(path.dirname(String(run!.flags['--mcp-config']))).toBe(path.join(dir, 'claude-code', 'runs'));
+    expect(existsSync(String(run!.flags['--mcp-config']))).toBe(false);
     // Once the run is over, the address it was given leads nowhere.
     const after = await fetch(server.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
     expect(after.status).toBe(404);
@@ -342,7 +347,7 @@ describe('an agent run through Claude Code', () => {
     const cut = new AbortController();
     const hung = provider({ FAKE_CLAUDE_MODE: 'hang' }).agent(task({ tools: kit.tools, signal: cut.signal }));
     await waitFor(() => existsSync(log), 'the run to start');
-    const url = JSON.parse(String((await runs())[0]!.flags['--mcp-config'])).mcpServers.org.url as string;
+    const url = JSON.parse(String((await runs())[0]!.flags['--mcp-config-read'])).mcpServers.org.url as string;
     const post = (to: string, headers: Record<string, string> = {}, body: unknown = { jsonrpc: '2.0', id: 9, method: 'tools/list' }) =>
       fetch(to, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
