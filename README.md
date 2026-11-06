@@ -107,7 +107,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 - [Data](#data) and [Configuration](#configuration)
 - [Development](#development)
 - [Limits of this version](#limits-of-this-version)
-- [Contributing](#contributing)
+- [Contributing](#contributing) and [Licence](#licence)
 
 ## How an organisation works
 
@@ -458,3 +458,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 Issues and pull requests are welcome. The most useful thing to send is what happened when you ran it on a provider or a model it has not yet been run on (see [Status](#status)): what worked, what was refused, and what it cost.
 
 For changes to the code: `npm test` and `npm run typecheck` should pass, a change in behaviour comes with a test that fails without it, and the README is the description of what the program does, so it changes with the code.
+
+## Licence
+
+[Apache License 2.0](LICENSE). Copyright 2026 PolyLabs Research.

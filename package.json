@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "Establish a hierarchical organisation of AI agents from a single prompt: a CEO, an executive team with standard operating profiles, and the agents they direct.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PolyLabs-research/the_organisation.git"
+  },
+  "homepage": "https://github.com/PolyLabs-research/the_organisation#readme",
+  "bugs": {
+    "url": "https://github.com/PolyLabs-research/the_organisation/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
