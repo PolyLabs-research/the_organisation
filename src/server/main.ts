@@ -23,6 +23,12 @@ async function main(): Promise<void> {
     // The simulator answers in about a second so the dashboard has something to show as it runs.
     mock: { delayMs: [500, 1600] },
     claude: { managedStateFile: path.join(config.dataDir, 'managed.json'), workspace: config.workspace },
+    claudeCode: {
+      command: config.claudeCode.command,
+      dir: path.join(config.dataDir, 'claude-code'),
+      extraUsage: config.claudeCode.extraUsage,
+      ...(config.claudeCode.blocked ? { blocked: config.claudeCode.blocked } : {}),
+    },
   });
   const registry = new Registry(store, provider);
   await registry.load();
@@ -52,7 +58,7 @@ async function main(): Promise<void> {
       info.simulated
         ? `Simulating: ${config.provider === 'mock' ? 'ORG_PROVIDER=mock' : 'no API key is connected yet. Add one under "Models and keys".'}`
         : info.connections?.length
-          ? `Keys connected: ${info.label}`
+          ? `Connected: ${info.label}`
           : 'No API key is connected. Organisations pause when they next need a model: add a key under "Models and keys", or start with ORG_PROVIDER=mock to simulate.',
     );
     console.log(`Data: ${config.dataDir}`);

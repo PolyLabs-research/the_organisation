@@ -50,7 +50,7 @@ export function Home({ meta }: { meta: Meta }) {
       {!meta.provider.simulated && meta.provider.connections && meta.provider.connections.length === 0 ? (
         <div className="note note-warn">
           <span>
-            <strong>No API key is connected.</strong> Organisations pause when they next need a model, and say which key is missing. Add one under{' '}
+            <strong>Nothing is connected.</strong> Organisations pause when they next need a model, and say what is missing. Add a key, or connect Claude Code, under{' '}
             <a href="#/models">Models and keys</a>.
           </span>
         </div>

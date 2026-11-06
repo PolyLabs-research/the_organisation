@@ -10,6 +10,8 @@ export interface CallUsage {
   cacheWriteTokens: number;
   webSearches: number;
   costUsd: number;
+  /** True for a correction to what was already reported for a response: more spend, but not another response. */
+  adjustment?: boolean;
 }
 
 /**

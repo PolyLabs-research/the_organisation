@@ -21,6 +21,14 @@ export interface Config {
   production: boolean;
   /** The Anthropic workspace the API key belongs to, as it appears in Console links to hosted sessions. */
   workspace: string;
+  /** How the Claude Code on this machine is run, for the connection that uses its login instead of a key. */
+  claudeCode: {
+    command: string;
+    /** Whether to carry on when the plan's included usage is spent and further usage is billed. */
+    extraUsage: boolean;
+    /** Why the connection may not be used on this server, if it may not. */
+    blocked: string | null;
+  };
 }
 
 /** True when the Anthropic SDK would find credentials without being handed a key. */
@@ -30,6 +38,8 @@ function claudeCredentialsPresent(env: NodeJS.ProcessEnv): boolean {
   // `ant auth login` stores its profiles here.
   return existsSync(path.join(env.XDG_CONFIG_HOME ?? path.join(homedir(), '.config'), 'anthropic'));
 }
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const requested = (env.ORG_PROVIDER ?? 'auto').toLowerCase();
@@ -45,9 +55,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     provider = 'auto';
     providerReason = 'models are called once a key is connected';
   }
+  const host = env.HOST ?? '127.0.0.1';
   return {
     port: Number(env.PORT ?? 4780),
-    host: env.HOST ?? '127.0.0.1',
+    host,
     dataDir: path.resolve(env.ORG_DATA_DIR ?? path.join(ROOT_DIR, 'data')),
     provider,
     providerReason,
@@ -56,5 +67,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     anthropicAmbient: !env.ANTHROPIC_API_KEY && claudeCredentialsPresent(env),
     production: env.NODE_ENV === 'production',
     workspace: (env.ANTHROPIC_WORKSPACE_ID ?? '').trim() || 'default',
+    claudeCode: {
+      command: (env.CLAUDE_CODE_PATH ?? '').trim() || 'claude',
+      extraUsage: (env.CLAUDE_CODE_EXTRA_USAGE ?? '').trim().toLowerCase() === 'allow',
+      // A login is one person's. A server that other machines can reach would be lending it out.
+      blocked: LOOPBACK.has(host)
+        ? null
+        : `The Claude Code connection is for your own use on this machine, and is switched off while the server listens on ${host}: anyone who could reach it would be using your login, which Anthropic's terms do not allow. Set HOST back to 127.0.0.1, or use an API key.`,
+    },
   };
 }

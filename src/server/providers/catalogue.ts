@@ -94,9 +94,10 @@ export interface Preset {
   family?: string;
   /**
    * anthropic: Claude's own API. responses: OpenAI's Responses API. openai: any endpoint that speaks OpenAI's
-   * Chat Completions, which is most of them.
+   * Chat Completions, which is most of them. claude-code: no API at all, but the Claude Code program on this
+   * machine, run once for each call on the login it already has.
    */
-  kind: 'anthropic' | 'responses' | 'openai';
+  kind: 'anthropic' | 'responses' | 'openai' | 'claude-code';
   /** Where the API is. Providers with separate international and mainland-China platforms list both; the first is the default. */
   regions: Array<{ id: string; label: string; baseURL: string }>;
   /** Environment variables a key is read from, first one set wins. */
@@ -143,6 +144,21 @@ export const PRESETS: Preset[] = [
     // Claude's models and prices are in pricing.ts, with the rest of what the Claude provider needs to know about them.
     models: [],
     sources: ['https://platform.claude.com/docs/en/about-claude/pricing'],
+  },
+  {
+    id: 'claude-code',
+    label: 'Claude Code',
+    family: 'Claude, on your own login',
+    kind: 'claude-code',
+    // No address and no key: a call is a run of the `claude` command on this machine.
+    regions: [{ id: 'local', label: 'this machine', baseURL: '' }],
+    env: [],
+    keysUrl: 'https://code.claude.com/docs/en/setup',
+    note: 'No key is needed: this runs the Claude Code that is installed on this machine, on the login it already has. It is for your own use here. Anthropic’s terms do not allow a subscription login to be offered to other people, so use an API key for anything shared. Usage counts against your plan’s limits. Plans cannot be carried out in hosted sessions on this connection, and its agents cannot search the web.',
+    dialect: PLAIN_DIALECT,
+    // The same Claude models as the API has, from pricing.ts: what they would cost there is what spend is counted at.
+    models: [],
+    sources: ['https://code.claude.com/docs/en/headless', 'https://code.claude.com/docs/en/legal-and-compliance'],
   },
   {
     id: 'openai',

@@ -46,7 +46,7 @@ describe('the routes for keys', () => {
     await connections.load();
     router = new ProviderRouter(connections, { mock: QUIET, compatible: { maxRetries: 0, turnRetryDelayMs: 1 } });
     registry = new Registry(store, router, { retryDelayMs: 1, emitIntervalMs: 1 });
-    const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'auto', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false };
+    const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'auto', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
     server = createApp(registry, config, router).listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => server.once('listening', resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -234,7 +234,7 @@ describe('the routes for keys', () => {
 
   it('answers for a server that keeps no keys', async () => {
     // The same app without a router, as the tests of the rest of the API run it.
-    const bare = createApp(registry, { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false }).listen(0, '127.0.0.1');
+    const bare = createApp(registry, { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } }).listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => bare.once('listening', resolve));
     try {
       const at = `http://127.0.0.1:${(bare.address() as AddressInfo).port}`;

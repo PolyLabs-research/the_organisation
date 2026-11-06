@@ -22,7 +22,7 @@ beforeAll(async () => {
   const store = new Store(dir);
   await store.init();
   registry = new Registry(store, new MockProvider(QUIET), { retryDelayMs: 1, emitIntervalMs: 1 });
-  const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false };
+  const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
   server = createApp(registry, config).listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -264,7 +264,7 @@ describe('who may call the API', () => {
   });
 
   it('applies the localhost rule when bound to the IPv6 loopback address too', async () => {
-    const config: Config = { port: 0, host: '::1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false };
+    const config: Config = { port: 0, host: '::1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
     const other = createApp(registry, config).listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => other.once('listening', resolve));
     const { port } = other.address() as AddressInfo;

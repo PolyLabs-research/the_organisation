@@ -16,11 +16,12 @@ import { FakeOpenAI } from './fake-openai-api';
 // The second part runs keys for catalogue providers against a local stand-in.
 
 describe('the catalogue of providers', () => {
-  const real = PRESETS.filter((p) => p.id !== 'custom');
+  // Providers a key is added for. The two that are not: an endpoint of the person's own, and Claude Code, which has no key.
+  const real = PRESETS.filter((p) => p.id !== 'custom' && p.kind !== 'claude-code');
 
   it('covers the frontier makers, Chinese ones among them, and leaves Grok out', () => {
     const ids = PRESETS.map((p) => p.id);
-    expect(ids).toEqual(['anthropic', 'openai', 'google', 'meta', 'moonshot', 'deepseek', 'alibaba', 'zhipu', 'tencent', 'minimax', 'bytedance', 'openrouter', 'custom']);
+    expect(ids).toEqual(['anthropic', 'claude-code', 'openai', 'google', 'meta', 'moonshot', 'deepseek', 'alibaba', 'zhipu', 'tencent', 'minimax', 'bytedance', 'openrouter', 'custom']);
     expect(new Set(ids).size).toBe(ids.length);
     for (const preset of PRESETS) {
       const everything = JSON.stringify(preset).toLowerCase();
@@ -48,6 +49,9 @@ describe('the catalogue of providers', () => {
       }
     }
     expect(presetById('custom')).toMatchObject({ env: [], models: [], regions: [{ baseURL: '' }] });
+    // Claude Code is the program on this machine: it has no address, takes no key, and says whose use it is for.
+    expect(presetById('claude-code')).toMatchObject({ kind: 'claude-code', env: [], models: [], regions: [{ id: 'local', baseURL: '' }] });
+    expect(presetById('claude-code')!.note).toContain('It is for your own use here.');
     expect(presetById('nope')).toBeUndefined();
     expect(PRICES_CHECKED).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });

@@ -13,6 +13,7 @@
     "start": "NODE_ENV=production tsx src/server/main.ts",
     "establish": "tsx scripts/establish.ts",
     "managed:setup": "tsx scripts/managed-setup.ts",
+    "claude-code:check": "tsx scripts/claude-code-check.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

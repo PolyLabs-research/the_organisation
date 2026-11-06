@@ -1,4 +1,4 @@
-import { ArrowLeft, ExternalLink, KeyRound, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, KeyRound, RefreshCw, SquareTerminal, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { ConnectionInfo, ModelOption, PresetInfo } from '../shared/types';
 import { api, useAction, type KeysView, type Meta } from './api';
@@ -76,40 +76,64 @@ function KeyCard({ connection, preset, models, onView }: { connection: Connectio
   const [extra, setExtra] = useState('');
   const shown = filter.trim() ? models.filter((m) => `${m.id} ${m.label}`.toLowerCase().includes(filter.trim().toLowerCase())) : models;
   const picks = models.filter((m) => m.recommended).length;
+  // Claude Code is not a key: it is the program on the server's machine, on the login it has.
+  const login = preset?.kind === 'claude-code';
   return (
     <li className="key-card">
       <header className="key-head">
-        <KeyRound size={18} aria-hidden="true" />
+        {login ? <SquareTerminal size={18} aria-hidden="true" /> : <KeyRound size={18} aria-hidden="true" />}
         <div className="grow">
           <strong>{connection.label}</strong>
           {preset && preset.label !== connection.label ? <span className="muted"> · {preset.label}</span> : null}
-          <p className="muted">
-            {connection.source === 'env' ? `Key from the environment${preset?.env[0] ? ` (${preset.env[0]})` : ''}` : connection.keyHint ? `Key ending ${connection.keyHint.replace('…', '')}` : 'No key'}
-            {' · '}
-            <span className="mono">{connection.baseURL}</span>
-          </p>
+          {login ? (
+            <p className="muted">{connection.detail ?? 'The Claude Code on this machine'} · no key</p>
+          ) : (
+            <p className="muted">
+              {connection.source === 'env' ? `Key from the environment${preset?.env[0] ? ` (${preset.env[0]})` : ''}` : connection.keyHint ? `Key ending ${connection.keyHint.replace('…', '')}` : 'No key'}
+              {' · '}
+              <span className="mono">{connection.baseURL}</span>
+            </p>
+          )}
         </div>
-        <button type="button" className="button" disabled={act.busy} onClick={() => void act.run(async () => onView(await api.refreshConnection(connection.id)))} title="Ask the provider again what this key can call">
+        <button
+          type="button"
+          className="button"
+          disabled={act.busy}
+          onClick={() => void act.run(async () => onView(await api.refreshConnection(connection.id)))}
+          title={login ? 'Ask Claude Code again which version it is and whether it is signed in. No model is called.' : 'Ask the provider again what this key can call'}
+        >
           <RefreshCw size={14} aria-hidden="true" /> Check again
         </button>
         {connection.source === 'stored' ? (
           confirm ? (
             <>
               <button type="button" className="button button-danger" disabled={act.busy} onClick={() => void act.run(async () => onView(await api.disconnect(connection.id)))}>
-                Remove the key
+                {login ? 'Disconnect it' : 'Remove the key'}
               </button>
               <button type="button" className="button" onClick={() => setConfirm(false)}>
                 Keep it
               </button>
             </>
           ) : (
-            <button type="button" className="icon-button" onClick={() => setConfirm(true)} aria-label={`Remove the ${connection.label} key`}>
+            <button type="button" className="icon-button" onClick={() => setConfirm(true)} aria-label={login ? `Disconnect ${connection.label}` : `Remove the ${connection.label} key`}>
               <Trash2 size={16} />
             </button>
           )
         ) : null}
       </header>
-      {confirm ? <p className="muted">An organisation set to one of this key’s models pauses at its next call, and says which key it needs.</p> : null}
+      {confirm ? (
+        <p className="muted">
+          {login
+            ? 'An organisation set to one of these models pauses at its next call, and says what it needs. Claude Code itself, and its login, are left as they are.'
+            : 'An organisation set to one of this key’s models pauses at its next call, and says which key it needs.'}
+        </p>
+      ) : null}
+      {login ? (
+        <p className="muted">
+          Each call is a run of Claude Code on this machine, with none of your own Claude Code settings, plugins or memory, and no tools but the organisation’s own. Spend is counted at what the
+          API would charge; on a subscription none of it is billed, and it counts against your plan’s limits. {connection.usage}
+        </p>
+      ) : null}
       {connection.listingError ? <p className="note note-warn">{connection.listingError}</p> : null}
       <ErrorNote onDismiss={act.clearError}>{act.error}</ErrorNote>
       <details className="key-models">
@@ -133,15 +157,23 @@ function KeyCard({ connection, preset, models, onView }: { connection: Connectio
                   <strong>{model.label}</strong>
                   {model.tier ? <span className="tag">{TIER[model.tier]}</span> : null}
                   {model.label !== model.id.slice(model.id.indexOf(':') + 1) ? <span className="muted mono"> {model.id.slice(model.id.indexOf(':') + 1)}</span> : null}
-                  {model.note ? <p className="muted">{model.note}</p> : null}
+                  {model.note && !login ? <p className="muted">{model.note}</p> : null}
                 </td>
-                <td>{preset?.kind === 'anthropic' ? <span className="num">{price(model.inputPerMTok)} in · {price(model.outputPerMTok)} out</span> : <PriceCell connectionId={connection.id} model={model} onView={onView} />}</td>
+                <td>
+                  {preset?.kind === 'anthropic' || login ? (
+                    <span className="num">
+                      {price(model.inputPerMTok)} in · {price(model.outputPerMTok)} out
+                    </span>
+                  ) : (
+                    <PriceCell connectionId={connection.id} model={model} onView={onView} />
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
         {shown.length > 200 ? <p className="muted">Showing the first 200 of {shown.length}. Type in the box above to find one.</p> : null}
-        {preset?.kind !== 'anthropic' ? (
+        {preset?.kind !== 'anthropic' && !login ? (
           <form
             className="row"
             onSubmit={(e) => {
@@ -173,6 +205,7 @@ function AddKey({ presets, onView }: { presets: PresetInfo[]; onView: (view: Key
   const connect = useAction();
   const preset = presets.find((p) => p.id === presetId);
   const custom = presetId === 'custom';
+  const login = preset?.kind === 'claude-code';
 
   const choose = (id: string) => {
     setPresetId(id);
@@ -191,7 +224,10 @@ function AddKey({ presets, onView }: { presets: PresetInfo[]; onView: (view: Key
   return (
     <section className="panel">
       <h2>Add a key</h2>
-      <p className="muted">Choose who the key is from. The provider is asked what the key can call before it is kept, which is also how a wrong key is caught.</p>
+      <p className="muted">
+        Choose who the key is from. The provider is asked what the key can call before it is kept, which is also how a wrong key is caught. Claude Code needs no key: it is connected as it
+        stands on this machine.
+      </p>
       <ul className="preset-grid">
         {presets.map((p) => (
           <li key={p.id}>
@@ -202,7 +238,32 @@ function AddKey({ presets, onView }: { presets: PresetInfo[]; onView: (view: Key
           </li>
         ))}
       </ul>
-      {preset ? (
+      {preset && login ? (
+        <form
+          className="key-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+        >
+          {preset.note ? <p className="muted">{preset.note}</p> : null}
+          <p className="muted">
+            Connecting asks Claude Code which version it is and whether it is signed in. No model is called, and its login is never read or copied.{' '}
+            <a href={preset.keysUrl} target="_blank" rel="noreferrer noopener">
+              Installing Claude Code <ExternalLink size={12} aria-hidden="true" />
+            </a>
+          </p>
+          <ErrorNote onDismiss={connect.clearError}>{connect.error}</ErrorNote>
+          <div className="row">
+            <button type="submit" className="button button-primary" disabled={connect.busy}>
+              {connect.busy ? 'Asking Claude Code…' : 'Connect Claude Code'}
+            </button>
+            <button type="button" className="button" onClick={() => choose('')}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : preset ? (
         <form
           className="key-form"
           onSubmit={(e) => {
@@ -310,7 +371,7 @@ export function Models({ meta, onChange }: { meta: Meta; onChange: () => void })
           <h1>Models and keys</h1>
           <p className="muted">
             Add an API key and the models it can call can be chosen for any organisation’s executives and agents. Keys are kept on this machine, in a file only you can read, and are not shown
-            again once added.
+            again once added. If Claude Code is installed here, its login can be used as well, without a key; a new organisation still starts on a key’s model where there is one.
           </p>
         </div>
       </div>
@@ -324,18 +385,18 @@ export function Models({ meta, onChange }: { meta: Meta; onChange: () => void })
       <ErrorNote>{error}</ErrorNote>
 
       <section className="panel">
-        <h2>Keys</h2>
+        <h2>Connected</h2>
         {!view ? (
           error ? null : (
             <p className="muted">Loading…</p>
           )
         ) : view.connections.length === 0 ? (
           view.provider.simulated ? (
-            <p className="muted">No key yet. Until one is added, organisations run in simulation: every seat gives a scripted answer and nothing is spent.</p>
+            <p className="muted">Nothing is connected yet. Until a key is added or Claude Code is connected, organisations run in simulation: every seat gives a scripted answer and nothing is spent.</p>
           ) : (
             <p className="muted">
-              No key is connected. Organisations pause when they next need a model, and say which key is missing; add it below and resume them. This server has had keys before, so it does
-              not go back to simulating by itself: to simulate, start it with <code>ORG_PROVIDER=mock</code>.
+              Nothing is connected. Organisations pause when they next need a model, and say what is missing; add it below and resume them. This server has had a connection before, so it
+              does not go back to simulating by itself: to simulate, start it with <code>ORG_PROVIDER=mock</code>.
             </p>
           )
         ) : (

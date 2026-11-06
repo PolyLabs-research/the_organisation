@@ -594,6 +594,10 @@ export interface ConnectionInfo {
   checkedAt: string | null;
   /** Why the provider's list of models could not be read, if it could not. */
   listingError: string | null;
+  /** For a connection that is not a key: what it is, such as which Claude Code and how it is signed in. */
+  detail?: string;
+  /** What is known of the login's usage limits, where the connection has such a thing. */
+  usage?: string;
 }
 
 /** A provider the server knows how to reach, for the form that adds a key. */
@@ -601,8 +605,11 @@ export interface PresetInfo {
   id: string;
   label: string;
   family?: string;
-  /** anthropic: Claude's own API. responses: OpenAI's Responses API. openai: an endpoint that speaks OpenAI's Chat Completions. */
-  kind: 'anthropic' | 'responses' | 'openai';
+  /**
+   * anthropic: Claude's own API. responses: OpenAI's Responses API. openai: an endpoint that speaks OpenAI's Chat
+   * Completions. claude-code: the Claude Code program on the server's machine, which needs no key.
+   */
+  kind: 'anthropic' | 'responses' | 'openai' | 'claude-code';
   regions: Array<{ id: string; label: string; baseURL: string }>;
   keysUrl: string;
   note?: string;

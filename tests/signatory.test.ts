@@ -627,7 +627,7 @@ describe('the signatory over the API', () => {
     const store = new Store(dir);
     await store.init();
     registry = new Registry(store, new MockProvider({ ...QUIET, requests: 'second_phase' }), { retryDelayMs: 1, emitIntervalMs: 1 });
-    const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false };
+    const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
     server = createApp(registry, config).listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => server.once('listening', resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

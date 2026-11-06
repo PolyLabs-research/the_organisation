@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { PRESETS, type Price } from './providers/catalogue';
+import { PRESETS, presetById, type Price } from './providers/catalogue';
 import type { ListedModel } from './providers/openai-compatible';
 
 // The API keys this server can call models with: which provider each is for,
@@ -29,6 +29,8 @@ export interface Connection {
   prices: Record<string, Price>;
   /** Model ids added by hand, for a provider whose listing does not have them. */
   extraModels: string[];
+  /** For a connection that is not a key: what was found when it was last looked at, in words. */
+  detail?: string;
 }
 
 /** What is kept on disk for a connection whose key comes from the environment: everything but the key. */
@@ -75,7 +77,9 @@ export class ConnectionStore {
         // save would write over whatever keys the file still holds. Better to stop and say so.
         throw new Error(`${this.file} cannot be read: it is not valid JSON. Repair it, or move it aside and add the keys again, then start the server.`);
       }
-      this.stored = Array.isArray(parsed.connections) ? parsed.connections.filter((c) => c && ID.test(c.id) && typeof c.apiKey === 'string' && !!address(String(c.baseURL ?? ''))).map(tidy) : [];
+      // A connection is a key for an address, or, for Claude Code, the program on this machine, which has neither.
+      const placed = (c: Connection) => !!address(String(c.baseURL ?? '')) || presetById(c.presetId)?.kind === 'claude-code';
+      this.stored = Array.isArray(parsed.connections) ? parsed.connections.filter((c) => c && ID.test(c.id) && typeof c.apiKey === 'string' && placed(c)).map(tidy) : [];
       this.remembered = parsed.environment && typeof parsed.environment === 'object' ? parsed.environment : {};
       this.everHadKeys = parsed.hadKeys === true || this.stored.length > 0;
     }

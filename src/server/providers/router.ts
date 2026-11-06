@@ -4,6 +4,7 @@ import { ConnectionStore, address, keyHint, type Connection } from '../connectio
 import { ValidationError, isModelRef } from '../engine/state';
 import { PLAIN_DIALECT, PRESETS, presetById, ratesOn, type CatalogueModel, type Preset, type Price } from './catalogue';
 import { ClaudeProvider, type ClaudeProviderOptions } from './claude';
+import { CLAUDE_CODE_STARTER, ClaudeCodeProvider, checkClaudeCode, describeStatus, type ClaudeCodeOptions } from './claude-code';
 import { MockProvider, type MockOptions } from './mock';
 import { OpenAICompatibleProvider, UNKNOWN_PRICE, scrub, type CompatibleOptions, type ListedModel } from './openai-compatible';
 import { OpenAIResponsesProvider } from './openai-responses';
@@ -16,7 +17,11 @@ import { ProviderError, type AgentRequest, type AgentResult, type CallUsage, typ
 // connection, which is how organisations named their models before there was
 // more than one provider.
 //
-// With no key connected at all, everything goes to the simulator.
+// One kind of connection is not a key: Claude Code, the program on this
+// machine, run on the login it already has. It is there when asked for, and
+// never what a new organisation starts on while there is a key.
+//
+// With nothing connected at all, everything goes to the simulator.
 
 export interface RouterOptions {
   /** Never call a real model, whatever keys there are. */
@@ -26,6 +31,11 @@ export interface RouterOptions {
   claude?: Pick<ClaudeProviderOptions, 'managedStateFile' | 'workspace' | 'sessionTimings' | 'turnRetryDelayMs'>;
   /** Passed to each OpenAI-compatible provider. For tests. */
   compatible?: { maxRetries?: number; turnRetryDelayMs?: number };
+  /** How Claude Code is run. Without this, that connection can be neither added nor used. */
+  claudeCode?: ClaudeCodeOptions & {
+    /** Why the connection may not be used on this server, in words for the person, if it may not. */
+    blocked?: string;
+  };
 }
 
 export interface NewConnection {
@@ -38,7 +48,7 @@ export interface NewConnection {
   label?: string;
 }
 
-type Callable = ClaudeProvider | OpenAICompatibleProvider;
+type Callable = ClaudeProvider | OpenAICompatibleProvider | ClaudeCodeProvider;
 
 /** Split a model reference into the connection it names and the provider's own id for the model. */
 export function parseRef(ref: string): { connectionId: string | null; model: string } {
@@ -124,7 +134,9 @@ export class ProviderRouter implements Provider {
   /** The models one connection offers: the catalogue's picks first, then whatever else the key can call. */
   private optionsOf(connection: Connection): ModelOption[] {
     const preset = this.preset(connection);
-    if (preset.kind === 'anthropic') {
+    if (preset.kind === 'anthropic' || preset.kind === 'claude-code') {
+      // Claude Code reaches the same Claude models as a key does. Hosted sessions and web search are the API's alone.
+      const api = preset.kind === 'anthropic';
       return MODELS.map((m) => ({
         id: this.refOf(connection, m.id),
         label: m.label,
@@ -135,8 +147,9 @@ export class ProviderRouter implements Provider {
         priced: true,
         recommended: true,
         tier: m.tier,
-        hosted: true,
-        web: true,
+        hosted: api,
+        web: api,
+        ...(api ? {} : { note: 'On your Claude Code login: spend is counted at these API prices, and on a subscription none of it is billed.' }),
       }));
     }
     const listed = new Map<string, ListedModel>(connection.models.map((m) => [m.id, m]));
@@ -198,7 +211,25 @@ export class ProviderRouter implements Provider {
       modelCount: this.optionsOf(connection).length,
       checkedAt: connection.checkedAt,
       listingError: connection.listingError,
+      ...(connection.detail ? { detail: connection.detail } : {}),
+      ...this.usageOf(connection),
     };
+  }
+
+  /** What Claude Code last said of the login's usage limits, in words, once it has run since the server started. */
+  private usageOf(connection: Connection): { usage?: string } {
+    const live = this.clients.get(connection.id)?.provider;
+    const limits = live instanceof ClaudeCodeProvider ? live.limits() : null;
+    if (!limits) return {};
+    const window = limits.window === 'seven_day' ? 'weekly' : limits.window === 'five_hour' ? 'five-hour' : (limits.window ?? '').replace(/_/g, ' ');
+    const used = limits.utilization === null ? '' : `${Math.round(limits.utilization * 100)}% of the plan’s ${window} limit was used when Claude Code last ran. `.replace('  ', ' ');
+    const extra = limits.usingExtra
+      ? 'The plan’s included usage is spent, and further usage is being billed as extra.'
+      : limits.extraAllowed
+        ? `Paid extra usage is switched on for this account${this.options.claudeCode?.extraUsage ? ', and this server is set to carry on into it' : ': an organisation pauses rather than start using it'}.`
+        : '';
+    const said = `${used}${extra}`.trim();
+    return said ? { usage: said } : {};
   }
 
   presets(): PresetInfo[] {
@@ -229,10 +260,20 @@ export class ProviderRouter implements Provider {
   defaultModel(): string {
     if (this.simulated) return DEFAULT_MODEL;
     // A Claude key comes first where there is one: its models are the ones everything here can be done with.
+    // A Claude Code login comes last, whenever it was added: it is there to be chosen, and is never the default
+    // while there is a key of any kind.
     const claude = this.plainAnthropic() ?? this.anthropicKeys()[0];
-    const order = claude ? [claude, ...this.store.list().filter((c) => c !== claude)] : this.store.list();
+    const login = (c: Connection) => this.preset(c).kind === 'claude-code';
+    const keys = this.store.list().filter((c) => !login(c));
+    const order = [...(claude ? [claude, ...keys.filter((c) => c !== claude)] : keys), ...this.store.list().filter(login)];
     for (const connection of order) {
       const offered = this.optionsOf(connection);
+      if (login(connection)) {
+        // On a plan, the balanced model: an organisation on the strongest one would soon use up what the plan includes.
+        const starter = offered.find((m) => m.id === this.refOf(connection, CLAUDE_CODE_STARTER)) ?? offered[0];
+        if (starter) return starter.id;
+        continue;
+      }
       const starter = this.catalogueFor(connection).find((m) => m.starter && offered.some((o) => o.id === this.refOf(connection, m.id)));
       const pick = starter ? this.refOf(connection, starter.id) : (offered.find((m) => m.recommended) ?? offered[0])?.id;
       if (pick) return pick;
@@ -272,6 +313,11 @@ export class ProviderRouter implements Provider {
     const existing = this.clients.get(connection.id);
     if (existing?.signature === signature) return existing.provider;
     const preset = this.preset(connection);
+    if (preset.kind === 'claude-code') {
+      const provider = new ClaudeCodeProvider(this.claudeCode());
+      this.clients.set(connection.id, { provider, signature });
+      return provider;
+    }
     // Looked up each time they are wanted, so that a price corrected by hand, or a fresh listing, counts from the next call.
     const current = () => this.store.get(connection.id) ?? connection;
     const options: CompatibleOptions = {
@@ -300,6 +346,14 @@ export class ProviderRouter implements Provider {
     return provider;
   }
 
+  /** How Claude Code is to be run, or the reason it may not be, as an error that says so. */
+  private claudeCode(): ClaudeCodeOptions {
+    const options = this.options.claudeCode;
+    if (!options) throw new ProviderError('This server was not started in a way that can run Claude Code.', 'auth', false);
+    if (options.blocked) throw new ProviderError(options.blocked, 'auth', false);
+    return options;
+  }
+
   /**
    * Where the ids of a key's saved agents and environments for hosted sessions are kept. They belong to the
    * account the key is for, so each Anthropic key has a file of its own; the key called "anthropic" keeps the
@@ -314,6 +368,9 @@ export class ProviderRouter implements Provider {
     const { connectionId, model } = parseRef(ref);
     const connection = this.connectionFor(ref);
     if (!connection) {
+      if (connectionId && presetById(connectionId)?.kind === 'claude-code') {
+        throw new ProviderError(`Claude Code is not connected, which the model "${ref}" needs. Connect it under Models and keys, or choose another model in this organisation's settings.`, 'auth', false);
+      }
       const what = connectionId ? `the "${connectionId}" connection` : 'Anthropic';
       throw new ProviderError(
         `No API key is connected for ${what}, which the model "${ref}" needs. Add the key under Models and keys, or choose another model in this organisation's settings.`,
@@ -411,6 +468,7 @@ export class ProviderRouter implements Provider {
   async connect(input: NewConnection): Promise<Connection> {
     const preset = presetById(input.presetId);
     if (!preset) throw new ValidationError('Choose the provider the key is for.');
+    if (preset.kind === 'claude-code') return this.connectClaudeCode(preset, input.label);
     const apiKey = (input.apiKey ?? '').trim();
     const baseURL = address(input.baseURL || preset.regions.find((r) => r.id === input.region)?.baseURL || preset.regions[0]!.baseURL);
     if (!baseURL) throw new ValidationError('Give the address of the endpoint, for example http://127.0.0.1:8080/v1.');
@@ -438,6 +496,35 @@ export class ProviderRouter implements Provider {
     return connection;
   }
 
+  /**
+   * Connect the Claude Code on this machine. There is no key to keep: what is kept is that the person asked for
+   * it, and what Claude Code said of itself. It is asked its version and whether it is signed in, neither of
+   * which calls a model.
+   */
+  private async connectClaudeCode(preset: Preset, label?: string): Promise<Connection> {
+    if (this.store.list().some((c) => this.preset(c).kind === 'claude-code')) {
+      throw new ValidationError('Claude Code is already connected. There is one login on this machine, so there is one connection for it.');
+    }
+    const connection: Connection = {
+      id: this.store.freeId(preset.id),
+      presetId: preset.id,
+      label: (label ?? '').trim().slice(0, 60) || preset.label,
+      baseURL: '',
+      apiKey: '',
+      source: 'stored',
+      addedAt: new Date().toISOString(),
+      models: [],
+      checkedAt: null,
+      listingError: null,
+      prices: {},
+      extraModels: [],
+    };
+    await this.look(connection, true);
+    if (this.store.list().some((c) => this.preset(c).kind === 'claude-code')) throw new ValidationError('Claude Code is already connected.');
+    await this.store.add(connection);
+    return connection;
+  }
+
   /** Ask the provider again what a key can call. */
   async refresh(id: string): Promise<Connection> {
     const connection = this.store.get(id);
@@ -446,7 +533,9 @@ export class ProviderRouter implements Provider {
     await this.look(looked, false);
     const updated = await this.store.update(id, (c) => {
       // The key may have been changed while the provider was answering for the old one. Its answer is then of no use.
-      if (c.apiKey === looked.apiKey && c.baseURL === looked.baseURL) Object.assign(c, { models: looked.models, checkedAt: looked.checkedAt, listingError: looked.listingError });
+      if (c.apiKey === looked.apiKey && c.baseURL === looked.baseURL) {
+        Object.assign(c, { models: looked.models, checkedAt: looked.checkedAt, listingError: looked.listingError, ...(looked.detail ? { detail: looked.detail } : {}) });
+      }
     });
     if (!updated) throw new ValidationError('There is no such connection.');
     return updated;
@@ -474,6 +563,21 @@ export class ProviderRouter implements Provider {
    */
   private async look(connection: Connection, adding: boolean): Promise<void> {
     const preset = this.preset(connection);
+    if (preset.kind === 'claude-code') {
+      try {
+        const options = this.claudeCode();
+        connection.detail = describeStatus(await checkClaudeCode(options.command, options.env));
+        connection.listingError = null;
+      } catch (err) {
+        // Not installed, too old, not signed in, or not allowed on this server: each says what to do about it.
+        const message = err instanceof Error ? err.message : String(err);
+        if (adding) throw new ValidationError(message);
+        connection.listingError = message;
+      }
+      connection.models = [];
+      connection.checkedAt = new Date().toISOString();
+      return;
+    }
     try {
       if (preset.kind === 'anthropic') {
         // Claude's models are the ones this project has prices for; the call is only to see that the key is good.
@@ -516,6 +620,9 @@ export class ProviderRouter implements Provider {
     if (connection.source === 'env' && patch.apiKey !== undefined) {
       throw new ValidationError('This key comes from the environment the server was started in. Change it there and restart.');
     }
+    if (this.preset(connection).kind === 'claude-code' && patch.apiKey?.trim()) {
+      throw new ValidationError('This connection has no key: it uses the login Claude Code has on this machine. To use a key, add it as a connection of its own.');
+    }
     const next: Connection = { ...connection };
     if (patch.label !== undefined) next.label = patch.label.trim().slice(0, 60) || connection.label;
     if (patch.apiKey !== undefined && patch.apiKey.trim()) {
@@ -556,6 +663,8 @@ export class ProviderRouter implements Provider {
     if (!connection) throw new ValidationError('There is no such connection.');
     if (connection.source === 'env') throw new ValidationError('This key comes from the environment the server was started in. Remove it there and restart.');
     await this.store.remove(id);
+    const client = this.clients.get(id)?.provider;
+    if (client instanceof ClaudeCodeProvider) client.close();
     this.clients.delete(id);
   }
 }

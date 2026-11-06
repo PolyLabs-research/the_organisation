@@ -104,7 +104,7 @@ export function emptyUsage(): UsageTotals {
 }
 
 export function addUsage(total: UsageTotals, call: CallUsage): void {
-  total.calls += 1;
+  if (!call.adjustment) total.calls += 1;
   total.inputTokens += call.inputTokens;
   total.outputTokens += call.outputTokens;
   total.cacheReadTokens += call.cacheReadTokens;
