@@ -1,6 +1,7 @@
 import { describeRequest, isOpen, waitsOnAi } from '../../shared/signatory';
 import type { BoardReport, Decision, Executive, Organisation, Plan, PlanPhase, ReviewRound, SignatoryRequest, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, type SystemPrompt } from '../providers/types';
+import { oneLine } from './records';
 import { CEO_QUESTION, arbiterOf, execById, leadsOf, teamDir } from './state';
 
 // System prompts are cached by the provider, so they hold only what stays the
@@ -188,7 +189,8 @@ function requestLine(org: Organisation, request: SignatoryRequest): string {
 
 function outcomeLine(request: SignatoryRequest): string {
   const outcome = request.outcome!;
-  const said = outcome.note ? ` ${outcome.note}` : '';
+  // Quoted on one line, so that nothing in it can pass for another entry of the list.
+  const said = outcome.note ? ` ${oneLine(outcome.note, 600)}` : '';
   if (outcome.result === 'done') return `DONE.${said ? ` The signatory adds:${said}` : ''}`;
   if (outcome.result === 'withdrawn') return `withdrawn.${said}`;
   return `REJECTED${outcome.by === 'ai' ? ' by the signatory' : ' by the person who would have carried it out'}:${said || ' no reason given.'}`;
@@ -198,12 +200,28 @@ function outcomeLine(request: SignatoryRequest): string {
  * What has been asked of the signatory and what became of it: what is still waiting, what was settled in this
  * cycle or the last, and anything else the signatory has said. This is how the organisation hears.
  */
-export function signatoryBlock(org: Organisation): string {
+function deskNews(org: Organisation) {
   const { requests, messages } = org.signatory;
+  return {
+    open: requests.filter(isOpen),
+    // The most recently settled, in the order they were settled: a lead must see the answer it was just given.
+    settled: requests
+      .filter((r) => r.outcome && r.outcome.cycle >= org.cycle.number - 1)
+      .sort((a, b) => a.outcome!.at.localeCompare(b.outcome!.at))
+      .slice(-12),
+    notes: messages.filter((m) => m.kind === 'note' && m.cycle >= org.cycle.number - 1).slice(-5),
+  };
+}
+
+/** Whether there is anything about signing and paying that a seat should be told. */
+export function deskHasNews(org: Organisation): boolean {
+  const { open, settled, notes } = deskNews(org);
+  return open.length + settled.length + notes.length > 0;
+}
+
+export function signatoryBlock(org: Organisation): string {
   const holder = org.settings.signatory;
-  const open = requests.filter(isOpen);
-  const settled = requests.filter((r) => r.outcome && r.outcome.cycle >= org.cycle.number - 1).slice(-12);
-  const notes = messages.filter((m) => m.kind === 'note' && m.cycle >= org.cycle.number - 1).slice(-5);
+  const { open, settled, notes } = deskNews(org);
   if (!open.length && !settled.length && !notes.length) return '# Signing and paying\nNothing is waiting for the signatory, and nothing has been asked lately.';
   const parts = ['# Signing and paying'];
   if (open.length) {
@@ -212,9 +230,9 @@ export function signatoryBlock(org: Organisation): string {
     parts.push(`Waiting, and so not yet done:\n${open.map((r) => `- ${requestLine(org, r)} [${state(r)}]`).join('\n')}`);
   }
   if (settled.length) parts.push(`Settled in this cycle or the last:\n${settled.map((r) => `- ${requestLine(org, r)}: ${outcomeLine(r)}`).join('\n')}`);
-  if (notes.length) parts.push(`The signatory has also said:\n${notes.map((n) => `- ${n.text}`).join('\n')}`);
+  if (notes.length) parts.push(`The signatory has also said, which you can rely on:\n${notes.map((n) => `- ${oneLine(n.text, 1000)}`).join('\n')}`);
   parts.push(
-    'Only what is marked DONE has happened. Do not ask again for what is waiting or done. What was rejected is not to be asked for again as it stood: work around it, or ask for something that answers the reason given.',
+    'Of what was asked for, only what is marked DONE has happened. Do not ask again for what is waiting or done. What was rejected is not to be asked for again as it stood: work around it, or ask for something that answers the reason given.',
   );
   return parts.join('\n');
 }
@@ -526,6 +544,9 @@ export function authorisePrompt(org: Organisation, request: SignatoryRequest, pl
         .map((f) => (f.content === null ? `<file path="${f.path}">${f.note ?? ''}</file>` : `<file path="${f.path}"${f.note ? ` note="${f.note}"` : ''}>\n${f.content}\n</file>`))
         .join('\n\n')
     : 'The lead named no files.';
+  // The person may have set a limit, or said what they will not pay for. That binds what is worth authorising.
+  const notes = org.signatory.messages.filter((m) => m.kind === 'note' && m.cycle >= org.cycle.number - 1).slice(-5);
+  const said = notes.length ? `${notes.map((n) => `- ${oneLine(n.text, 1000)}`).join('\n')}\nHold to it: they will refuse what goes against it.` : 'Nothing.';
   return `${today()} A request has been put to you.
 
 # The request
@@ -546,6 +567,9 @@ ${steerBlock(org)}
 
 # What else has been asked of the signatory
 ${before}
+
+# What the person who carries out what you authorise has said
+${said}
 
 # Your task
 Authorise this request or decline it, and give your reason in a sentence or two for the lead who asked. If you decline, say what would have to change for you to agree.`;
@@ -660,13 +684,15 @@ ${
 const bindingBlock = (instructions: string[]) => instructions.map((i) => `- ${i}`).join('\n');
 
 /** The message that sets a session going again after it stopped short of reporting. */
-export function sessionResume(lead: Executive, plan: Plan, instructions: string[]): string {
+export function sessionResume(org: Organisation, lead: Executive, plan: Plan, instructions: string[]): string {
   const done = plan.phases.filter((p) => p.status === 'done').map((p) => p.name);
   const next = plan.phases.find((p) => p.status !== 'done');
   const binding = instructions.length ? `\n\nBinding instructions from the board since you last heard:\n${bindingBlock(instructions)}` : '';
+  // What became of anything put to the signatory may have changed while the session was held.
+  const desk = deskHasNews(org) ? `\n\n${signatoryBlock(org)}` : '';
   return `Carry on with the plan from where it stands. ${done.length ? `Recorded so far: ${done.join(', ')}.` : 'No phase has been recorded yet.'} ${
     next ? `Next to record: ${next.name}.` : `Every phase is recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`
-  } You have ${agents(Math.max(lead.agentCount, 1))}. If a workflow run of yours is still open, have it continue; do not start it again.${binding}`;
+  } You have ${agents(Math.max(lead.agentCount, 1))}. If a workflow run of yours is still open, have it continue; do not start it again.${binding}${desk}`;
 }
 
 /** New binding instructions for a session that is under way. */

@@ -5,6 +5,8 @@ import { leadsOf, nextId, postToBoard } from './state';
 
 export const now = () => new Date().toISOString();
 export const clean = (text: string, max = 2000) => text.trim().slice(0, max);
+/** Text for a field that is one line wherever it is shown or quoted: line breaks and runs of space become single spaces. */
+export const oneLine = (text: string, max = 2000) => text.replace(/\s+/g, ' ').trim().slice(0, max);
 export const bullets = (items: string[]) => items.map((i) => `- ${i}`).join('\n');
 
 export const MAX_RESULT_CHARS = 12_000;

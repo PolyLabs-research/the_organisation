@@ -102,17 +102,35 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(
 
 function phaseRecord(input: Record<string, unknown>): PhaseRecord {
   const decisions = Array.isArray(input.decisions) ? input.decisions : [];
-  const requests = Array.isArray(input.requests) ? input.requests : [];
   return {
     phase: str(input.phase),
     summary: str(input.summary),
     decisions: decisions
       .filter((d): d is Record<string, unknown> => typeof d === 'object' && d !== null)
       .map((d) => ({ title: str(d.title), decision: str(d.decision), rationale: str(d.rationale) })),
-    requests: requests
-      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
-      .map((r) => ({ kind: str(r.kind), title: str(r.title), detail: str(r.detail), amount: str(r.amount), party: str(r.party), files: strings(r.files) })),
+    requests: listOf(input.requests)
+      .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null && !Array.isArray(r))
+      .map((r) => ({ kind: plain(r.kind), title: plain(r.title), detail: plain(r.detail), amount: plain(r.amount), party: plain(r.party), files: listOf(r.files).map(plain).filter(Boolean) })),
   };
+}
+
+/** Text or a number as text. Anything else is no answer, where `str` would make "[object Object]" of it. */
+const plain = (value: unknown): string => (typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '');
+
+/** A list a model was asked for, however it wrote it: as a list, as JSON in a string, or as the one item on its own. */
+function listOf(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return [];
+    try {
+      const parsed: unknown = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : typeof parsed === 'object' && parsed !== null ? [parsed] : [text];
+    } catch {
+      return [text];
+    }
+  }
+  return typeof value === 'object' && value !== null ? [value] : [];
 }
 
 function reportDraft(input: Record<string, unknown>): BoardReportDraft {

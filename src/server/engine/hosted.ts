@@ -1,12 +1,11 @@
 import path from 'node:path';
-import { isOpen } from '../../shared/signatory';
 import type { Executive, ManagedSession, Plan, PlanPhase, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, ProviderError, type PlanHooks, type PlanJob, type PlanOutcome } from '../providers/types';
 import { WorkspaceError } from '../workspace';
 import type { Commit, EngineContext } from './handlers';
 import * as prompts from './prompts';
 import { MAX_RESULT_CHARS, clean, fileReport, logRemitDecisions, newTask, now } from './records';
-import { raiseRequests } from './signatory';
+import { MAX_REQUESTS_PER_GATE, raiseRequests } from './signatory';
 import { execById, isPlanActive, postToBoard, sessionAllowance, teamDir } from './state';
 
 // A plan carried out in a hosted session: the lead and its agents work in a
@@ -82,6 +81,18 @@ export function outputPath(name: string, team: string): string {
   if (!rel) rel = 'unnamed';
   if (!rel.startsWith(`${team}/`)) rel = `${team}/${rel}`;
   return rel;
+}
+
+/**
+ * The workspace path of a file a lead in a session names. The lead knows its own files by where they are in the
+ * sandbox, and the organisation's by where they are mounted there; neither is where they are in the workspace.
+ */
+export function homePath(name: string, team: string, brought: string[]): string {
+  const given = name.replace(/\\/g, '/').trim();
+  if (/^\/?mnt\/session\/outputs\//.test(given)) return outputPath(given, team);
+  const rel = given.replace(/^\/?mnt\/session\/uploads\/workspace\//, '').replace(/^\/+/, '');
+  // A bare name is most likely one of the session's own files, which come home under the team's directory.
+  return !brought.includes(rel) && brought.includes(`${team}/${rel}`) ? `${team}/${rel}` : rel;
 }
 
 function titleOf(brief: string): string {
@@ -186,7 +197,11 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       if (named < 0) {
         return { ok: false, message: `"${record.phase}" is not a phase of your operating profile. The phases are ${order}, and ${current.name} is the next to record.` };
       }
-      if (named < index) return { ok: true, message: `${plan.phases[named]!.name} was already recorded. ${current.name} is next.` };
+      if (named < index) {
+        // A record that is sent twice is the same record. What it asks of the signatory is not filed a second time.
+        const unfiled = record.requests?.length ? ' Nothing it asks of the signatory was filed: ask when you record a phase for the first time.' : '';
+        return { ok: true, message: `${plan.phases[named]!.name} was already recorded.${unfiled} ${current.name} is next.` };
+      }
       if (named > index) {
         return { ok: false, message: `${plan.phases[named]!.name} cannot be recorded yet: ${current.name} comes before it and has not been recorded.` };
       }
@@ -195,16 +210,27 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       current.summary = clean(record.summary, 4000);
       logRemitDecisions(org, lead, plan, record.decisions);
       // What the plan now needs paid for or signed goes to the signatory. The session does not wait for it.
-      const asked = raiseRequests(org, lead, plan, current.name, record.requests ?? []);
+      // A plan that was cancelled while this record was on its way asks for nothing.
+      const wanted = plan.status === 'executing' ? (record.requests ?? []) : [];
+      const asked = raiseRequests(
+        org,
+        lead,
+        plan,
+        current.name,
+        wanted.map((spec) => ({ ...spec, files: (Array.isArray(spec.files) ? spec.files : []).map((file) => homePath(String(file), team, managed.files)) })),
+      );
       const next = plan.phases[index + 1];
       // The record's reply is a sure way to reach the lead, so anything the board has since ruled goes with it.
       const pending = pendingInstructions();
       managed.instructionsSent = plan.amendments.length;
       changed();
       const binding = pending.length ? `\n\n${prompts.sessionInstructions(pending)}` : '';
-      const put = asked.length ? ` ${asked.length} request${asked.length === 1 ? ' has' : 's have'} gone to the signatory.` : '';
+      const left = wanted.length - asked.length;
+      const put =
+        (asked.length ? ` ${asked.length} request${asked.length === 1 ? ' has' : 's have'} gone to the signatory.` : '') +
+        (left > 0 ? ` ${left} ${left === 1 ? 'was' : 'were'} not filed: a request needs a title, is filed once while it is open, and a phase may raise ${MAX_REQUESTS_PER_GATE}.` : '');
       // The reply is also where the lead hears what became of what it asked for earlier.
-      const desk = org.signatory.requests.some((r) => isOpen(r) || (r.outcome && r.outcome.cycle >= org.cycle.number - 1)) ? `\n\n${prompts.signatoryBlock(org)}` : '';
+      const desk = prompts.deskHasNews(org) ? `\n\n${prompts.signatoryBlock(org)}` : '';
       return {
         ok: true,
         message: `Recorded.${put} ${next ? `${next.name} is next.` : `Every phase is now recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`}${binding}${desk}`,
@@ -468,7 +494,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       system: prompts.sessionSystem(org, lead),
       // The kickoff states every instruction the board has given so far.
       kickoff: { message: prompts.sessionKickoff(org, lead, plan, files), instructions: plan.amendments.length },
-      resume: () => ({ message: prompts.sessionResume(lead, plan, pendingInstructions()), instructions: plan.amendments.length }),
+      resume: () => ({ message: prompts.sessionResume(org, lead, plan, pendingInstructions()), instructions: plan.amendments.length }),
       executiveModel: org.settings.executiveModel,
       executiveEffort: org.settings.executiveEffort,
       workerModel: org.settings.workerModel,

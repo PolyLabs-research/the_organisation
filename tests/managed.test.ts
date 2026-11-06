@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { cancelPlan } from '../src/server/engine/handlers';
 import { ClaudeProvider } from '../src/server/providers/claude';
 import { MockProvider } from '../src/server/providers/mock';
 import { ProviderError, type BoardReportDraft, type PlanHooks, type PlanJob, type PlanOutcome } from '../src/server/providers/types';
@@ -1456,7 +1457,7 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(replies[0]).toContain('Pay: A domain name (12 GBP a year, to A registrar) [waiting for a person to decide and carry it out]');
     // And again at the next record, with no new request made.
     expect(replies[1]).toMatch(/^Recorded\. Release is next\./);
-    expect(replies[1]).toContain('Only what is marked DONE has happened.');
+    expect(replies[1]).toContain('Of what was asked for, only what is marked DONE has happened.');
 
     // The lead that sessions are started from is told how to ask, in its tools and in how it is told to work.
     const lead = [...api.agents.values()].find((a) => a.tools.some((t: { name?: string }) => t.name === 'record_phase'))!;
@@ -1464,6 +1465,91 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(record.input_schema.properties.requests.items.properties.kind.enum).toEqual(['payment', 'signature']);
     expect(record.input_schema.required).toEqual(['phase', 'summary']);
     expect(JSON.stringify(api.requests.find((r) => r.method === 'POST' && r.path === '/v1/sessions')!.body)).toContain('Signing and paying: neither you nor your agents can pay for anything or sign anything');
+  });
+
+  it('reads what a lead asks of the signatory however it wrote it, finds the files it means, and says what was not filed', async () => {
+    const replies: string[] = [];
+    const work = async (s: FakeSession, name: string) => {
+      s.says(`Starting ${name}.`);
+      s.delegate('sthr_a', `${name}: write the document`, `Wrote ${name.toLowerCase()}.md.`, { name: `engineering/${name.toLowerCase()}.md`, content: `# ${name}` });
+      await s.charge(10);
+    };
+    const record = async (s: FakeSession, name: string, requests: unknown) => {
+      replies.push((await s.call('record_phase', { phase: name, summary: `${name} passed its gate.`, requests })).text);
+    };
+    api.script = async (s) => {
+      // A list written out as text, which is a slip models make.
+      await work(s, 'Spec');
+      await record(s, 'Spec', JSON.stringify([{ kind: 'payment', title: 'Hosting', detail: 'Needed.', amount: '5 USD', party: 'A host' }]));
+      // One request on its own, not in a list, its kind spelt its own way, and its file named by where it is in the sandbox.
+      await work(s, 'Build');
+      await record(s, 'Build', { kind: 'Signature', title: 'Terms with the host', detail: 'Sign them.', party: 'A host', files: ['/mnt/session/outputs/engineering/build.md', 'build.md'] });
+      // Something that is no request, a repeat of one that is open, and one more than a phase may raise.
+      await work(s, 'Test');
+      await record(s, 'Test', [
+        { kind: 'payment', title: { text: 'Not a title' }, detail: ['a'], amount: 40 },
+        { kind: 'payment', title: 'hosting', detail: 'Again.', amount: '5 USD', party: 'A host' },
+        { kind: 'payment', title: 'One', amount: 1, party: 'P' },
+        { kind: 'payment', title: 'Two', amount: '2', party: 'P' },
+        { kind: 'payment', title: 'Three', amount: '3', party: 'P' },
+        { kind: 'payment', title: 'Four', amount: '4', party: 'P' },
+      ]);
+      // The same record sent a second time, now asking for something.
+      await record(s, 'Test', [{ kind: 'payment', title: 'Five', amount: '5', party: 'P' }]);
+      await phase(s, 'Release');
+      await report(s);
+    };
+    h = await setup();
+    await runToRest(h.runner);
+    const { org } = h;
+    expect(org.lastError).toBeNull();
+    expect(org.plans[0]!.status).toBe('done');
+    expect(org.signatory.requests.map((r) => [r.kind, r.title, r.amount, r.files, r.phase])).toEqual([
+      ['payment', 'Hosting', '5 USD', [], 'Spec'],
+      // Both names were for the one file the session wrote, which is in the workspace under the team's folder.
+      ['signature', 'Terms with the host', '', ['engineering/build.md'], 'Build'],
+      ['payment', 'One', '1', [], 'Test'],
+      ['payment', 'Two', '2', [], 'Test'],
+      ['payment', 'Three', '3', [], 'Test'],
+    ]);
+    expect((await h.runner.workspace.read(org.signatory.requests[1]!.files[0]!)).content).toBe('# Build');
+    expect(replies[0]).toContain('Recorded. 1 request has gone to the signatory. Build is next.');
+    expect(replies[1]).toContain('Recorded. 1 request has gone to the signatory. Test is next.');
+    // The lead is told when something it asked for did not go.
+    expect(replies[2]).toContain('Recorded. 3 requests have gone to the signatory. 3 were not filed: a request needs a title, is filed once while it is open, and a phase may raise 3. Release is next.');
+    expect(replies[3]).toMatch(/^Test was already recorded\. Nothing it asks of the signatory was filed: ask when you record a phase for the first time\. Release is next\./);
+  });
+
+  it('files nothing for a plan that was cancelled while its phase record was on its way', async () => {
+    let armed = false;
+    let cancelled = false;
+    api.script = async (s) => {
+      await phase(s, 'Spec');
+      s.says('Starting Build.');
+      s.delegate('sthr_a', 'Build: write the document', 'Wrote build.md.', { name: 'engineering/build.md', content: '# Build' });
+      await s.charge(10);
+      armed = true;
+      await s.call('record_phase', { phase: 'Build', summary: 'Build passed its gate.', requests: [{ kind: 'payment', title: 'A domain name', detail: 'Needed for release.', amount: '12 GBP a year', party: 'A registrar' }] }).catch(() => {});
+    };
+    h = await setup();
+    const { org, runner } = h;
+    // The session lists its output folder before the record is taken. In that moment the plan is cancelled.
+    const push = api.requests.push.bind(api.requests);
+    api.requests.push = (...items) => {
+      for (const request of items) {
+        if (armed && !cancelled && request.method === 'GET' && request.path === '/v1/files') {
+          cancelled = true;
+          cancelPlan(org, org.plans[0]!, 'The shareholders have dropped this line of work.', 'ceo');
+        }
+      }
+      return push(...items);
+    };
+    await runToRest(runner);
+    expect(cancelled).toBe(true);
+    expect(org.plans[0]!.status).toBe('cancelled');
+    // Nobody is asked to pay for work that has been stopped.
+    expect(org.signatory.requests).toEqual([]);
+    expect(org.board.filter((m) => m.type === 'signatory')).toEqual([]);
   });
 
   it('archives the session once its plan has reported, when the organisation is set to', async () => {

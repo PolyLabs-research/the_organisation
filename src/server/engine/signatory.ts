@@ -1,7 +1,7 @@
 import { describeRequest, isOpen, requestSubject } from '../../shared/signatory';
 import type { BoardMessage, Executive, Organisation, Plan, SignatoryMessage, SignatoryRequest } from '../../shared/types';
-import { clean, now } from './records';
-import { ValidationError, execById, nextId, postToBoard } from './state';
+import { clean, now, oneLine } from './records';
+import { ValidationError, execById, nextId, planById, postToBoard, requestRecordLine } from './state';
 
 // The signatory's desk. An organisation of agents cannot sign a document or
 // move money, so anything of that kind is put to one seat, the Authorised
@@ -10,7 +10,7 @@ import { ValidationError, execById, nextId, postToBoard } from './state';
 // still has to be carried out by a person, outside this system, who then says
 // here that it was done. Until a request is done, it has not happened.
 
-/** How many requests one gate review may raise. */
+/** How many requests one phase gate may raise, however often the gate is reviewed. */
 export const MAX_REQUESTS_PER_GATE = 3;
 /** How many requests one lead may have open at a time. More than this is noise, not need. */
 export const MAX_OPEN_PER_LEAD = 10;
@@ -41,15 +41,47 @@ function findRequest(org: Organisation, requestId: string): SignatoryRequest {
 
 /** Add a line to the conversation between the organisation and whoever signs and pays for it. */
 function say(org: Organisation, fromId: string, kind: SignatoryMessage['kind'], text: string, requestId?: string): void {
-  const { messages } = org.signatory;
-  messages.push({ id: nextId(org, 'n'), at: now(), cycle: org.cycle.number, fromId, kind, text, ...(requestId ? { requestId } : {}) });
-  if (messages.length > MAX_MESSAGES) messages.splice(0, messages.length - MAX_MESSAGES);
+  const desk = org.signatory;
+  desk.messages.push({ id: nextId(org, 'n'), at: now(), cycle: org.cycle.number, fromId, kind, text, ...(requestId ? { requestId } : {}) });
+  let over = desk.messages.length - MAX_MESSAGES;
+  if (over <= 0) return;
+  // The oldest lines go first, but not the line that asks for something still on the desk: that line is where
+  // the request is answered and where an answer is taken back.
+  const live = new Set(desk.requests.map((r) => r.id));
+  const kept = desk.messages.filter((m) => {
+    if (over <= 0 || (m.kind === 'request' && m.requestId && live.has(m.requestId))) return true;
+    over -= 1;
+    return false;
+  });
+  // Nothing but such lines left to drop: then the oldest of them go after all.
+  desk.messages = over > 0 ? kept.slice(over) : kept;
 }
 
 const refsOf = (request: SignatoryRequest): Pick<BoardMessage, 'planId' | 'requestId'> => ({ requestId: request.id, ...(request.planId ? { planId: request.planId } : {}) });
 const sameTitle = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 /** For a board title, which has to say at a glance whether the thing has happened: "paid" or "signed". */
 const did = (request: SignatoryRequest) => (request.kind === 'payment' ? 'paid' : 'signed');
+/**
+ * Words a model wrote about money, with nothing in them that a page would turn into a link: a link is written
+ * out as its label and its address. What is asked of the signatory is quoted to other seats, who quote it in
+ * turn on a board that shows Markdown, and a person who is about to pay should never be one click from an
+ * address a model chose.
+ */
+const unlinked = (text: string) =>
+  text
+    .replace(/!?\[([^\]\n]*)\]\(\s*<?([^)\s>]*)>?[^)\n]*\)/g, (_all, label: string, address: string) => `${label} (${address})`)
+    .replace(/<((?:https?:\/\/|mailto:)[^>\s]*)>/gi, '$1')
+    .replace(/^(\s*)\[([^\]\n]+)\]:\s*(\S+)/gm, '$1$2: $3');
+/** A field a model wrote that is one line wherever it is shown. Anything that is not text is no answer at all. */
+const line = (value: unknown, max: number) => (typeof value === 'string' ? oneLine(unlinked(value), max) : '');
+
+/** A payment or a signature. Asked for under a kind there is no word for, it is a payment if it names an amount and a signature if not. */
+function kindOf(said: unknown, amount: string): SignatoryRequest['kind'] {
+  const kind = typeof said === 'string' ? said.trim().toLowerCase() : '';
+  if (kind.startsWith('sign')) return 'signature';
+  if (kind.startsWith('pay')) return 'payment';
+  return amount ? 'payment' : 'signature';
+}
 
 /**
  * File what a lead asks of the signatory at a phase gate, and tell the board. A request the lead already has
@@ -57,14 +89,18 @@ const did = (request: SignatoryRequest) => (request.kind === 'payment' ? 'paid' 
  */
 export function raiseRequests(org: Organisation, lead: Executive, plan: Plan, phase: string | null, specs: RequestSpec[]): SignatoryRequest[] {
   const filed: SignatoryRequest[] = [];
-  for (const spec of specs) {
-    if (filed.length >= MAX_REQUESTS_PER_GATE) break;
-    const title = clean(String(spec.title ?? ''), 160);
+  // A gate that is reviewed again, after rework, does not get a fresh allowance.
+  let room = MAX_REQUESTS_PER_GATE - org.signatory.requests.filter((r) => r.planId === plan.id && r.phase === phase && r.cycle === org.cycle.number).length;
+  for (const spec of Array.isArray(specs) ? specs : []) {
+    if (room <= 0) break;
+    if (typeof spec !== 'object' || spec === null) continue;
+    const title = line(spec.title, 160);
     if (!title) continue;
     const open = org.signatory.requests.filter((r) => r.fromId === lead.id && isOpen(r));
     if (open.some((r) => sameTitle(r.title, title))) continue;
     if (open.length >= MAX_OPEN_PER_LEAD) break;
-    const kind = spec.kind === 'signature' ? 'signature' : 'payment';
+    const amount = line(spec.amount, 80);
+    const kind = kindOf(spec.kind, amount);
     const request: SignatoryRequest = {
       id: nextId(org, 'q'),
       cycle: org.cycle.number,
@@ -73,19 +109,17 @@ export function raiseRequests(org: Organisation, lead: Executive, plan: Plan, ph
       planId: plan.id,
       phase,
       title,
-      detail: clean(String(spec.detail ?? ''), 2000),
-      amount: kind === 'payment' ? clean(String(spec.amount ?? ''), 80) : '',
-      party: clean(String(spec.party ?? ''), 160),
-      files: (Array.isArray(spec.files) ? spec.files : [])
-        .filter((f): f is string => typeof f === 'string' && !!f.trim())
-        .map((f) => f.trim().slice(0, 240))
-        .slice(0, 5),
+      detail: typeof spec.detail === 'string' ? clean(unlinked(spec.detail), 2000) : '',
+      amount: kind === 'payment' ? amount : '',
+      party: line(spec.party, 160),
+      files: [...new Set((Array.isArray(spec.files) ? spec.files : []).map((f) => line(f, 240)).filter(Boolean))].slice(0, 5),
       status: 'pending',
       raisedAt: now(),
       ruling: null,
       outcome: null,
     };
     org.signatory.requests.push(request);
+    room -= 1;
     say(org, lead.id, 'request', describeRequest(request), request.id);
     const files = request.files.length ? `\n\nTo read first: ${request.files.join(', ')}` : '';
     postToBoard(org, 'signatory', lead.id, `${lead.short} asks the signatory to ${kind === 'payment' ? 'pay' : 'sign'}: ${requestSubject(request)}`, `${request.detail || 'No reason was given.'}${files}`, refsOf(request));
@@ -99,7 +133,7 @@ export function ruleOnRequest(org: Organisation, request: SignatoryRequest, verd
   if (request.status !== 'pending' || request.ruling) return;
   const seat = signatoryOf(org);
   const at = now();
-  const why = clean(reason, 1200) || (verdict === 'authorise' ? 'Within what the shareholders want.' : 'No reason was given.');
+  const why = clean(unlinked(reason), 1200) || (verdict === 'authorise' ? 'Within what the shareholders want.' : 'No reason was given.');
   if (verdict === 'authorise') {
     request.ruling = { verdict: 'authorised', reason: why, at };
     request.status = 'authorised';
@@ -134,18 +168,37 @@ export function settleRequest(org: Organisation, requestId: string, result: 'don
 
 /**
  * Take back what was said about a request: one marked done or rejected by mistake, or one the AI signatory
- * declined that the person wants to decide for themselves. It waits for the person again.
+ * declined that the person wants to decide for themselves. It goes back to where it stood before the answer.
  */
 export function reopenRequest(org: Organisation, requestId: string): SignatoryRequest {
   const request = findRequest(org, requestId);
   if (request.status !== 'done' && request.status !== 'rejected') {
     throw new ValidationError(request.status === 'withdrawn' ? 'The organisation has withdrawn this request, so there is nothing to reopen.' : 'This request is still open.');
   }
+  // Since it was settled, the lead may have asked for the same thing again. Two open requests for one thing would be one too many.
+  if (org.signatory.requests.some((r) => r !== request && r.fromId === request.fromId && isOpen(r) && sameTitle(r.title, request.title))) {
+    throw new ValidationError(`The ${execById(org, request.fromId)?.short ?? request.fromId} has asked for this again since, and that request is open. Answer that one instead.`);
+  }
+  if (request.planId && planById(org, request.planId)?.status === 'cancelled') {
+    throw new ValidationError('The plan this was for has since been cancelled, so it is no longer wanted and there is nothing to reopen.');
+  }
   const seat = signatoryOf(org);
-  // Back to where it stood: agreed by the AI and waiting to be carried out, or waiting to be decided. One the
-  // AI declined keeps that ruling on record, which is also what stops the AI from being asked a second time.
+  const was = request.outcome;
+  // Back to where it stood: agreed by the AI and waiting to be carried out, or waiting to be decided by whoever
+  // holds the seat. One the AI declined keeps that ruling on record, which is also what stops the AI from being
+  // asked a second time: it then waits for the person.
   request.status = request.ruling?.verdict === 'authorised' ? 'authorised' : 'pending';
   request.outcome = null;
+  // A cycle that has closed since recorded the answer, and seats read those records. The record is put right.
+  const record = was ? org.history.find((c) => c.number === was.cycle) : undefined;
+  if (was && record) {
+    const stale = `- Signatory, ${request.id},`;
+    const put = requestRecordLine(org, request, `${was.result === 'done' ? 'said to be done' : 'refused'}, then taken back in cycle ${org.cycle.number}. It is open again and has NOT happened`);
+    record.summary = record.summary
+      .split('\n')
+      .map((text) => (text.startsWith(stale) ? put : text))
+      .join('\n');
+  }
   say(org, 'person', 'reopened', '', request.id);
   postToBoard(org, 'signatory', seat.id, `Reopened, not yet ${did(request)}: ${requestSubject(request)}`, 'What was recorded about this request has been taken back. It is open again and has not happened.', refsOf(request));
   return request;

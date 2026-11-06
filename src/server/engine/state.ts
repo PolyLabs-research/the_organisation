@@ -11,6 +11,7 @@ import type {
   OrgSummary,
   Plan,
   PlanPhase,
+  SignatoryRequest,
   UsageTotals,
 } from '../../shared/types';
 import { DEFAULT_MODEL } from '../providers/pricing';
@@ -341,6 +342,18 @@ export function syncSignatory(org: Organisation): void {
   org.executives.push(executiveFromDraft({ profileId: 'signatory' }, id)!);
 }
 
+/** Text written by a model, made safe to sit in a record that is shown as Markdown: it cannot become a link. */
+const inert = (text: string) => text.replace(/[\[\]<]/g, '\\$&');
+
+/**
+ * The line a cycle's record keeps about a request to the signatory. It names the request, so that the line can
+ * be found again and put right if the answer it records is later taken back.
+ */
+export function requestRecordLine(org: Organisation, request: SignatoryRequest, came: string): string {
+  const asker = execById(org, request.fromId)?.short ?? request.fromId;
+  return `- Signatory, ${request.id}, for ${asker}: ${inert(describeRequest(request))}: ${came}`;
+}
+
 /**
  * Bring a stored organisation back to a state the engine can resume from:
  * nothing is in flight after a restart, so anything recorded as running goes
@@ -396,13 +409,12 @@ export function digestCycle(org: Organisation, endedAt: string): CycleRecord {
   }
   // What was paid for or signed, refused, or left waiting is part of what the cycle came to.
   for (const request of org.signatory.requests) {
-    const asker = execById(org, request.fromId)?.short ?? request.fromId;
     if (request.outcome?.cycle === cycle.number) {
-      const said = request.outcome.note ? ` (${request.outcome.note.slice(0, 200)})` : '';
+      const said = request.outcome.note ? ` (${inert(request.outcome.note.replace(/\s+/g, ' ').slice(0, 200))})` : '';
       const how = request.outcome.result === 'done' ? 'done' : request.outcome.result === 'rejected' ? 'REJECTED' : 'withdrawn';
-      lines.push(`- Signatory, for ${asker}: ${describeRequest(request)}: ${how}${said}`);
+      lines.push(requestRecordLine(org, request, `${how}${said}`));
     } else if (isOpen(request) && request.cycle <= cycle.number) {
-      lines.push(`- Signatory, for ${asker}: ${describeRequest(request)}: still waiting, so it has not happened`);
+      lines.push(requestRecordLine(org, request, 'still waiting, so it has not happened'));
     }
   }
   return {

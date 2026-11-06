@@ -93,7 +93,8 @@ function Message({ org, message, onOpenPlan }: { org: Organisation; message: Boa
           <h3>{message.title}</h3>
           <time dateTime={message.at}>{clock(message.at)}</time>
         </header>
-        <Markdown>{message.body}</Markdown>
+        {/* What is asked of the signatory is acted on with money. It is shown as written, so that nothing in it can pass for a link. */}
+        {message.type === 'signatory' ? <p className="pre-wrap">{message.body}</p> : <Markdown>{message.body}</Markdown>}
         {livePlan ? (
           <button type="button" className="link" onClick={() => onOpenPlan(message.planId!)}>
             Open the plan

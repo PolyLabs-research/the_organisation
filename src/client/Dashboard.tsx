@@ -193,7 +193,10 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
             {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
             {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
             {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
-            {tab === 'signatory' ? <Signatory org={org} onView={setView} onOpenPlan={openPlan} onOpenFile={openFile} onSettings={() => setSettingsOpen(true)} /> : null}
+            {/* Kept in place while another tab is shown, so that an answer half typed is still there after reading the file a request points to. */}
+            <div hidden={tab !== 'signatory'}>
+              <Signatory org={org} shown={tab === 'signatory'} onView={setView} onOpenPlan={openPlan} onOpenFile={openFile} onSettings={() => setSettingsOpen(true)} />
+            </div>
             {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
             {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
           </div>

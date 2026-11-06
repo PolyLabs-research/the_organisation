@@ -183,6 +183,8 @@ textarea {
 
 .pre-wrap {
   white-space: pre-wrap;
+  /* Text a model wrote can hold a word, or an address, longer than a phone is wide. */
+  overflow-wrap: anywhere;
 }
 
 .row {
@@ -2207,7 +2209,10 @@ td {
 
 .signatory {
   display: grid;
+  /* One column that may be narrower than its longest word: the word breaks, the page does not widen. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
+  overflow-wrap: anywhere;
 }
 
 .signatory-head {
@@ -2224,6 +2229,7 @@ td {
 
 .chat {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   max-height: 56vh;
   overflow-y: auto;
@@ -2238,6 +2244,7 @@ td {
   align-items: flex-start;
   gap: 8px;
   max-width: 88%;
+  min-width: 0;
 }
 
 .chat-mine {
@@ -2329,17 +2336,23 @@ td {
 
 .waiting {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
 .request-card {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 7px;
   padding: 12px 14px;
   border: 1px solid var(--warn-line);
   border-left-width: 3px;
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.request-card-ai {
+  border-color: var(--line);
 }
 
 .answer {
@@ -2355,6 +2368,7 @@ td {
 
 .composer textarea {
   flex: 1;
+  min-width: 0;
 }
 
 .signatory .note {

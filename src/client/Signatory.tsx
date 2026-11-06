@@ -64,7 +64,7 @@ function RequestBody({
             </button>
           </>
         ) : null}
-        {request.files.map((path) => (
+        {[...new Set(request.files)].map((path) => (
           <button key={path} type="button" className="link" onClick={() => onOpenFile(path)} title={`Open ${path}`}>
             <FileText size={12} aria-hidden="true" /> {path.split('/').pop()}
           </button>
@@ -213,12 +213,15 @@ export function Signatory({
   onOpenPlan,
   onOpenFile,
   onSettings,
+  shown = true,
 }: {
   org: Organisation;
   onView: (view: OrgView) => void;
   onOpenPlan: (planId: string) => void;
   onOpenFile: (path: string) => void;
   onSettings: () => void;
+  /** False while another tab is in front of this one. */
+  shown?: boolean;
 }) {
   const { requests, messages } = org.signatory;
   const holder = org.settings.signatory;
@@ -229,11 +232,11 @@ export function Signatory({
   const send = useAction();
   const scroll = useRef<HTMLOListElement>(null);
 
-  // The conversation is read from the bottom, where the newest line is.
+  // The conversation is read from the bottom, where the newest line is: when a line is added, and when the tab comes back into view.
   useEffect(() => {
     const el = scroll.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+    if (el && shown) el.scrollTop = el.scrollHeight;
+  }, [messages.length, shown]);
 
   return (
     <div className="signatory">
@@ -276,6 +279,21 @@ export function Signatory({
             <Answer orgId={org.id} request={request} onView={onView} />
           </article>
         ))}
+        {withAi.length ? (
+          <>
+            {/* The AI rules only while the organisation runs. The person never has to wait for it. */}
+            <p className="muted">
+              {withAi.length === 1 ? 'This one is' : 'These are'} for the AI signatory to decide, which it does while the organisation is running. You can answer {withAi.length === 1 ? 'it' : 'any of them'}{' '}
+              yourself instead.
+            </p>
+            {withAi.map((request) => (
+              <article key={request.id} className="request-card request-card-ai">
+                <RequestBody org={org} request={request} onOpenPlan={onOpenPlan} onOpenFile={onOpenFile} />
+                <Answer orgId={org.id} request={request} onView={onView} />
+              </article>
+            ))}
+          </>
+        ) : null}
       </section>
 
       <form
