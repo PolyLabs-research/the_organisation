@@ -140,6 +140,7 @@ describe('the environment a run of Claude Code is given', () => {
       ANTHROPIC_BASE_URL: 'https://gateway.example',
       ANTHROPIC_MODEL: 'opus',
       OPENAI_API_KEY: 'sk-openai',
+      GOOGLE_CLIENT_SECRET: 'oauth-client-secret',
       MOONSHOT_BASE_URL: 'https://api.moonshot.cn/v1',
       SOME_AUTH_TOKEN: 'token',
       CLAUDECODE: '1',

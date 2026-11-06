@@ -116,6 +116,15 @@ describe('business access permissions', () => {
     const input = { text: 'contains ' + secret, nested: [secret, encodeURIComponent(secret)] };
     expect(redactData(input, [secret])).toEqual({ text: 'contains [redacted]', nested: ['[redacted]', '[redacted]'] });
   });
+  it('removes a saved password in the forms URLs and web forms encode it, as well as in plain text', () => {
+    const secret = "Gen3rated pass!'()*~aA7";
+    const asFormSent = new URLSearchParams({ password: secret }).toString();
+    expect(asFormSent).not.toContain(encodeURIComponent(secret));
+    expect(redactData({ url: 'https://supplies.example/result?' + asFormSent, text: secret + ' and ' + encodeURIComponent(secret) }, [secret])).toEqual({
+      url: 'https://supplies.example/result?password=[redacted]',
+      text: '[redacted] and [redacted]',
+    });
+  });
   it('generates a unique saved password before account creation and validates account origins', async () => {
     const site = await access.addAccount({ ...account, password: '', allowSignup: true, signupUrl: 'https://supplies.example/signup' });
     expect((await access.reveal(site.id)).length).toBeGreaterThanOrEqual(32);

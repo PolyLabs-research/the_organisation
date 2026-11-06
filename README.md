@@ -4,7 +4,7 @@
 
 Describe an idea and get a working organisation: a CEO that answers to you, an executive team in which every lead runs a standard operating procedure, and agents under each lead doing the work in parallel. They plan, disagree, take it to the board, build, check their own work and report. Then the CEO asks *"What would the shareholders want now?"* and the next cycle begins. It keeps going until you pause it or the budget runs out.
 
-You are the shareholders. You steer; the CEO enforces it. The agents cannot spend money or sign anything: that goes through one seat, the Authorised Signatory, which is you unless you decide otherwise.
+You are the shareholders. You steer; the CEO enforces it. Spending money and signing go through one seat, the Authorised Signatory, which is you unless you decide otherwise.
 
 ![Only Paperclips operating dashboard](docs/only-paperclips-business.png)
 
@@ -17,7 +17,7 @@ You are the shareholders. You steer; the CEO enforces it. The agents cannot spen
 - **It can wait.** Scheduled reviews, incoming events and calendar dates drive work. Between reviews it sleeps without model calls. The interface and establish command default to hourly reviews; continuous operation remains available.
 - **It governs itself.** A lead decides whatever is inside its remit. When two leads' priorities collide, each states a position and the CEO rules, or an independent judge if you seat one. Every decision is on the record, with its reasons.
 - **It does not stop, and it cannot run away.** One cycle's reports set off the next round of work, for as long as you let it. A hard budget pauses it. So does a cycle limit. You can pause, stop, steer or change any setting while it runs, and all of its state is plain JSON on disk, so it carries on where it left off after a restart.
-- **A person holds the purse.** Agents can draft a contract and choose a supplier, but only the Authorised Signatory can pay or sign, and a person does that, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
+- **A person holds the purse.** Agents can draft a contract and choose a supplier, but paying and signing are for the Authorised Signatory, and a person does those, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
 - **Use the models you have, or none.** Claude, GPT, Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, and anything on OpenRouter, with executives on one model and agents on another if you like. Any OpenAI-compatible endpoint works too, so a model on your own machine (llama.cpp, Ollama, LM Studio, vLLM) can do the work. And with no API key at all it can run on the Claude Code you already have, on your own subscription login.
 - **Try it in a minute, for nothing.** With nothing connected it runs in simulation: every seat gives a scripted answer, the whole loop turns, and every control works.
 - **See everything.** A web interface shows the hierarchy and who is busy with what, the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
@@ -100,7 +100,8 @@ This is early software, and the README says plainly what has been run for real a
 | Claude Code login | One small organisation run from start to finish ([record](docs/live-validation.md)), and about twenty short calls. Tried on Linux only. |
 | Anthropic's API and the eleven other providers | Built, and tested against local stand-ins that speak their protocols, with whole organisations run on them. Not yet called for real: no key was to hand. |
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
-| Tests | 454, among them whole organisations run through the loop. The suite takes about four seconds. |
+| Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
+| Tests | 507, among them whole organisations run through the loop. The suite takes about five seconds. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
@@ -194,7 +195,7 @@ The [operating API and data guide](docs/business-operations.md) describes event 
 
 ## Business email and service accounts
 
-**Email & accounts** connects a dedicated Gmail / Google Workspace mailbox through Google sign-in, keeps service passwords in an encrypted per-organisation vault, and grants access to selected executive teams. Agents can read their assigned inbox, prepare email drafts, create an authorised business account and use its saved login through an isolated browser. Passwords are filled by the server and are not returned to the model. A person reviews and sends outgoing email.
+**Email & accounts** connects a dedicated Gmail / Google Workspace mailbox through Google sign-in, keeps service passwords in an encrypted per-organisation vault, and grants access to selected executive teams. Agents can read their assigned inbox, prepare email drafts, create an authorised business account and use its saved login through an isolated browser. Passwords are filled by the server and are not returned to the model. A person reviews and sends outgoing email. There is no such review of what an agent does on a site it is logged in to: read [what is enforced and what is only instructed](docs/email-and-accounts.md#what-is-enforced-and-what-is-only-instructed) before you connect anything real.
 
 Start by creating the vault, then follow the [Gmail setup and account-access guide](docs/email-and-accounts.md). Google sign-in needs your own OAuth client configured on the server. Other mail providers can use the IMAP/SMTP form. Install Chrome, or set `ORG_BROWSER_PATH`, for account browsing. These tools run with local task execution; hosted sessions cannot reach the vault.
 
@@ -223,7 +224,7 @@ Start, pause, stop and settings are at the top of the dashboard. Pause lets call
 
 ## Signing and paying
 
-An organisation of agents can draft a contract and choose a supplier, but it cannot sign the one or pay the other, and nothing in this program can move money or bind you to anything. What every organisation has instead is one more seat on its board, the **Authorised Signatory**, and a rule that every seat works under: until the signatory says a thing is done, it has not happened, and nothing may be planned, written or reported as though it had.
+An organisation of agents can draft a contract and choose a supplier, but paying and signing are not its to do, and this program has no way of its own to move money. What every organisation has instead is one more seat on its board, the **Authorised Signatory**, and a rule that every seat works under: until the signatory says a thing is done, it has not happened, and nothing may be planned, written or reported as though it had.
 
 ![The Signatory tab: requests from three leads, one marked paid with a note, one rejected with a reason, and one still waiting with its two buttons](docs/signatory.png)
 
@@ -247,6 +248,8 @@ Answers are given with buttons on purpose. What you type in the message box is p
 **When a plan is cancelled**, what it asked for is withdrawn, so nobody pays for work that has been stopped.
 
 **Check before you pay.** A request is written by a model. Its amount, its payee and its reason are what the model wrote, not facts this program has checked, and a model can be wrong about any of them. Read the files it points to and confirm the details yourself, as you would with anything a new member of staff asked you to pay. A request is shown as plain words wherever it appears, and a link in one is written out as its label and its address when the request is filed, so that you are never one click from an address a model chose.
+
+**If you give agents a service account, this is a rule and not a lock.** An agent logged in to a site can press whatever that account can press, and creating an account can accept the site's terms. Agents are told to leave purchases and commitments to the Signatory, and nothing else stops them. See [what is enforced and what is only instructed](docs/email-and-accounts.md#what-is-enforced-and-what-is-only-instructed).
 
 ## Models and keys
 
@@ -495,7 +498,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - No provider's API has been called from this code: not Claude's, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)). The one way to a real model that has been tried is the [Claude Code connection](#claude-code-in-place-of-a-key), on which one small organisation has run one cycle.
 - The Claude Code connection has been tried on Linux only, has no hosted sessions and no web search, and depends on how the `claude` command behaves, which changes from release to release.
 - Hosted sessions and web search are for Claude models only.
-- Nothing here pays or signs. The signatory's seat records what a person did elsewhere; an AI in the seat can authorise or decline a request, and no more. Paying from inside the program would need a payment service connected to it, which this version does not have.
+- The program pays nothing and signs nothing itself. The signatory's seat records what a person did elsewhere; an AI in the seat can authorise or decline a request, and no more. Paying from inside the program would need a payment service connected to it, which this version does not have. An agent with a service account can still press whatever that account can press on its site: see [what is enforced and what is only instructed](docs/email-and-accounts.md#what-is-enforced-and-what-is-only-instructed).
 - Requests to the signatory are raised by leads at their phase gates. A lead cannot ask in the middle of a phase, and the CEO cannot ask at all.
 - One organisation is one process's worth of state: there is no multi-user access and no login. Whoever can open the interface can answer for the signatory.
 - A board decision is one round of positions and a ruling; there is no further debate.

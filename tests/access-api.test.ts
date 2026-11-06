@@ -61,6 +61,24 @@ describe('business access API', () => {
     await other.access.unlock(phrase, true);
     expect((await api('POST', '/api/orgs/' + other.org.id + '/access/accounts/' + saved.id + '/reveal', {})).status).toBe(404);
   });
+  it('cannot be framed by another page, in the interface or the API', async () => {
+    // The interface is served from behind the same app, as main.ts does.
+    const app = createApp(registry, config);
+    app.get('/', (_req, res) => { res.send('<!doctype html><title>The dashboard</title>'); });
+    const page = app.listen(0, '127.0.0.1');
+    await new Promise<void>(resolve => page.once('listening', resolve));
+    try {
+      for (const url of ['http://127.0.0.1:' + (page.address() as AddressInfo).port + '/', base + '/api/meta']) {
+        const response = await fetch(url);
+        expect(response.status).toBe(200);
+        expect(response.headers.get('x-frame-options')).toBe('DENY');
+        expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+      }
+    } finally {
+      page.closeAllConnections();
+      await new Promise<void>(resolve => page.close(() => resolve()));
+    }
+  });
   it('rejects cross-site controls and disables access on a publicly bound server', async () => {
     const runner = await establish(), root = '/api/orgs/' + runner.org.id + '/access';
     expect((await api('POST', root + '/create', { passphrase: phrase }, { Origin: 'https://foreign.example' })).status).toBe(403);

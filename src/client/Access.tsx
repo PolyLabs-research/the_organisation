@@ -99,6 +99,7 @@ function AccountConnect({ org, view, onView }: { org: Organisation; view: Access
   }); }}>
     <h3>Authorise a service account</h3>
     <p>Choose the service and the teams allowed to operate it. The browser fills saved credentials on this exact site. Account creation can accept the service’s terms, so authorise services you intend the business to use.</p>
+    <p className="note note-warn">Agents can press anything this account can press on the site, and are only told not to buy or commit. Do not authorise an account that holds a saved card or can order on credit.</p>
     <div className="grid-2">
       <Field label="Service name"><input value={values.label} onChange={e => set('label', e.target.value)} required maxLength={160} /></Field>
       <Field label="Login URL"><input type="url" placeholder="https://service.example/login" value={values.loginUrl} onChange={e => set('loginUrl', e.target.value)} required /></Field>

@@ -30,7 +30,7 @@ The OAuth callback uses an expiring, single-use state, a browser cookie, PKCE an
 
 Access is assigned explicitly to executive teams. Their local task agents inherit it. The CEO does not automatically get every mailbox or account. Leave every team unchecked to keep a connection for a person only. Grants are checked at each operation, and disabling or removing a connection cancels operations using it.
 
-Agents can list the latest 20 inbox messages and read a selected message as plain text, limited to 20,000 characters. Attachments and remote images are not opened. Reading does not mark mail as read. Messages an agent reads are sent to its configured model provider; use a dedicated business mailbox rather than a personal inbox. Incoming messages are treated as untrusted content, not authority to change the company's instructions.
+Agents can list the latest 20 inbox messages and read a selected message as plain text, limited to 20,000 characters. Attachments and remote images are not opened. Reading does not mark mail as read. Messages an agent reads are sent to its configured model provider; use a dedicated business mailbox rather than a personal inbox. Agents are told to treat incoming messages as untrusted content, not authority to change the company's instructions. That is an instruction to the model, not a barrier: see [below](#what-is-enforced-and-what-is-only-instructed).
 
 There is no background inbox poller. Give a lead a calendar commitment to review its inbox, or steer it to check for a particular reply. Access works with **local task execution**, including the Claude Code provider's local tools. Hosted Managed Agents sessions cannot reach this vault.
 
@@ -38,13 +38,33 @@ There is no background inbox poller. Give a lead a calendar commitment to review
 
 Under **Accounts**, enter the service's HTTPS login URL, username, existing password, verification mailbox and allowed teams. For a new account, enable account creation and provide a sign-up URL on the same origin; leaving the password blank generates and saves a random password before the agent submits a form. Authorising a service grants the selected teams browser access to that service. Choose services and registration terms you intend the business to use.
 
-The account browser opens the authorised site, describes visible form controls, fills or clicks a returned element ID, and follows verification links on that same origin. Passwords are filled by the server into password inputs; the model receives neither the password nor cookies. A person can reveal a saved account password for 30 seconds in the dashboard. **Update saved password** records a password already changed at the external service; it does not rotate that service's password for you.
+The account browser opens the authorised site, describes visible form controls, fills or clicks a returned element ID, and follows verification links on that same origin. Passwords are filled by the server into password inputs; the model receives neither the password nor cookies. Saved passwords are also removed from everything a page returns, as they are and as URLs and web forms encode them. A site that shows one in some other form, such as base64, is not caught. A person can reveal a saved account password for 30 seconds in the dashboard. **Update saved password** records a password already changed at the external service; it does not rotate that service's password for you.
 
 A service can have additional explicitly trusted origins for its scripts, assets and APIs. Top-level navigation stays on the account's main origin. Private, loopback and reserved network destinations are refused, DNS answers are pinned for the connection, TLS certificates are verified, and browser downloads, popups, service workers and WebSockets are disabled.
 
 Install Google Chrome on the server for account browsing, or set `ORG_BROWSER_PATH` to an installed Chromium executable. The package uses `playwright-core`; it does not download a browser automatically. Browser sessions are isolated per task, close when the task finishes or access is revoked, and expire after ten minutes idle. Sessions are not exported or reused across tasks.
 
-A form submission is not evidence that an account exists or login succeeded. The agent must inspect the resulting page. It can request help under **Access requests** for a new service, CAPTCHA, MFA or an unsupported login flow. The dashboard's account browser can fill a text verification code. Graphical challenges, passkeys and cross-origin SSO may need a person or another integration. Payments and new contractual commitments still go to the Signatory; the browser is not a payment integration.
+A form submission is not evidence that an account exists or login succeeded. The agent must inspect the resulting page. It can request help under **Access requests** for a new service, CAPTCHA, MFA or an unsupported login flow. The dashboard's account browser can fill a text verification code. Graphical challenges, passkeys and cross-origin SSO may need a person or another integration. Agents are told that payments and new contractual commitments go to the Signatory. The browser is not a payment integration, but it can press whatever the account can press.
+
+## What is enforced and what is only instructed
+
+**Enforced by the program, whatever a model decides:**
+
+- An agent cannot get a saved password, a Google token or a session cookie from the vault.
+- An agent cannot send email. A person presses **Send this email** for every message.
+- A team reaches only the mailboxes and accounts granted to it, and only while the vault is unlocked.
+- The browser stays on the service's origin, reaches only the service's trusted origins, and cannot reach private addresses.
+
+**Only instructed: the model is told, and nothing else stops it:**
+
+- Not to make purchases or enter new commitments through the browser. An agent logged in to a site can press whatever that account can press: place an order, change a delivery address, post a message, delete something, close the account. Creating an account can accept the site's terms. There is no person in the loop for this, as there is for email.
+- To treat email and web pages as data, not instructions. Anyone can email a connected mailbox, and a model can be talked into things. If an email persuades an agent, the outgoing-email review will catch a draft, but not what the agent does in a browser.
+
+So choose what you connect with that in mind:
+
+- Do not authorise an account that holds a saved card, can order on credit, or could do damage if pressed the wrong way. Keep payment methods off accounts the agents use.
+- Think twice before giving one team both a mailbox that strangers can write to and an account that can spend or publish. What the agent reads in one can go out through a form in the other.
+- Give each account the lowest role the service offers, and read **Access history** now and then.
 
 ## Outgoing email
 

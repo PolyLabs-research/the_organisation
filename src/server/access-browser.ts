@@ -11,8 +11,10 @@ interface Session {
   accountId: string; actorKey: string; browser: Browser; context: BrowserContext; page: Page;
   elements: ElementHandle<Node>[]; timer: ReturnType<typeof setTimeout> | null;
 }
+/** A secret as a page or an address can hand it back: as it is, and as URLs and web forms encode it. Those two differ, on "!" and spaces among others. */
+const secretForms = (secret: string) => [secret, encodeURIComponent(secret), new URLSearchParams({ x: secret }).toString().slice(2)];
 export const cleanPageText = (text: string, secrets: string[]): string => secrets.reduce((value, secret) =>
-  secret ? value.split(secret).join('[redacted]').split(encodeURIComponent(secret)).join('[redacted]') : value, text);
+  secret ? secretForms(secret).reduce((clean, form) => clean.split(form).join('[redacted]'), value) : value, text);
 export function redactData<T>(data: T, secrets: string[]): T {
   if (typeof data === 'string') return cleanPageText(data, secrets) as T;
   if (Array.isArray(data)) return data.map(item => redactData(item, secrets)) as T;
@@ -49,6 +51,8 @@ export class BusinessBrowser implements AccountBrowser {
     try {
       browser = await this.launchBrowser({
         headless: true, chromiumSandbox: true,
+        // The server's own shutdown closes the browsers. Left to itself, Playwright would end the process first.
+        handleSIGINT: false, handleSIGTERM: false,
         ...(process.env.ORG_BROWSER_PATH || process.env.CHROME_PATH
           ? { executablePath: process.env.ORG_BROWSER_PATH || process.env.CHROME_PATH }
           : { channel: 'chrome' }),
@@ -99,12 +103,14 @@ export class BusinessBrowser implements AccountBrowser {
       session.timer = setTimeout(() => { void this.close(account.id, actorKey); }, 10 * 60_000);
       session.timer.unref();
       const { page } = session;
+      // A page that was blocked from leaving ends on the browser's own error page, which is not an address of any service.
+      const onService = () => { try { return serviceURL(page.url()).origin === account.origin; } catch { return false; } };
       if (action.action === 'login' || action.action === 'signup' || action.action === 'navigate') {
         const target = action.action === 'login' ? account.loginUrl : action.action === 'signup' ? account.signupUrl : action.url ?? '';
         if (serviceURL(target).origin !== account.origin) throw new AccessError('The destination is outside this account’s authorised origin.', 403);
         await page.goto(target, { waitUntil: 'domcontentloaded' });
       } else if (action.action === 'fill' || action.action === 'click') {
-        if (serviceURL(page.url()).origin !== account.origin) throw new AccessError('The browser is outside this account’s authorised origin.', 403);
+        if (!onService()) throw new AccessError('The browser is outside this account’s authorised origin.', 403);
         const element = session.elements[action.element ?? -1];
         if (!element || !await element.isVisible()) throw new AccessError('That element is no longer available. Inspect the page again.');
         if (action.action === 'click') await element.click();
@@ -119,7 +125,7 @@ export class BusinessBrowser implements AccountBrowser {
         }
       }
       signal.throwIfAborted();
-      if (serviceURL(page.url()).origin !== account.origin) throw new AccessError('The page left the authorised origin.', 403);
+      if (!onService()) throw new AccessError('The page left the authorised origin.', 403);
       await Promise.all(session.elements.map(element => element.dispose().catch(() => {})));
       const elements: AccountPage['elements'] = [];
       session.elements = [];

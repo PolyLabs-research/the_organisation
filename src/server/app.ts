@@ -32,6 +32,13 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
   const app = express();
   app.disable('x-powered-by');
 
+  // The interface can reveal a saved password and send email with one click. No other page may frame it and steer that click.
+  app.use((_req, res, next) => {
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+    next();
+  });
+
   // The API has no login: it trusts whoever can reach it. These two checks
   // keep web pages out. A page on another site cannot drive the API by making
   // the browser post to it, and (when bound to loopback) cannot read it by
