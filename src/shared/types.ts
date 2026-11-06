@@ -1,4 +1,5 @@
 // Domain model shared by the server (engine, API) and the browser client.
+import type { BusinessState } from './business';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -59,6 +60,10 @@ export interface Executive {
 }
 
 export interface OrgSettings {
+  /** Minutes between standing reviews. Zero retains the continuous loop. */
+  reviewIntervalMinutes: number;
+  /** Resume only organisations running before a restart. */
+  resumeOnRestart: boolean;
   /** Who signs off decisions when leads have competing priorities. */
   arbiter: 'ceo' | 'judge';
   /** The loop pauses itself when estimated spend reaches this. */
@@ -452,6 +457,7 @@ export type OrgStatus = 'idle' | 'running' | 'paused';
 export type PauseReason = 'user' | 'budget' | 'error' | 'restart' | 'cycle_limit';
 
 export interface Organisation {
+  business: BusinessState;
   id: string;
   /** Counter behind the short ids of plans, tasks, decisions and messages. */
   seq: number;
@@ -529,6 +535,7 @@ export interface ActivityEntry {
 }
 
 export interface OrgSummary {
+  waitingForSchedule: boolean;
   id: string;
   name: string;
   mission: string;

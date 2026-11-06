@@ -1,6 +1,6 @@
 // Establish an organisation from one prompt, against a running server:
 //
-//   npm run establish -- "A marketplace where local bakeries sell surplus bread"
+//   npm run establish -- "Only Paperclips: a small business supplying paperclips to local offices"
 //   npm run establish -- --no-start --budget 20 "…"
 //   npm run establish -- --hosted --budget 40 "…"   (plans carried out in hosted sessions)
 //   npm run establish -- --model openai:gpt-6.1-sol --agent-model deepseek:deepseek-flash "…"
@@ -21,7 +21,7 @@ const value = (name: string) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 const skip = new Set<number>();
-for (const name of ['--budget', '--steer', '--url', '--model', '--agent-model']) {
+for (const name of ['--budget', '--steer', '--url', '--model', '--agent-model', '--review-minutes']) {
   const i = args.indexOf(name);
   if (i >= 0) skip.add(i).add(i + 1);
 }
@@ -55,6 +55,8 @@ async function main(): Promise<void> {
   const budget = value('--budget');
   if (budget !== undefined && !(Number(budget) > 0)) throw new Error('--budget takes a positive number of US dollars.');
 
+  const interval = value('--review-minutes');
+  if (interval !== undefined && (!Number.isInteger(Number(interval)) || Number(interval) < 0 || Number(interval) > 43200)) throw new Error('--review-minutes takes an integer from 0 to 43200.');
   const model = value('--model');
   const agentModel = value('--agent-model') ?? model;
   if (flag('--model') && !model) throw new Error('--model takes a model, such as openai:gpt-6.1-sol or claude-opus-5-5.');
@@ -67,6 +69,7 @@ async function main(): Promise<void> {
     mission: team.mission,
     executives: team.executives,
     settings: {
+      reviewIntervalMinutes: value('--review-minutes') === undefined ? 60 : Number(value('--review-minutes')),
       ...(budget === undefined ? {} : { budgetUsd: Number(budget) }),
       ...(flag('--hosted') ? { execution: 'managed' as const } : {}),
       ...(model ? { executiveModel: model } : {}),

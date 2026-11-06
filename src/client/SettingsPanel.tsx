@@ -63,6 +63,9 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
       </header>
       <div className="dialog-body">
         <div className="grid-2">
+          <Field label="Minutes between operating reviews" hint="Zero runs continuously. A positive interval waits between cycles; incoming events and calendar dates can wake it sooner.">
+            <input type="number" min={0} max={43200} value={draft.reviewIntervalMinutes} onChange={(e) => set('reviewIntervalMinutes', Number(e.target.value))} />
+          </Field>
           <Field label="Budget (US dollars)" hint={`${meta.provider.simulated ? 'Simulated' : 'Estimated'} spend so far: $${org.usage.costUsd.toFixed(2)}. The organisation pauses itself when it reaches the budget.`}>
             <input type="number" min={0.1} step={0.5} value={draft.budgetUsd} onChange={(e) => set('budgetUsd', Number(e.target.value))} />
           </Field>
@@ -177,6 +180,10 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
             <strong>Let agents search the web.</strong>{' '}
             {searchable ? 'Searches are billed separately by Anthropic.' : 'Not available with the model chosen for the agents: here, only agents on Claude models can search.'}
           </span>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={draft.resumeOnRestart} onChange={(e) => set('resumeOnRestart', e.target.checked)} />
+          <span><strong>Resume after a server restart.</strong> Applies only when this organisation was running or waiting. Manual pauses, budget limits and cycle limits still hold.</span>
         </label>
         <label className="check">
           <input type="checkbox" checked={limitCycles} onChange={(e) => setLimitCycles(e.target.checked)} />

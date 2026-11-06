@@ -108,6 +108,8 @@ function Ceo({ org, exec, active }: { org: Organisation; exec: Executive; active
         </p>
       ) : org.status === 'idle' ? (
         <p className="muted">Waiting to be started.</p>
+      ) : org.status === 'running' && org.business.waiting ? (
+        <p className="muted">Waiting for scheduled work or an incoming event.</p>
       ) : org.cycle.stage === 'consult' ? (
         <p className="muted">
           {org.status !== 'running' && heard === 0

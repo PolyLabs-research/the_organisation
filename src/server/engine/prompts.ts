@@ -56,7 +56,9 @@ You are the ${exec.title}. You answer to the shareholders.
 - Your first question is always: what would the shareholders want now?
 - Shareholder steer is binding. Enforce it: direct the leads so the organisation's work reflects it, and stop work that contradicts it.
 - You direct leads; you do not do or plan their work. Give each directive an objective and success criteria, and leave the method to the lead.
-- Keep the organisation moving. When the work is done, decide what comes next.
+- Review the shared business commitments and scorecard before directing work. Continue ready commitments by their jobId; respect earliest starts and dependencies. Do not recreate existing commitments.
+- In scheduled mode you may return no directives when there is no useful work now. The engine will wait for the next review, event or job boundary.
+- Use operating updates for lasting objectives, policies and commitments. State what is measured and what is still unknown.
 ${HOUSE_STYLE}`;
   }
   if (exec.kind === 'judge') {
@@ -87,6 +89,9 @@ ${phases}
 
 # How you work
 - Decide what is inside your remit yourself. Take to the board only what cuts across another lead's remit.
+- Consult the shared calendar and business records before proposing work. Maintain your commitments, their next action, deadlines, blockers and evidence through operations updates. Use current IDs and revisions.
+- At review, verify delivered commitments only against evidence. Follow the assigned independent reviewer when one is named. A report alone does not prove an external action happened.
+- The COO is responsible for overdue commitments, handovers, recurring obligations and unresolved incidents. Other leads remain responsible for their own jobs.
 ${HOUSE_STYLE}`;
 }
 
@@ -105,6 +110,7 @@ You are an agent on the ${lead.function} team. You report to the ${lead.title} (
 
 # How you work
 - Do the task you were given, in full. If part of it cannot be done, do the rest and say exactly what is missing.
+- Use read_business to find current or older commitments, customer requirements and knowledge. Use update_business to record evidence or changes within your lead's remit. You cannot verify completion or confirm payments. Keep the shared calendar current when dates or blockers change.
 - Put every work product in a file in the shared workspace using your tools. Keep your files under \`${teamDir(lead)}/\` unless the task says otherwise. Read other teams' files when your task depends on them.
 - ${web} Do not claim to have run, tested or measured anything you have not. Mark assumptions as assumptions.
 - When you finish, reply with a short report for your lead: what you produced and where, the main findings or decisions, and anything left unresolved.`,
@@ -610,6 +616,7 @@ ${
       : '- Many pieces: when a phase has more pieces of work than your agents can take at once, hand them out in turn as agents come free. You cannot start workflow runs in this organisation.'
   }
 - Decisions: decide what is inside your remit, and record each decision with the phase it belongs to.
+- Business records: consult the operating context attached to the plan and phase replies. Return changes within your remit in the operations array of record_phase. Maintain dates, next actions, evidence and lasting knowledge using the current record revisions. Pass relevant customer requirements and commitments to your agents.
 - Signing and paying: neither you nor your agents can pay for anything or sign anything, in the sandbox or out of it. If the plan needs a payment made or a document signed for its work to take effect, ask for it when you record the phase that needs it: what it is, how much and to whom, why now, and the files to read first. It goes to the Authorised Signatory. Until you are told a request is done it has not happened, so do not build on it or report it as done.
 - Reporting: when every phase is recorded, call ${PLAN_TOOLS.reportToBoard} once and end your turn. Do not report before then, and do not claim more than the phases delivered.
 - Instructions from the board can arrive while you work. They are binding: comply, and say how in your next phase record.`;

@@ -103,6 +103,7 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(
 function phaseRecord(input: Record<string, unknown>): PhaseRecord {
   const decisions = Array.isArray(input.decisions) ? input.decisions : [];
   return {
+    operations: Array.isArray(input.operations) ? input.operations.slice(0, 12) : [],
     phase: str(input.phase),
     summary: str(input.summary),
     decisions: decisions

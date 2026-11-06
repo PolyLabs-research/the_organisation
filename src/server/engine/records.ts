@@ -1,4 +1,5 @@
 import type { BoardReport, Executive, Organisation, Plan, Task } from '../../shared/types';
+import { syncBusinessJobs } from './business';
 import { leadsOf, nextId, postToBoard } from './state';
 
 // Small pieces of record-keeping shared by the steps of a plan, however the plan is carried out.
@@ -95,6 +96,7 @@ export function fileReport(
   plan.reportId = report.id;
   plan.status = 'done';
   plan.updatedAt = report.at;
+  syncBusinessJobs(org);
   const asks = report.asks.length ? `\n\n**Asks of the board**\n${bullets(report.asks)}` : '';
   postToBoard(org, 'report', lead.id, `${lead.short} reports: ${report.headline}`, `${report.summary}\n\n${bullets(report.outcomes)}${asks}`, {
     planId: plan.id,

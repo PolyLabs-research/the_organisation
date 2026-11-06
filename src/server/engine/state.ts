@@ -1,3 +1,4 @@
+import { emptyBusiness } from '../../shared/business';
 import { PROFILE_BY_ID, MAX_LEADS, executiveFromDraft } from '../../shared/profiles';
 import { describeRequest, isOpen, waitingOnPerson } from '../../shared/signatory';
 import type {
@@ -18,6 +19,8 @@ import { DEFAULT_MODEL } from '../providers/pricing';
 import type { CallUsage } from '../providers/types';
 
 export const DEFAULT_SETTINGS: OrgSettings = {
+  reviewIntervalMinutes: 0,
+  resumeOnRestart: false,
   arbiter: 'ceo',
   budgetUsd: 5,
   maxCycles: null,
@@ -81,6 +84,8 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
   const effort = (value: unknown, fallback: OrgSettings['executiveEffort']) =>
     EFFORTS.includes(value as (typeof EFFORTS)[number]) ? (value as OrgSettings['executiveEffort']) : fallback;
   return {
+    reviewIntervalMinutes: Math.round(clamp(p.reviewIntervalMinutes, 0, 43_200, base.reviewIntervalMinutes)),
+    resumeOnRestart: typeof p.resumeOnRestart === 'boolean' ? p.resumeOnRestart : base.resumeOnRestart,
     arbiter: p.arbiter === 'judge' || p.arbiter === 'ceo' ? p.arbiter : base.arbiter,
     budgetUsd: Math.round(clamp(p.budgetUsd, 0.1, 10_000, base.budgetUsd) * 100) / 100,
     maxCycles: p.maxCycles === null ? null : p.maxCycles === undefined ? base.maxCycles : Math.round(clamp(p.maxCycles, 1, 100_000, 1)),
@@ -269,6 +274,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
 
   const now = new Date().toISOString();
   const org: Organisation = {
+    business: emptyBusiness(),
     id,
     seq: 0,
     name,
@@ -360,6 +366,8 @@ export function requestRecordLine(org: Organisation, request: SignatoryRequest, 
  * back in the queue, and a running loop comes back paused.
  */
 export function normaliseLoaded(org: Organisation): Organisation {
+  const migrateJobs = !org.business;
+  org.business = { ...emptyBusiness(), ...org.business };
   org.settings = sanitiseSettings(org.settings);
   org.seq ??= 0;
   org.inbox ??= {};
@@ -380,6 +388,22 @@ export function normaliseLoaded(org: Organisation): Organisation {
       }
     }
     if (plan.managed && (plan.managed.state === 'running' || plan.managed.state === 'starting')) plan.managed.state = 'paused';
+  }
+  if (migrateJobs) {
+    for (const plan of org.plans) {
+      const report = org.reports.find((r) => r.id === plan.reportId);
+      const status = plan.status === 'done' ? 'review' : plan.status === 'cancelled' ? 'cancelled' : plan.status === 'failed' ? 'blocked' : 'in_progress';
+      org.business.jobs.push({
+        id: nextId(org, 'b'), revision: 1, createdAt: plan.createdAt, updatedAt: plan.updatedAt, updatedBy: 'system',
+        title: plan.objective.slice(0, 200), description: plan.successCriteria, ownerId: plan.ownerId, status,
+        nextAction: status === 'review' ? 'Inspect the delivery evidence and verify completion.' : status === 'blocked' ? 'Resolve the failed execution before reopening this commitment.' : 'Continue the existing execution plan.',
+        blockedReason: status === 'blocked' ? 'The execution plan failed before business tracking was introduced.' : '',
+        notBefore: null, dueAt: null, recurrenceDays: null, dependsOn: [], customerId: null, metricId: null, reviewerId: null,
+        plan: { id: plan.id, cycle: plan.cycle },
+        evidence: [report?.summary, report?.files.length ? 'Files: ' + report.files.join(', ') : ''].filter(Boolean).join('\n\n'),
+        verification: null, previousJobId: null, nextJobId: null, notifiedAt: null,
+      });
+    }
   }
   if (org.status === 'running') {
     org.status = 'paused';
@@ -430,6 +454,7 @@ export function digestCycle(org: Organisation, endedAt: string): CycleRecord {
 
 export function summarise(org: Organisation): OrgSummary {
   return {
+    waitingForSchedule: org.status === 'running' && org.business.waiting,
     id: org.id,
     name: org.name,
     mission: org.mission,
@@ -459,6 +484,7 @@ const RESULT_PREVIEW_CHARS = 700;
 export function toClientView(org: Organisation): Organisation {
   return {
     ...org,
+    business: { ...org.business, audit: org.business.audit.slice(-100) },
     plans: org.plans.map((plan) => ({
       ...plan,
       // The record of which outputs are already home is bookkeeping, and can be long.

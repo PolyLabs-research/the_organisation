@@ -1,17 +1,18 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { OrgSummary } from '../shared/types';
-import { api, type Meta } from './api';
+import { api, useAction, type Meta } from './api';
 import { ErrorNote, PAUSE_REASONS, SeatBadge, money } from './ui';
 
 function statusText(org: OrgSummary): string {
-  if (org.status === 'running') return 'Running';
+  if (org.status === 'running') return org.waitingForSchedule ? 'Waiting for scheduled work' : 'Running';
   if (org.status === 'idle') return 'Not started';
   return org.pauseReason ? PAUSE_REASONS[org.pauseReason] : 'Paused';
 }
 
 export function Home({ meta }: { meta: Meta }) {
   const [orgs, setOrgs] = useState<OrgSummary[] | null>(null);
+  const example = useAction();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -70,7 +71,8 @@ export function Home({ meta }: { meta: Meta }) {
           </span>
         </div>
       ) : null}
-      <ErrorNote>{error}</ErrorNote>
+      {meta.provider.simulated ? <div className="note note-info"><span><strong>Only Paperclips.</strong> Try a fictional paperclip business with a customer enquiry, delivery commitments, a weekly stock review and a scorecard.</span><button type="button" className="button" disabled={example.busy} onClick={() => void example.run(async () => { const view = await api.paperclips(); window.location.hash = '/org/' + view.org.id; })}>{example.busy ? 'Establishing…' : 'Try Only Paperclips'}</button></div> : null}
+      <ErrorNote>{example.error ?? error}</ErrorNote>
 
       {orgs === null ? (
         error ? null : (

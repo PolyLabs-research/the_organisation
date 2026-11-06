@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { operatingDigest } from '../../shared/business';
+import { applyBusinessCommand, consumeBusinessWake, nextBusinessWake, syncBusinessJobs } from './business';
 import type {
   ActiveWork,
   ActivityEntry,
@@ -76,9 +78,11 @@ export class OrgRunner {
   private abort = new AbortController();
   private halting = false;
   private disposed = false;
+  private wakeTimer: NodeJS.Timeout | null = null;
   private emitTimer: NodeJS.Timeout | null = null;
   private saveTimer: NodeJS.Timeout | null = null;
   private saving: Promise<void> = Promise.resolve();
+  private saveError: Error | null = null;
   private activitySeq = 0;
   private readonly retryDelayMs: number;
   private readonly emitIntervalMs: number;
@@ -133,6 +137,7 @@ export class OrgRunner {
     // Sessions that could not be archived when their plans ended (the provider was out of reach, say) are tried again.
     if (org.settings.archiveSessions) this.tidy();
     org.status = 'running';
+    if (!org.business.waiting) consumeBusinessWake(org);
     org.pauseReason = null;
     org.lastError = null;
     if (!org.board.some((m) => m.type === 'ceo_question' && m.cycle === org.cycle.number)) {
@@ -153,6 +158,7 @@ export class OrgRunner {
   pause(reason: PauseReason = 'user', error: string | null = null): void {
     const org = this.org;
     if (org.status !== 'running') return;
+    this.clearWake();
     org.status = 'paused';
     org.pauseReason = reason;
     org.lastError = error;
@@ -172,6 +178,7 @@ export class OrgRunner {
   steer(text: string): void {
     if (!text.trim()) throw new ValidationError('The steer is empty.');
     addSteer(this.org, text);
+    this.org.business.reviewRequested = true;
     this.changed();
     this.pump();
   }
@@ -189,7 +196,10 @@ export class OrgRunner {
         throw new ValidationError(`The model chosen for the ${seat}, "${model}", is not one a connected key can call. Add its key under Models and keys, or pick another model.`);
       }
     }
+    const oldInterval = org.settings.reviewIntervalMinutes;
     org.settings = next;
+    if (next.reviewIntervalMinutes !== 0 && next.reviewIntervalMinutes !== oldInterval) org.business.nextReviewAt = new Date(Date.now() + next.reviewIntervalMinutes * 60_000).toISOString();
+    if (next.reviewIntervalMinutes === 0) { org.business.waiting = false; this.clearWake(); }
     if (org.settings.execution !== before) {
       // A plan keeps the way of working it started with. One that has not yet begun follows the new setting.
       for (const plan of org.plans) {
@@ -322,6 +332,43 @@ export class OrgRunner {
     return null;
   }
 
+  /** User/integration mutations are saved before the HTTP response acknowledges them. */
+  async businessCommand(command: unknown): Promise<void> {
+    applyBusinessCommand(this.org, command, { id: 'person' });
+    this.changed();
+    await this.flush();
+    this.pump();
+  }
+
+  reviewNow(): void {
+    this.org.business.reviewRequested = true;
+    this.changed();
+    this.pump();
+  }
+
+  private clearWake(): void {
+    if (this.wakeTimer) clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+  }
+
+  private waitForBusiness(): boolean {
+    const org = this.org;
+    if (!org.business.waiting || org.settings.reviewIntervalMinutes === 0) return false;
+    this.clearWake();
+    const due = nextBusinessWake(org);
+    if (due <= Date.now()) {
+      org.business.waiting = false;
+      consumeBusinessWake(org);
+      postToBoard(org, 'system', 'system', 'Operating review started', 'A scheduled review, incoming event or commitment is ready for attention.');
+      return false;
+    }
+    // Node timers have a signed 32-bit delay. Long waits are re-armed without model calls.
+    this.wakeTimer = setTimeout(() => { this.wakeTimer = null; this.pump(); }, Math.min(due - Date.now(), 2_147_000_000));
+    this.wakeTimer.unref();
+    this.changed();
+    return true;
+  }
+
   /** Write the current state to disk now and wait for it. */
   async flush(): Promise<void> {
     if (this.saveTimer) {
@@ -330,12 +377,13 @@ export class OrgRunner {
     }
     this.queueSave();
     await this.saving;
+    if (this.saveError) throw this.saveError;
   }
 
-  /** Resolves when the loop is not running and nothing is in flight. For tests and shutdown. */
+  /** Resolves when paused or waiting for a scheduled review, with nothing in flight. */
   async idle(timeoutMs = 30_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    while (this.org.status === 'running' || this.inFlight.size > 0) {
+    while ((this.org.status === 'running' && !this.org.business.waiting) || this.inFlight.size > 0) {
       if (Date.now() > deadline) throw new Error('timed out waiting for the organisation to come to rest');
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -348,11 +396,14 @@ export class OrgRunner {
     const org = this.org;
     if (org.status !== 'running') return;
     try {
+      syncBusinessJobs(org);
+      if (org.settings.maxCycles !== null && org.cycle.number > org.settings.maxCycles) { this.pause('cycle_limit'); return; }
       if (org.usage.costUsd >= org.settings.budgetUsd) {
         postToBoard(org, 'system', 'system', 'Budget reached', `Estimated spend has reached the $${org.settings.budgetUsd.toFixed(2)} budget. The organisation is paused until the shareholders raise it.`);
         this.pause('budget');
         return;
       }
+      if (this.waitForBusiness()) return;
       settle(org);
       this.keepToWhatTheProviderCan();
       let items = this.startable();
@@ -375,7 +426,7 @@ export class OrgRunner {
         }
         if (cycleComplete(org)) {
           this.rollover();
-          if (org.status !== 'running') return;
+          if (org.status !== 'running' || this.waitForBusiness()) return;
           settle(org);
           items = this.startable();
         } else {
@@ -627,6 +678,9 @@ export class OrgRunner {
   /** All jobs are done: close the cycle and put the CEO's question to the board again. */
   private rollover(): void {
     const org = this.org;
+    syncBusinessJobs(org);
+    org.business.lastDigest = operatingDigest(org);
+    postToBoard(org, 'system', 'system', 'Operating digest', org.business.lastDigest);
     const finished = org.cycle.number;
     const endedAt = new Date().toISOString();
     org.history.push(digestCycle(org, endedAt));
@@ -676,6 +730,10 @@ export class OrgRunner {
       this.pause('cycle_limit');
       return;
     }
+    if (org.settings.reviewIntervalMinutes > 0) {
+      org.business.waiting = true;
+      org.business.nextReviewAt = new Date(Date.now() + org.settings.reviewIntervalMinutes * 60_000).toISOString();
+    }
     postToBoard(
       org,
       'ceo_question',
@@ -717,13 +775,27 @@ export class OrgRunner {
   private queueSave(): void {
     if (this.disposed) return;
     this.saving = this.saving
-      .then(() => this.store.save(this.org))
-      .catch((err) => console.warn(`Could not save ${this.org.id}: ${(err as Error).message}`));
+      .then(async () => { await this.store.save(this.org); this.saveError = null; })
+      .catch((err) => {
+        this.saveError = err as Error;
+        const message = 'Could not save the organisation: ' + this.saveError.message + '. Restore storage before resuming.';
+        console.warn(message);
+        if (this.org.status === 'running') {
+          this.clearWake();
+          this.org.status = 'paused';
+          this.org.pauseReason = 'error';
+          this.org.lastError = message;
+          for (const timer of this.backoff.values()) clearTimeout(timer);
+          this.backoff.clear();
+          for (const listener of this.listeners) listener({ type: 'view', view: this.view() });
+        }
+      });
   }
 
   /** Cancel timers and let go of subscribers. The state must already be flushed; nothing is written after this. */
   dispose(): void {
     this.disposed = true;
+    this.clearWake();
     for (const listener of this.listeners) listener({ type: 'closed' });
     for (const timer of this.backoff.values()) clearTimeout(timer);
     this.backoff.clear();

@@ -6,13 +6,15 @@ Describe an idea and get a working organisation: a CEO that answers to you, an e
 
 You are the shareholders. You steer; the CEO enforces it. The agents cannot spend money or sign anything: that goes through one seat, the Authorised Signatory, which is you unless you decide otherwise.
 
-![The dashboard of a running organisation](docs/dashboard.png)
+![Only Paperclips operating dashboard](docs/only-paperclips-business.png)
 
-*An organisation mid-cycle, here in simulation. On the left, your steer and the CEO's reply. On the right, the board: the CFO has asked for a payment, the CTO has revised its plan to comply with a ruling, and the CEO has ruled on a clash between two leads.*
+*Only Paperclips in simulation: its operating digest, shared commitments and deliveries awaiting verification.*
 
 ## Why you might want it
 
-- **It is an organisation, not a swarm.** A CEO, up to eight executive leads from a library of fourteen (CTO, CPO, CMO, CFO, COO, General Counsel and the rest, or seats you define yourself), and one to eight agents under each. Every lead works to an operating profile, such as Spec → Build → Test → Release, and a phase has to pass the lead's gate before the next begins. Work that fails the gate is sent back.
+- **It is an organisation, not a swarm.** A CEO, up to eight executive leads from a library of fifteen (CTO, CPO, CMO, CFO, COO, General Counsel and the rest, or seats you define yourself), and one to eight agents under each. Every lead works to an operating profile, such as Spec → Build → Test → Release, and a phase has to pass the lead's gate before the next begins. Work that fails the gate is sent back.
+- **It remembers the business.** A shared calendar and persistent commitments survive cycles. Every job has an owner, next action, dependencies and optional dates. Customer records, a scorecard, financial records, organisational knowledge and incoming events are shared with the agents. Deliveries need evidence and verification.
+- **It can wait.** Scheduled reviews, incoming events and calendar dates drive work. Between reviews it sleeps without model calls. The interface and establish command default to hourly reviews; continuous operation remains available.
 - **It governs itself.** A lead decides whatever is inside its remit. When two leads' priorities collide, each states a position and the CEO rules, or an independent judge if you seat one. Every decision is on the record, with its reasons.
 - **It does not stop, and it cannot run away.** One cycle's reports set off the next round of work, for as long as you let it. A hard budget pauses it. So does a cycle limit. You can pause, stop, steer or change any setting while it runs, and all of its state is plain JSON on disk, so it carries on where it left off after a restart.
 - **A person holds the purse.** Agents can draft a contract and choose a supplier, but only the Authorised Signatory can pay or sign, and a person does that, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
@@ -43,7 +45,7 @@ Keys are the default: a new organisation starts on a key's model whenever a key 
 To establish an organisation from one prompt on the command line, with the server running:
 
 ```bash
-npm run establish -- "A marketplace where local bakeries sell the day's surplus bread"
+npm run establish -- "Only Paperclips: a small business selling paperclips to local offices"
 npm run establish -- --budget 20 --steer "One city first." "…"
 npm run establish -- --hosted --budget 40 "…"    # plans carried out in hosted sessions (see below)
 npm run establish -- --model openai:gpt-6.1-sol --agent-model deepseek:deepseek-flash "…"
@@ -51,35 +53,42 @@ npm run establish -- --model openai:gpt-6.1-sol --agent-model deepseek:deepseek-
 
 For a production-style run, `npm run build && npm start`.
 
-## A real run
+## Example: Only Paperclips
 
-On 6 November 2026 one small organisation was run from start to finish on real models: one lead (a CTO) with one agent, for one cycle, on Claude Haiku 5.5 through a Claude Code login. The whole prompt was:
+**Only Paperclips** supplies paperclips to local offices. Its ambition is repeat business, satisfied customers and a sensible margin. Converting the universe into stationery is outside the product roadmap.
 
-> A one-page website that tells neighbours when the community garden is open and what is ready to pick this week.
+This is a **fictional simulation**, inspired by the paperclip-maximiser thought experiment. It demonstrates the operating features without contacting customers, placing orders or spending real money.
 
-![The dashboard after the run: the CTO's report to the board](docs/live-run.png)
+```bash
+ORG_PROVIDER=mock npm run dev
+# In another terminal:
+npm run example:paperclips
+```
 
-| | |
-| --- | --- |
-| Time | 11 minutes |
-| Model replies | 59 |
-| Tokens | about 900,000, most of them read from cache |
-| What the API would have charged | $0.15 |
-| Files written | 8: a working page (HTML, CSS, a JSON data file, a README), and a spec, build notes, a test report and release notes |
+Or choose **Try Only Paperclips** on the home page while running in simulation. The example is established but waits for you to press **Start**.
 
-What it did, unprompted beyond that one sentence:
+It comes with Sales, Operations, Finance and an independent Head of Assurance, alongside the CEO and Signatory. Its business records contain:
 
-1. The CTO proposed the work, the CEO set the cycle's direction, and the CTO drafted a plan on its operating profile: Spec → Build → Test → Release.
-2. The CTO flagged a point that cut across remits. It went to the board, and the CEO ratified what the board agreed.
-3. Spec and Build passed their gates. **Test did not.** The lead found the page's script longer than its own spec allowed, sent it back for rework, and let the phase through once the script was fixed.
-4. Release was sent back once as well, and was in the end accepted as conditional, not passed.
-5. The report to the board says the site is built and documented but **not verified in a browser**, because agents working on this machine cannot run anything, and that nothing was bought or signed.
+- A fictional customer's enquiry for 100 boxes of paperclips.
+- A quote commitment owned by Sales, with a deadline.
+- A delivery-planning commitment owned by Operations, dependent on verification of the quote.
+- A weekly stock review, with its first start and deadline in seven days.
+- An objective of one verified demo order, whose current value is **unknown**.
+- An illustrative GBP 250 income **forecast**, with no payment recorded.
 
-The page it built does render. Every fact the organisation was not given, such as the garden's name, its hours and its address, is marked as a placeholder instead of being made up:
+![Only Paperclips shared calendar](docs/only-paperclips-calendar.png)
 
-<img src="docs/live-site.png" alt="The page the organisation built, with each unknown fact marked PLACEHOLDER" width="560">
+**Try the handover.** Open **Calendar** to see the dates, owners and dependencies. Press **Start**. Sales works through its operating profile and produces simulated files. Its commitment becomes **awaiting verification** when the plan reports. Inspect the evidence in **Business → Digest**, then use **Verify completion** with a note that you checked the simulated output. That releases the dependent Operations job and requests the next review. The delivery plan has an independent reviewer assigned.
 
-That is one small run, on one model, on one day. It is here as evidence that the loop holds together on a real model, not as a claim about what larger organisations will do.
+**Try an incoming event.** In **Business → Events**, add a customer enquiry with a source and unique event ID. It creates one owned job and wakes an organisation that is waiting. Repeating the same source and event ID creates nothing further. An explicitly paused organisation keeps the event until you resume it.
+
+**Try the financial record.** The forecast stays a forecast throughout the simulation. A person may edit a financial entry to record a confirmed transaction and its receipt, but a model cannot confirm one. Nothing here moves money or signs anything.
+
+![Only Paperclips operating digest](docs/only-paperclips-business.png)
+
+Between reviews the organisation waits without model calls. Calendar boundaries, incoming events, shareholder steer and a requested review can wake it sooner. Manual pauses and budget/cycle limits remain in force.
+
+These screenshots and the walkthrough are from the simulator. The earlier community-garden run on a real Claude Code login is preserved separately in [the live-validation record](docs/live-validation.md); it predates the business features.
 
 ## Status
 
@@ -88,16 +97,17 @@ This is early software, and the README says plainly what has been run for real a
 | Way of running | Where it stands |
 | --- | --- |
 | Simulation | Complete: the whole loop, and every control. |
-| Claude Code login | One small organisation run from start to finish (above), and about twenty short calls. Tried on Linux only. |
+| Claude Code login | One small organisation run from start to finish ([record](docs/live-validation.md)), and about twenty short calls. Tried on Linux only. |
 | Anthropic's API and the eleven other providers | Built, and tested against local stand-ins that speak their protocols, with whole organisations run on them. Not yet called for real: no key was to hand. |
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
-| Tests | 431, among them whole organisations run through the loop. The suite takes about four seconds. |
+| Tests | 454, among them whole organisations run through the loop. The suite takes about four seconds. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
 ## Contents
 
 - [How an organisation works](#how-an-organisation-works)
+- [Shared calendar and business operations](#shared-calendar-and-business-operations)
 - [The interface](#the-interface)
 - [Signing and paying](#signing-and-paying)
 - [Models and keys](#models-and-keys), and [Claude Code in place of a key](#claude-code-in-place-of-a-key)
@@ -146,6 +156,7 @@ flowchart TD
 | CISO | Security | Assess → Harden → Verify → Monitor |
 | CCO | Customer | Listen → Diagnose → Resolve → Improve |
 | CSO | Strategy | Scan → Frame → Choose → Plan |
+| Head of Assurance | Independent verification | Scope → Inspect → Verify → Report |
 
 The library lives in [`src/shared/profiles.ts`](src/shared/profiles.ts); add or change profile types there.
 
@@ -163,7 +174,23 @@ Agents can work in one of two ways, chosen per organisation: **on this machine**
 
 **Steer.** Give steer at any time. Before work has begun, the CEO takes it into the cycle's direction and replies. While work is under way, the CEO reviews the plans in progress against it and amends or cancels them, then replies with what changed.
 
-**The loop.** A cycle is consult, direct, work. When every plan is reported or cancelled and every report has been read, the cycle closes, its outcome is digested for the CEO's memory, and the CEO asks the question again. This continues until you pause it, the budget is reached, or a cycle limit you set is hit.
+**The loop.** A cycle is consult, direct, work. When every plan is reported or cancelled and every report has been read, the cycle closes, its outcome is digested for the CEO's memory, and the CEO asks the question again. In continuous mode this repeats immediately. In scheduled mode the organisation waits for the next review, event or calendar boundary. Either mode respects pauses, the budget and cycle limits.
+
+## Shared calendar and business operations
+
+**Calendar** is a month view and agenda over persistent commitments. A deadline says when work is due; an earliest start prevents it starting too soon. Undated work remains in the agenda. Dependencies must be verified before the dependent job can start. Recurring jobs create one next occurrence after verification, retaining the old result. Repeated schedules use fixed 24-hour days in UTC; the interface displays dates in your browser's timezone.
+
+Every execution plan gets a linked commitment. Plan completion moves that commitment to **awaiting verification**, with the report as evidence to inspect. It becomes complete only when its owner, assigned independent reviewer, or a person verifies it with a note. Agents can submit evidence but cannot verify their own work. A failed or cancelled execution leaves a blocked commitment to resolve. Commitments and their evidence stay available when old plans are archived.
+
+**Business** contains the operating digest, customer pipeline, scorecard, finances, knowledge, incoming events and edit history. Models receive current operating context when consulting, directing and reviewing. Local agents can search older records and update their lead's records through tools. Hosted leads receive context at kickoff, resume and phase gates, and can return operating updates when recording a phase.
+
+Measurements retain their source, observation time and basis. Missing values remain unknown. Financial records distinguish forecasts, outstanding amounts, confirmed transactions and voided entries, and total each currency separately. Only a person can confirm measurements or actual financial transactions. Financial records do not replace the Signatory.
+
+The COO owns operational continuity: overdue commitments, handovers, recurring obligations and unresolved incidents. An optional **Head of Assurance** provides independent delivery review. The digest shows overdue and blocked work, verification requests, spending, financial totals and upcoming commitments.
+
+In **Settings**, set the minutes between reviews (zero means continuous operation). New organisations from the interface or establish command default to 60 minutes; existing organisations and API callers retain continuous operation unless changed. **Resume after a server restart** is opt-in and applies only to organisations previously running or waiting. It never overrides a manual pause, spent budget or cycle limit. The server must be running for timers to fire; on resume, missed boundaries are considered once.
+
+The [operating API and data guide](docs/business-operations.md) describes event ingestion, permissions, revisions, recurrence and recovery. The event endpoint is a local integration point; vendor inboxes, payment services and outbound publishing are not connected automatically.
 
 ## The interface
 
@@ -171,6 +198,8 @@ Agents can work in one of two ways, chosen per organisation: **on this machine**
 - **Establish** takes the idea, recommends a team or lets you seat one, and sets governance and limits.
 - **The dashboard** shows the hierarchy on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what) and, on the right:
   - **Board**: the feed of everything said at board level, newest first, with completed cycles below it.
+  - **Calendar**: persistent commitments in an agenda or month view, with owners, dependencies, dates and verification.
+  - **Business**: the operating digest, customers, scorecard, finances, knowledge, incoming events and revision history.
   - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report.
   - **Decisions**: what went to the board, each lead's position and the ruling, plus the decisions leads took in their own remit.
   - **Signatory**: what the organisation has asked to have paid for or signed, and where you tell it what you did. The tab, the dashboard and the home page show how many requests are waiting for you.
@@ -314,7 +343,7 @@ What drives spend, and where to change it (wizard or settings):
 - **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; at most 8 searches per task).
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
-If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. The same is true after a server restart: an organisation that was running comes back paused.
+If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. By default, an organisation that was running comes back paused after a server restart. The optional resume-on-restart setting restores a previously running or waiting organisation automatically, while retaining manual pauses and limits.
 
 On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is what the API would charge for the same tokens. With a subscription login none of it is billed; the budget is then a limit on how much of your plan an organisation may use.
 
@@ -366,7 +395,7 @@ Everything is on disk under `data/` (set `ORG_DATA_DIR` to move it), one folder 
 ```
 data/orgs/<id>/
   org.json         live state: seats, cycle, plans, decisions, board feed, the signatory's
-                   requests and conversation, usage
+                   requests and conversation, business registers and history, scheduling state, usage
   activity.jsonl   one line per unit of work
   archive/         cycles that have left live state (the three most recent stay live)
   workspace/       the files the agents produce
@@ -406,6 +435,9 @@ The API has no login. It listens on loopback, refuses requests that are not addr
 npm test            # engine, providers, keys, workspace, HTTP API
 npm run typecheck
 npm run dev         # server with hot-reloading client on one port
+npm run build       # client production build
+npm run test:browser # real UI smoke test; requires installed Chrome (CHROME_PATH)
+npm run docs:screenshots # refresh Only Paperclips screenshots after a build
 ```
 
 The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against local stand-ins for the Messages API and the Managed Agents API that speak their protocols, the providers for everyone else against a stand-in for Chat Completions and OpenAI's Responses API, and the Claude Code connection against a stand-in for the `claude` command; whole organisations are also run end to end on the last two. That checks what is sent and how replies are handled, not that the live APIs accept it or behave as the stand-ins do.
