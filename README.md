@@ -1,32 +1,46 @@
 # the_organisation
 
-Describe an idea and get an organisation of AI agents that works on it: a CEO who answers to you, an executive team where every lead follows a standard operating profile, and the agents each lead directs. It runs in a loop. When all the work is done, the CEO asks "What would the shareholders want now?" and the next cycle begins.
+**One prompt in. A company of AI agents out.**
 
-You are the shareholders. You give steer; the CEO enforces it. The organisation cannot pay for anything or sign anything: for that it asks its [Authorised Signatory](#signing-and-paying), which is you unless you seat an AI there, and you do the paying and signing yourself, outside this program.
+Describe an idea and get a working organisation: a CEO that answers to you, an executive team in which every lead runs a standard operating procedure, and agents under each lead doing the work in parallel. They plan, disagree, take it to the board, build, check their own work and report. Then the CEO asks *"What would the shareholders want now?"* and the next cycle begins. It keeps going until you pause it or the budget runs out.
 
-Built around Claude, and able to run on other makers' models as well (OpenAI, Google, Meta and the main Chinese labs), or on the Claude Code installed on your machine in place of a key, with a web interface for establishing organisations and watching them work.
+You are the shareholders. You steer; the CEO enforces it. The agents cannot spend money or sign anything: that goes through one seat, the Authorised Signatory, which is you unless you decide otherwise.
 
-![The dashboard of a running organisation: the shareholders' steer and the CEO on the left, the board feed on the right](docs/dashboard.png)
+![The dashboard of a running organisation](docs/dashboard.png)
 
-## Quick start
+*An organisation mid-cycle, here in simulation. On the left, your steer and the CEO's reply. On the right, the board: the CFO has asked for a payment, the CTO has revised its plan to comply with a ruling, and the CEO has ruled on a clash between two leads.*
 
-Requires Node 22 or later.
+## Why you might want it
+
+- **It is an organisation, not a swarm.** A CEO, up to eight executive leads from a library of fourteen (CTO, CPO, CMO, CFO, COO, General Counsel and the rest, or seats you define yourself), and one to eight agents under each. Every lead works to an operating profile, such as Spec → Build → Test → Release, and a phase has to pass the lead's gate before the next begins. Work that fails the gate is sent back.
+- **It governs itself.** A lead decides whatever is inside its remit. When two leads' priorities collide, each states a position and the CEO rules, or an independent judge if you seat one. Every decision is on the record, with its reasons.
+- **It does not stop, and it cannot run away.** One cycle's reports set off the next round of work, for as long as you let it. A hard budget pauses it. So does a cycle limit. You can pause, stop, steer or change any setting while it runs, and all of its state is plain JSON on disk, so it carries on where it left off after a restart.
+- **A person holds the purse.** Agents can draft a contract and choose a supplier, but only the Authorised Signatory can pay or sign, and a person does that, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
+- **Use the models you have, or none.** Claude, GPT, Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, and anything on OpenRouter, with executives on one model and agents on another if you like. Any OpenAI-compatible endpoint works too, so a model on your own machine (llama.cpp, Ollama, LM Studio, vLLM) can do the work. And with no API key at all it can run on the Claude Code you already have, on your own subscription login.
+- **Try it in a minute, for nothing.** With nothing connected it runs in simulation: every seat gives a scripted answer, the whole loop turns, and every control works.
+- **See everything.** A web interface shows the hierarchy and who is busy with what, the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
+
+## Start in a minute
+
+Needs Node 22 or later.
 
 ```bash
+git clone https://github.com/PolyLabs-research/the_organisation.git
+cd the_organisation
 npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:4780>.
+Open <http://127.0.0.1:4780>, choose **Establish**, and describe an idea.
 
-Until it is given an API key the server runs in **simulation**: every seat gives a scripted answer, so you can watch the whole loop work and try every control without spending anything. To call real models, open **Models and keys** in the interface and add a key for any of the providers listed [below](#models-and-keys), or give keys in a file:
+That runs in **simulation**, which spends nothing. To put real models behind it, open **Models and keys** and do one of two things:
 
-```bash
-cp .env.example .env    # then set ANTHROPIC_API_KEY, OPENAI_API_KEY, or any of the others in that file
-npm run dev
-```
+- **Add an API key** for any of the providers [listed below](#models-and-keys), or give keys in a file: `cp .env.example .env`, then set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or any of the others in it.
+- **Connect Claude Code**, with no key, if it is installed on this machine. Organisations then run on its login: see [Claude Code in place of a key](#claude-code-in-place-of-a-key).
 
-To establish an organisation from a single prompt on the command line (with the server running):
+Keys are the default: a new organisation starts on a key's model whenever a key offers one.
+
+To establish an organisation from one prompt on the command line, with the server running:
 
 ```bash
 npm run establish -- "A marketplace where local bakeries sell the day's surplus bread"
@@ -35,9 +49,65 @@ npm run establish -- --hosted --budget 40 "…"    # plans carried out in hosted
 npm run establish -- --model openai:gpt-6.1-sol --agent-model deepseek:deepseek-flash "…"
 ```
 
-With no key at all, the Claude Code installed on this machine can be connected on the same page, and organisations then run on its login: see [Claude Code in place of a key](#claude-code-in-place-of-a-key). Keys are the default, and what a new organisation starts on whenever there is one.
-
 For a production-style run, `npm run build && npm start`.
+
+## A real run
+
+On 6 November 2026 one small organisation was run from start to finish on real models: one lead (a CTO) with one agent, for one cycle, on Claude Haiku 5.5 through a Claude Code login. The whole prompt was:
+
+> A one-page website that tells neighbours when the community garden is open and what is ready to pick this week.
+
+![The dashboard after the run: the CTO's report to the board](docs/live-run.png)
+
+| | |
+| --- | --- |
+| Time | 11 minutes |
+| Model replies | 59 |
+| Tokens | about 900,000, most of them read from cache |
+| What the API would have charged | $0.15 |
+| Files written | 8: a working page (HTML, CSS, a JSON data file, a README), and a spec, build notes, a test report and release notes |
+
+What it did, unprompted beyond that one sentence:
+
+1. The CTO proposed the work, the CEO set the cycle's direction, and the CTO drafted a plan on its operating profile: Spec → Build → Test → Release.
+2. The CTO flagged a point that cut across remits. It went to the board, and the CEO ratified what the board agreed.
+3. Spec and Build passed their gates. **Test did not.** The lead found the page's script longer than its own spec allowed, sent it back for rework, and let the phase through once the script was fixed.
+4. Release was sent back once as well, and was in the end accepted as conditional, not passed.
+5. The report to the board says the site is built and documented but **not verified in a browser**, because agents working on this machine cannot run anything, and that nothing was bought or signed.
+
+The page it built does render. Every fact the organisation was not given, such as the garden's name, its hours and its address, is marked as a placeholder instead of being made up:
+
+<img src="docs/live-site.png" alt="The page the organisation built, with each unknown fact marked PLACEHOLDER" width="560">
+
+That is one small run, on one model, on one day. It is here as evidence that the loop holds together on a real model, not as a claim about what larger organisations will do.
+
+## Status
+
+This is early software, and the README says plainly what has been run for real and what has not.
+
+| Way of running | Where it stands |
+| --- | --- |
+| Simulation | Complete: the whole loop, and every control. |
+| Claude Code login | One small organisation run from start to finish (above), and about twenty short calls. Tried on Linux only. |
+| Anthropic's API and the eleven other providers | Built, and tested against local stand-ins that speak their protocols, with whole organisations run on them. Not yet called for real: no key was to hand. |
+| Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
+| Tests | 431, among them whole organisations run through the loop. The suite takes about four seconds. |
+
+If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
+
+## Contents
+
+- [How an organisation works](#how-an-organisation-works)
+- [The interface](#the-interface)
+- [Signing and paying](#signing-and-paying)
+- [Models and keys](#models-and-keys), and [Claude Code in place of a key](#claude-code-in-place-of-a-key)
+- [Spend and limits](#spend-and-limits)
+- [What agents can and cannot do](#what-agents-can-and-cannot-do)
+- [Hosted sessions](#hosted-sessions-claude-managed-agents)
+- [Data](#data) and [Configuration](#configuration)
+- [Development](#development)
+- [Limits of this version](#limits-of-this-version)
+- [Contributing](#contributing)
 
 ## How an organisation works
 
@@ -382,3 +452,9 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - A board decision is one round of positions and a ruling; there is no further debate.
 - Steer given mid-cycle changes plans, not tasks already running: an agent finishes the task it is on.
 - Seats are fixed once an organisation is established. Agent allocation, the arbiter and every limit can be changed afterwards.
+
+## Contributing
+
+Issues and pull requests are welcome. The most useful thing to send is what happened when you ran it on a provider or a model it has not yet been run on (see [Status](#status)): what worked, what was refused, and what it cost.
+
+For changes to the code: `npm test` and `npm run typecheck` should pass, a change in behaviour comes with a test that fails without it, and the README is the description of what the program does, so it changes with the code.
