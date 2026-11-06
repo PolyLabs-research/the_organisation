@@ -223,7 +223,7 @@ export function childEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     if (value === undefined) continue;
     if (/^ANTHROPIC_/.test(name)) continue;
     if (/^CLAUDE(CODE|_)/.test(name) && !KEPT.has(name)) continue;
-    if (/_(API_KEY|AUTH_TOKEN|BASE_URL)$/.test(name)) continue;
+    if (/_(API_KEY|AUTH_TOKEN|BASE_URL|SECRET)$/.test(name)) continue;
     out[name] = value;
   }
   // Nothing of the person's own instructions or memory goes into a seat's prompt, and nothing is left running behind.

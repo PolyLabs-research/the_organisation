@@ -1,3 +1,4 @@
+import { allows } from '../../shared/privileges';
 import { describeRequest, isOpen, requestSubject } from '../../shared/signatory';
 import type { BoardMessage, Executive, Organisation, Plan, SignatoryMessage, SignatoryRequest } from '../../shared/types';
 import { clean, now, oneLine } from './records';
@@ -89,6 +90,12 @@ function kindOf(said: unknown, amount: string): SignatoryRequest['kind'] {
  */
 export function raiseRequests(org: Organisation, lead: Executive, plan: Plan, phase: string | null, specs: RequestSpec[]): SignatoryRequest[] {
   const filed: SignatoryRequest[] = [];
+  if (!allows(org, lead.id, 'ask_signatory')) {
+    // Refused, and said out loud: the plan may depend on it, and the person is the one who can change the privilege.
+    const titles = (Array.isArray(specs) ? specs : []).map((spec) => line(spec?.title, 160)).filter(Boolean);
+    if (titles.length) postToBoard(org, 'signatory', lead.id, `${lead.short} may not ask the signatory`, `This role does not have the privilege to ask the signatory, so these were not filed:\n${titles.map((title) => `- ${title}`).join('\n')}`);
+    return filed;
+  }
   // A gate that is reviewed again, after rework, does not get a fresh allowance.
   let room = MAX_REQUESTS_PER_GATE - org.signatory.requests.filter((r) => r.planId === plan.id && r.phase === phase && r.cycle === org.cycle.number).length;
   for (const spec of Array.isArray(specs) ? specs : []) {

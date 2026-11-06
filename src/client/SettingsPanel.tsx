@@ -79,7 +79,7 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
             label="The signatory, who signs and pays, is"
             hint={
               draft.signatory === 'ai'
-                ? 'An AI seat authorises or declines each request by what the shareholders want. Nothing here can move money or sign a document, so what it authorises still waits for you to carry out.'
+                ? 'An AI seat authorises or declines each request by what the shareholders want. The seat cannot move money or sign a document, so what it authorises still waits for you to carry out.'
                 : 'Requests come to you. You pay or sign outside this system, and tell the organisation in the Signatory tab what you did or why you refused.'
             }
           >

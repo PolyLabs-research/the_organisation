@@ -351,7 +351,7 @@ export function Wizard({ meta }: { meta: Meta }) {
               <label>
                 <input type="radio" name="signatory" checked={settings.signatory === 'ai'} onChange={() => set('signatory', 'ai')} />
                 <span>
-                  <strong>An AI seat</strong>, which authorises or declines each request by what the shareholders want. What it authorises still waits for you to carry out: nothing here can
+                  <strong>An AI seat</strong>, which authorises or declines each request by what the shareholders want. What it authorises still waits for you to carry out: the seat cannot
                   move money.
                 </span>
               </label>

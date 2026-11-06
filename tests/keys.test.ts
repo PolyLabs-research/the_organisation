@@ -393,7 +393,7 @@ describe('an organisation on models that are not Claude’s', () => {
     expect(provider.agents.length).toBeGreaterThan(0);
     for (const req of provider.agents) {
       expect(req.webSearch).toBeNull();
-      expect(req.system.role).toContain('You cannot run code, browse the web or reach any outside system.');
+      expect(req.system.role).toContain('You cannot run code or browse arbitrary websites.');
       expect(req.system.role).not.toContain('You can search the web');
     }
   });

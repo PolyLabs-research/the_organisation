@@ -248,7 +248,8 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
   if (!idea) throw new ValidationError('Describe the idea the organisation exists to pursue.');
   const settings = sanitiseSettings(req.settings);
 
-  const used = new Set<string>();
+  // "person" is how the human is told apart from every seat, in grants and in what only a person may confirm.
+  const used = new Set<string>(['person', 'system']);
   const seatId = (short: string) => {
     const base = slugify(short, 'lead');
     let candidate = base;
@@ -297,6 +298,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     board: [],
     steers: [],
     signatory: { requests: [], messages: [] },
+    privileges: {},
     usage: emptyUsage(),
     usageByExec: {},
   };
@@ -372,6 +374,8 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.seq ??= 0;
   org.inbox ??= {};
   org.usageByExec ??= {};
+  // From before there were privileges: every role stands at the defaults.
+  org.privileges ??= {};
   syncSignatory(org);
   for (const plan of org.plans) {
     plan.execution ??= null;

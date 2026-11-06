@@ -4,7 +4,7 @@
 
 Describe an idea and get a working organisation: a CEO that answers to you, an executive team in which every lead runs a standard operating procedure, and agents under each lead doing the work in parallel. They plan, disagree, take it to the board, build, check their own work and report. Then the CEO asks *"What would the shareholders want now?"* and the next cycle begins. It keeps going until you pause it or the budget runs out.
 
-You are the shareholders. You steer; the CEO enforces it. The agents cannot spend money or sign anything: that goes through one seat, the Authorised Signatory, which is you unless you decide otherwise.
+You are the shareholders. You steer; the CEO enforces it. Spending money and signing go through one seat, the Authorised Signatory, which is you unless you decide otherwise.
 
 ![Only Paperclips operating dashboard](docs/only-paperclips-business.png)
 
@@ -17,7 +17,8 @@ You are the shareholders. You steer; the CEO enforces it. The agents cannot spen
 - **It can wait.** Scheduled reviews, incoming events and calendar dates drive work. Between reviews it sleeps without model calls. The interface and establish command default to hourly reviews; continuous operation remains available.
 - **It governs itself.** A lead decides whatever is inside its remit. When two leads' priorities collide, each states a position and the CEO rules, or an independent judge if you seat one. Every decision is on the record, with its reasons.
 - **It does not stop, and it cannot run away.** One cycle's reports set off the next round of work, for as long as you let it. A hard budget pauses it. So does a cycle limit. You can pause, stop, steer or change any setting while it runs, and all of its state is plain JSON on disk, so it carries on where it left off after a restart.
-- **A person holds the purse.** Agents can draft a contract and choose a supplier, but only the Authorised Signatory can pay or sign, and a person does that, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
+- **A person holds the purse.** Agents can draft a contract and choose a supplier, but paying and signing are for the Authorised Signatory, and a person does those, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
+- **Each role gets only what you give it.** A Privileges panel sets what each role and its agents may do: search, change records, ask the signatory, read mail, draft mail, sign in, act on accounts, create accounts. Each switch is enforced in code where the thing is done, not by asking the model, and acting on an outside service is off until you turn it on for a role.
 - **Use the models you have, or none.** Claude, GPT, Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, and anything on OpenRouter, with executives on one model and agents on another if you like. Any OpenAI-compatible endpoint works too, so a model on your own machine (llama.cpp, Ollama, LM Studio, vLLM) can do the work. And with no API key at all it can run on the Claude Code you already have, on your own subscription login.
 - **Try it in a minute, for nothing.** With nothing connected it runs in simulation: every seat gives a scripted answer, the whole loop turns, and every control works.
 - **See everything.** A web interface shows the hierarchy and who is busy with what, the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
@@ -100,7 +101,8 @@ This is early software, and the README says plainly what has been run for real a
 | Claude Code login | One small organisation run from start to finish ([record](docs/live-validation.md)), and about twenty short calls. Tried on Linux only. |
 | Anthropic's API and the eleven other providers | Built, and tested against local stand-ins that speak their protocols, with whole organisations run on them. Not yet called for real: no key was to hand. |
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
-| Tests | 454, among them whole organisations run through the loop. The suite takes about four seconds. |
+| Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
+| Tests | 542, among them whole organisations run through the loop. The suite takes about five seconds. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
@@ -108,6 +110,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 
 - [How an organisation works](#how-an-organisation-works)
 - [Shared calendar and business operations](#shared-calendar-and-business-operations)
+- [Business email and service accounts](#business-email-and-service-accounts), and [what each role may do](#what-each-role-may-do)
 - [The interface](#the-interface)
 - [Signing and paying](#signing-and-paying)
 - [Models and keys](#models-and-keys), and [Claude Code in place of a key](#claude-code-in-place-of-a-key)
@@ -190,7 +193,49 @@ The COO owns operational continuity: overdue commitments, handovers, recurring o
 
 In **Settings**, set the minutes between reviews (zero means continuous operation). New organisations from the interface or establish command default to 60 minutes; existing organisations and API callers retain continuous operation unless changed. **Resume after a server restart** is opt-in and applies only to organisations previously running or waiting. It never overrides a manual pause, spent budget or cycle limit. The server must be running for timers to fire; on resume, missed boundaries are considered once.
 
-The [operating API and data guide](docs/business-operations.md) describes event ingestion, permissions, revisions, recurrence and recovery. The event endpoint is a local integration point; vendor inboxes, payment services and outbound publishing are not connected automatically.
+The [operating API and data guide](docs/business-operations.md) describes event ingestion, permissions, revisions, recurrence and recovery. The event endpoint is a local integration point. Gmail and other mailboxes can be connected explicitly under **Email & accounts**; payment services and outbound publishing are not connected automatically.
+
+## Business email and service accounts
+
+**Email & accounts** connects a dedicated Gmail / Google Workspace mailbox through Google sign-in, keeps service passwords in an encrypted per-organisation vault, and grants access to selected executive teams. Agents can read their assigned inbox, prepare email drafts, create an authorised business account and use its saved login through an isolated browser. Passwords are filled by the server and are not returned to the model. A person reviews and sends outgoing email. There is no such review of what an agent does on a site it is logged in to: read [what is enforced and what is only instructed](docs/email-and-accounts.md#what-is-enforced-and-what-is-only-instructed) before you connect anything real.
+
+Start by creating the vault, then follow the [Gmail setup and account-access guide](docs/email-and-accounts.md). Google sign-in needs your own OAuth client configured on the server. Other mail providers can use the IMAP/SMTP form. Install Chrome, or set `ORG_BROWSER_PATH`, for account browsing. These tools run with local task execution; hosted sessions cannot reach the vault.
+
+The vault normally locks after 30 minutes without use. For scheduled unattended work, you can keep it unlocked until you lock it or restart the server. There is no passphrase recovery. New services are authorised by a person; CAPTCHA, unsupported MFA and account-access requests are handled at the desk. The Only Paperclips demo connects no real accounts.
+
+![Only Paperclips account desk, showing a fictional supplier account](docs/only-paperclips-access.png)
+
+*Account controls exercised with a fake mailbox and supplier; no live account is connected in this capture.*
+
+## What each role may do
+
+**Privileges** is one grid: a column for each role, a row for each thing a role and its agents can do, and below it what no setting changes. A mailbox or account also has to be assigned to the team under **Email & accounts**: the assignment says with what, the privilege says what.
+
+| Privilege | At the start | What enforces it |
+| --- | --- | --- |
+| Search the web | On | The search tool is not given, locally or in a hosted session. Web search must also be on for the organisation. |
+| Update business records | On | The tool is not given, and updates from structured calls and hosted sessions are refused. The CEO has this one too. |
+| Ask the signatory to pay or sign | On | The request is not filed, and the board is told what was refused. |
+| Read assigned mailboxes | On | The tool is not given, and the access service refuses the read, also when it comes back from the mail server. |
+| Draft email | On | The tool is not given, and the access service refuses the draft. A person still sends every message. |
+| Sign in and read | On | The tool is not given, and the access service refuses the browser. |
+| Act on accounts | **Off** | Without it the browser blocks every request that could change something. See below. |
+| Create accounts | **Off** | The access service refuses to open the sign-up page. |
+
+Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email or an account is stopped and its browser closed. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
+
+**Without Act on accounts**, a session gets one sign-in, on the page it opened, and from then on the browser refuses any request but GET, HEAD and OPTIONS. That is a limit on the network, so it holds whichever element an agent presses and whatever a page's own scripts try to send. Nothing leaves. The agent is told, and can read on or ask a person for help.
+
+The limits of this are worth knowing:
+
+- It goes by the kind of request. A site that changes something on a plain GET, such as a one-click link in an email, is not stopped.
+- A login in two steps, or a site that reads through POST, may not work for a role without Act. Turn it on for that role, or do that part yourself.
+- Create accounts opens the sign-up page. A role with Act can still submit a sign-up form it finds on the site by following links, because Act lets it submit any form there.
+- Privileges are per role, not per agent or per connection. Every agent on a team has the same, and a role with Act can act on every account assigned to it.
+
+A role that can both read mail and act on accounts is shown a warning, because anyone can send an email with instructions aimed at an agent, and what it reads could steer what it does.
+
+![Only Paperclips privileges, with one role allowed to act on accounts and the warning that goes with it](docs/only-paperclips-privileges.png)
 
 ## The interface
 
@@ -199,6 +244,8 @@ The [operating API and data guide](docs/business-operations.md) describes event 
 - **The dashboard** shows the hierarchy on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what) and, on the right:
   - **Board**: the feed of everything said at board level, newest first, with completed cycles below it.
   - **Calendar**: persistent commitments in an agenda or month view, with owners, dependencies, dates and verification.
+  - **Email & accounts**: connected mailboxes, saved service accounts, team access, drafts for a person to send, access requests and vault controls.
+  - **Privileges**: what each role and its agents may do, and what no role can.
   - **Business**: the operating digest, customers, scorecard, finances, knowledge, incoming events and revision history.
   - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report.
   - **Decisions**: what went to the board, each lead's position and the ruling, plus the decisions leads took in their own remit.
@@ -210,7 +257,7 @@ Start, pause, stop and settings are at the top of the dashboard. Pause lets call
 
 ## Signing and paying
 
-An organisation of agents can draft a contract and choose a supplier, but it cannot sign the one or pay the other, and nothing in this program can move money or bind you to anything. What every organisation has instead is one more seat on its board, the **Authorised Signatory**, and a rule that every seat works under: until the signatory says a thing is done, it has not happened, and nothing may be planned, written or reported as though it had.
+An organisation of agents can draft a contract and choose a supplier, but paying and signing are not its to do, and this program has no way of its own to move money. What every organisation has instead is one more seat on its board, the **Authorised Signatory**, and a rule that every seat works under: until the signatory says a thing is done, it has not happened, and nothing may be planned, written or reported as though it had.
 
 ![The Signatory tab: requests from three leads, one marked paid with a note, one rejected with a reason, and one still waiting with its two buttons](docs/signatory.png)
 
@@ -234,6 +281,8 @@ Answers are given with buttons on purpose. What you type in the message box is p
 **When a plan is cancelled**, what it asked for is withdrawn, so nobody pays for work that has been stopped.
 
 **Check before you pay.** A request is written by a model. Its amount, its payee and its reason are what the model wrote, not facts this program has checked, and a model can be wrong about any of them. Read the files it points to and confirm the details yourself, as you would with anything a new member of staff asked you to pay. A request is shown as plain words wherever it appears, and a link in one is written out as its label and its address when the request is filed, so that you are never one click from an address a model chose.
+
+**If you let a role act on a service account, this is a rule and not a lock.** A role can sign in and read, and the browser blocks the rest. Switch on [Act on accounts](#what-each-role-may-do) and its agents can press whatever that account can press, and creating an account can accept the site's terms. They are told to leave purchases and commitments to the Signatory, and from then on nothing else stops them. See [what is enforced and what is only instructed](docs/email-and-accounts.md#what-is-enforced-and-what-is-only-instructed).
 
 ## Models and keys
 
@@ -349,7 +398,7 @@ On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is wh
 
 ## What agents can and cannot do
 
-**On this machine** (the default), agents have three tools, all confined to their organisation's workspace folder: list files, read a file, write a file. With web search switched on, agents on Claude models can also search the web. They **cannot run code** or reach any other system, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
+**On this machine** (the default), agents have three tools, all confined to their organisation's workspace folder: list files, read a file, write a file. With web search switched on, agents on Claude models can also search the web. Business records, email and service accounts are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach any other system, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
 
 **In hosted sessions** (Claude models only), agents have a shell and file tools in a sandbox on Anthropic's side. They can install packages, build, run and test, and are told to report what actually happened.
 
@@ -425,9 +474,11 @@ A folder is loaded only if its name is the organisation's id, so a copy kept bes
 | `PORT` | `4780` | Port to listen on. |
 | `HOST` | `127.0.0.1` | Address to listen on. |
 | `ORG_DATA_DIR` | `./data` | Where organisations are stored. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | OAuth Web application client for Gmail connections; see the [setup guide](docs/email-and-accounts.md). |
+| `ORG_BROWSER_PATH` | installed Google Chrome | Optional Chromium executable for the business account browser. |
 | `ANTHROPIC_WORKSPACE_ID` | Default workspace | The workspace your API key belongs to, for links from a plan to its hosted session in the Console. |
 
-The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection is switched off in that case: a login is one person's.
+The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection and business email/account controls are switched off in that case.
 
 ## Development
 
@@ -456,6 +507,7 @@ src/server/
                  catalogue of providers, models and prices (catalogue.ts)
     managed/     hosted sessions: the saved agents (resources.ts), files in
                  and out (files.ts), and following a session (session.ts)
+  access*.ts     encrypted business vault, Gmail/IMAP/SMTP, account browser and agent tools
   connections.ts the API keys the server holds
   workspace.ts   the confined file tools agents use
   app.ts         the HTTP API and live event stream
@@ -465,7 +517,7 @@ scripts/         establish an organisation from one prompt; set up hosted sessio
 tests/
 ```
 
-**How the engine runs.** The runner is a reconciler. It asks what work is ready given the organisation's state, starts as much as capacity allows, and asks again whenever something finishes. Each unit of work is one model call (or one agent run) whose result is written back to the state. Because all state is in `org.json`, pause, stop and restart need no special handling. A plan in a hosted session is one long unit of work: the session tells the engine what happens as it happens (phases recorded, agents given work, files, spend), and the plan's state is updated then, not at the end.
+**How the engine runs.** The runner is a reconciler. It asks what work is ready given the organisation's state, starts as much as capacity allows, and asks again whenever something finishes. Each unit of work is one model call (or one agent run) whose result is written back to the state. Because scheduling state is in `org.json`, pause, stop and restart need no special handling. Business credentials live separately in `access-vault.json` and require unlocking after restart. A plan in a hosted session is one long unit of work: the session tells the engine what happens as it happens (phases recorded, agents given work, files, spend), and the plan's state is updated then, not at the end.
 
 **Adding a provider.** One that speaks OpenAI's Chat Completions needs no code: add an entry to [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts) with its address, the variable its key is read from, how its API differs from the others (the `Dialect`) and the models to pick out with their prices. `tests/catalogue.test.ts` checks the entry is well formed. Update `PRICES_CHECKED` there when you re-read the prices.
 
@@ -473,12 +525,14 @@ A provider with an API of its own implements two methods ([`src/server/providers
 
 ## Limits of this version
 
-- On this machine, agents write files and execute nothing. Running and testing needs hosted sessions.
+- Local agents write files and can use explicitly granted email/account tools. They have no general shell or code-execution tool; running and testing generated code needs hosted sessions.
+- Gmail, IMAP/SMTP and account-browser integrations have been tested with stand-ins and a real local browser, not a live mailbox or third-party signup. See [email and account limits](docs/email-and-accounts.md).
+- Privileges are per role, and the browser's read-only limit goes by the kind of request: see [what each role may do](#what-each-role-may-do).
 - Hosted sessions have not been run against the live API (see above), and hold a lead to its allocation of agents by instruction only.
 - No provider's API has been called from this code: not Claude's, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)). The one way to a real model that has been tried is the [Claude Code connection](#claude-code-in-place-of-a-key), on which one small organisation has run one cycle.
 - The Claude Code connection has been tried on Linux only, has no hosted sessions and no web search, and depends on how the `claude` command behaves, which changes from release to release.
 - Hosted sessions and web search are for Claude models only.
-- Nothing here pays or signs. The signatory's seat records what a person did elsewhere; an AI in the seat can authorise or decline a request, and no more. Paying from inside the program would need a payment service connected to it, which this version does not have.
+- The program pays nothing and signs nothing itself. The signatory's seat records what a person did elsewhere; an AI in the seat can authorise or decline a request, and no more. Paying from inside the program would need a payment service connected to it, which this version does not have. An agent with a service account can still press whatever that account can press on its site: see [what is enforced and what is only instructed](docs/email-and-accounts.md#what-is-enforced-and-what-is-only-instructed).
 - Requests to the signatory are raised by leads at their phase gates. A lead cannot ask in the middle of a phase, and the CEO cannot ask at all.
 - One organisation is one process's worth of state: there is no multi-user access and no login. Whoever can open the interface can answer for the signatory.
 - A board decision is one round of positions and a ruling; there is no further debate.

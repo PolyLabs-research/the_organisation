@@ -374,7 +374,9 @@ describe('a hosted session and money', () => {
 
     expect(org.pauseReason).toBe('budget');
     expect(plan.status).toBe('executing');
-    expect(plan.managed!.state).toBe('at_budget');
+    // Depending on executive prompt cost, the whole organisation may exhaust its budget
+    // before the session asks for another allowance. Both paths must retain the same session.
+    expect(plan.managed!.state).toBe(org.usage.costUsd >= org.settings.budgetUsd ? 'paused' : 'at_budget');
     // The session spent up to its cap and one request past it at most, and the organisation stayed inside its budget.
     expect(plan.managed!.spentUsd).toBeLessThan(plan.managed!.budgetUsd + 0.06);
     expect(org.usage.costUsd).toBeLessThan(0.4 + 0.06);

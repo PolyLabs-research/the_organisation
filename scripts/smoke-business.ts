@@ -70,7 +70,7 @@ try {
   await call('Runtime.enable');
   await call('Page.enable');
   await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
-  await wait('document.body.textContent.includes("Try Only Paperclips")');
+  await wait('document.body?.textContent.includes("Try Only Paperclips")');
   await click('Try Only Paperclips');
   await wait('document.querySelector("h1")?.textContent === "Only Paperclips"');
   await evaluate('Array.from(document.querySelectorAll("[role=tab]")).find(b => b.textContent.startsWith("Calendar")).click()');

@@ -71,6 +71,7 @@ export class Registry {
     if (runner.org.settings.archiveSessions) await runner.archiveSessions({ all: true }).catch(() => {});
     await runner.flush();
     runner.dispose();
+    await runner.access.dispose();
     await this.store.remove(id);
     return true;
   }
@@ -85,6 +86,7 @@ export class Registry {
         await runner.idle(8000).catch(() => {});
         await runner.flush();
         runner.dispose();
+        await runner.access.dispose();
       }),
     );
   }

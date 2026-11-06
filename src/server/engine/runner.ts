@@ -1,5 +1,7 @@
 import path from 'node:path';
+import { BusinessAccess, type AccessOptions } from '../access';
 import { operatingDigest } from '../../shared/business';
+import { PRIVILEGE_BY_ID, allows, type Privilege } from '../../shared/privileges';
 import { applyBusinessCommand, consumeBusinessWake, nextBusinessWake, syncBusinessJobs } from './business';
 import type {
   ActiveWork,
@@ -18,6 +20,7 @@ import type { Store } from '../store';
 import { Workspace } from '../workspace';
 import { StaleWork, describeWork, perform, type EngineContext } from './handlers';
 import { MAX_RESULT_CHARS, clean } from './records';
+import { changePrivilege } from './privileges';
 import { addNote, reopenRequest, settleRequest } from './signatory';
 import {
   addSpend,
@@ -42,6 +45,7 @@ import {
 import { cycleComplete, nextWork, settle, type WorkItem } from './work';
 
 export interface RunnerOptions {
+  access?: AccessOptions;
   /** Base delay before a failed call is retried; doubles each attempt. */
   retryDelayMs?: number;
   /** Minimum gap between pushes to subscribers. */
@@ -64,6 +68,7 @@ type Listener = (event: { type: 'view'; view: OrgView } | { type: 'activity'; en
  */
 export class OrgRunner {
   readonly workspace: Workspace;
+  readonly access: BusinessAccess;
   readonly activity: ActivityEntry[] = [];
   private readonly inFlight = new Map<string, ActiveWork>();
   private readonly attempts = new Map<string, number>();
@@ -94,6 +99,7 @@ export class OrgRunner {
     options: RunnerOptions = {},
   ) {
     this.workspace = new Workspace(store.workspaceRoot(org.id));
+    this.access = new BusinessAccess(path.join(store.orgDir(org.id), 'access-vault.json'), org.id, () => org.executives.filter(exec => exec.kind === 'lead' || exec.kind === 'ceo').map(exec => exec.id), { ...options.access, allows: (actorId, privilege) => allows(org, actorId, privilege) });
     this.retryDelayMs = options.retryDelayMs ?? 4000;
     this.emitIntervalMs = options.emitIntervalMs ?? 150;
   }
@@ -296,6 +302,14 @@ export class OrgRunner {
   noteFromSignatory(text: string): void {
     addNote(this.org, text);
     this.changed();
+  }
+
+  /** A person sets what a role may do. It holds from now on, for work under way as well. */
+  async setPrivilege(seatId: unknown, privilege: unknown, allowed: unknown): Promise<void> {
+    const { changed, removed } = changePrivilege(this.org, seatId, privilege, allowed);
+    // Hosted sessions cannot reach the vault, so a privilege that does not apply there is one that works through it.
+    if (removed && !PRIVILEGE_BY_ID[privilege as Privilege].hosted) await this.access.revoke(String(seatId));
+    if (changed) this.changed();
   }
 
   setAgentCount(execId: string, count: number): void {
@@ -570,6 +584,7 @@ export class OrgRunner {
     const spent = { model: '', inputTokens: 0, outputTokens: 0, costUsd: 0 };
     const ctx: EngineContext = {
       org,
+      access: this.access,
       provider: this.provider,
       workspace: this.workspace,
       signal: this.abort.signal,

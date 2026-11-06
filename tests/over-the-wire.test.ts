@@ -88,8 +88,8 @@ describe('an organisation on models reached over HTTP', () => {
     expect(second.messages.find((m: any) => m.role === 'assistant')).toMatchObject({ reasoning_content: 'I will write the note.' });
     // No web search was offered, and the agents were not told they had one.
     for (const body of agents) {
-      expect(body.tools.map((t: any) => t.function.name)).toEqual(['list_files', 'read_file', 'write_file', 'read_business', 'update_business']);
-      expect(body.messages[0].content).toContain('You cannot run code, browse the web or reach any outside system.');
+      expect(body.tools.map((t: any) => t.function.name)).toEqual(['list_files', 'read_file', 'write_file', 'read_business', 'update_business', 'business_access', 'read_business_email', 'draft_business_email', 'account_browser']);
+      expect(body.messages[0].content).toContain('You cannot run code or browse arbitrary websites.');
     }
 
     // The files are in the workspace, and the spend is counted at each model's own list price.

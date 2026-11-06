@@ -70,6 +70,17 @@ describe('establishing an organisation', () => {
     expect(org.cycle).toMatchObject({ number: 1, stage: 'consult' });
   });
 
+  it('never gives a seat the name the person or the system goes by', () => {
+    const phases = [{ name: 'One', purpose: 'First', deliverable: 'A' }, { name: 'Two', purpose: 'Second', deliverable: 'B' }];
+    const seat = (fields: object) => ({ profileId: 'custom', function: 'People', phases, ...fields });
+    const org = createOrganisation({ ...base, executives: [seat({ title: 'People Lead', short: 'Person' }), seat({ title: 'Person' }), seat({ title: 'Systems', short: 'System' })] as never }, 'org_1');
+    const ids = org.executives.map((e) => e.id);
+    // "person" is who may confirm a payment and who holds every grant. A seat must not be able to pass for it.
+    expect(ids).not.toContain('person');
+    expect(ids).not.toContain('system');
+    expect(ids).toEqual(['ceo', 'person-2', 'person-3', 'system-2', 'signatory']);
+  });
+
   it('ignores an attempt to seat a second CEO, a judge or a second signatory by hand', () => {
     const org = createOrganisation({ ...base, executives: [{ profileId: 'ceo' }, { profileId: 'judge' }, { profileId: 'signatory' }, { profileId: 'product' }] }, 'org_1');
     expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'cpo', 'signatory']);
