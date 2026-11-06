@@ -298,6 +298,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     board: [],
     steers: [],
     signatory: { requests: [], messages: [] },
+    privileges: {},
     usage: emptyUsage(),
     usageByExec: {},
   };
@@ -373,6 +374,8 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.seq ??= 0;
   org.inbox ??= {};
   org.usageByExec ??= {};
+  // From before there were privileges: every role stands at the defaults.
+  org.privileges ??= {};
   syncSignatory(org);
   for (const plan of org.plans) {
     plan.execution ??= null;

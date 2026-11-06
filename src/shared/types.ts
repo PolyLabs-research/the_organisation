@@ -1,5 +1,6 @@
 // Domain model shared by the server (engine, API) and the browser client.
 import type { BusinessState } from './business';
+import type { OrgPrivileges } from './privileges';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -458,6 +459,8 @@ export type PauseReason = 'user' | 'budget' | 'error' | 'restart' | 'cycle_limit
 
 export interface Organisation {
   business: BusinessState;
+  /** What each role and its agents may do, as far as the shareholders have said. */
+  privileges: OrgPrivileges;
   id: string;
   /** Counter behind the short ids of plans, tasks, decisions and messages. */
   seq: number;

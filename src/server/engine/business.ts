@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BusinessCommand, JobInput } from '../../shared/business-schema';
 import { jobOpen, jobReady, operatingDigest, type BusinessJob, type BusinessRecord } from '../../shared/business';
+import { allows } from '../../shared/privileges';
 import type { Organisation, Plan } from '../../shared/types';
 import type { AgentTool } from '../providers/types';
 import { execById, isPlanActive, nextId, postToBoard, ValidationError } from './state';
@@ -172,6 +173,10 @@ export function applyBusinessCommand(org: Organisation, raw: unknown, actor: Bus
 /** Reject an invalid model batch atomically and make the correction visible to its next call. */
 export function applyBusinessUpdates(org: Organisation, updates: unknown[], actor: BusinessActor): void {
   if (!updates.length) return;
+  if (actor.id !== 'person' && !allows(org, actor.id, 'update_records')) {
+    postToBoard(org, 'system', 'system', 'Operating update refused', `${execById(org, actor.id)?.short ?? actor.id} does not have the privilege to change business records, so its update was not applied.`);
+    return;
+  }
   const before = structuredClone(org.business);
   const seq = org.seq;
   try {
@@ -256,7 +261,8 @@ export function businessContext(org: Organisation): string {
     JSON.stringify({ jobs: preview(jobs.slice(0, 40), 18000), customers: preview(b.customers.slice(-15), 5000), metrics: preview(b.metrics.slice(-25), 8000), finances: preview(b.finances.slice(-15), 5000), policies: preview(b.memory.filter((m) => m.category === 'policy'), 10000), memory: preview(b.memory.filter((m) => m.category !== 'policy').slice(-25), 10000), corrections: org.board.filter((m) => m.title === 'Operating update needs correction').slice(-4).map((m) => m.body.slice(0, 1000)), note: 'This is a bounded preview. Agents can query read_business for older or longer records.' });
 }
 export function businessTools(org: Organisation, actor: BusinessActor, touch: () => void, allowed: () => boolean): AgentTool[] {
-  return [
+  const mayUpdate = () => allows(org, actor.id, 'update_records');
+  const tools: AgentTool[] = [
     { name: 'read_business', description: 'Find shared jobs, customer records, metrics, finances or organisational knowledge, including older records. Empty query lists recent records; use IDs or words to search.',
       schema: z.object({ register: z.enum(['jobs', 'customers', 'metrics', 'finances', 'memory', 'events']), query: z.string(), offset: z.number().int() }),
       run: async (raw) => {
@@ -270,11 +276,12 @@ export function businessTools(org: Organisation, actor: BusinessActor, touch: ()
     { name: 'update_business', description: 'Update shared business records within your lead’s remit. Use current IDs and revisions. Workers can submit evidence but cannot verify jobs, confirm finances, or ingest external events.',
       schema: z.object({ command: BusinessCommand }),
       run: async (raw) => {
-        if (!allowed()) fail('This task is no longer authorised to change records.');
+        if (!allowed() || !mayUpdate()) fail('This task is no longer authorised to change records.');
         const record = applyBusinessCommand(org, raw.command, actor);
         touch();
         return JSON.stringify(record);
       } },
   ];
+  return mayUpdate() ? tools : tools.filter((tool) => tool.name !== 'update_business');
 }
 

@@ -66,6 +66,7 @@ export const api = {
   steer: (id: string, text: string) => request<OrgView>('POST', `/api/orgs/${id}/steer`, { text }),
   settings: (id: string, patch: Partial<OrgSettings>) => request<OrgView>('PATCH', `/api/orgs/${id}/settings`, patch),
   agents: (id: string, execId: string, agentCount: number) => request<OrgView>('PATCH', `/api/orgs/${id}/executives/${execId}`, { agentCount }),
+  privilege: (id: string, seatId: string, privilege: string, allowed: boolean) => request<OrgView>('PATCH', `/api/orgs/${id}/privileges`, { seatId, privilege, allowed }),
   business: (id: string, command: unknown) => request<OrgView>('POST', `/api/orgs/${id}/business`, command),
   reviewNow: (id: string) => request<OrgView>('POST', `/api/orgs/${id}/review-now`),
   activity: (id: string) => request<ActivityEntry[]>('GET', `/api/orgs/${id}/activity`),

@@ -3,6 +3,7 @@ import type { BusinessAccess } from '../access';
 import { accessTools } from '../access-tools';
 import { jobReady } from '../../shared/business';
 import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
+import { allows } from '../../shared/privileges';
 import { describeRequest, isOpen } from '../../shared/signatory';
 import type { BoardReport, Executive, Organisation, Plan, PlanOrigin } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
@@ -398,7 +399,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       const files = await workspace.list();
       // Web search is switched on for the organisation, but only some providers' models can do it.
-      const canSearch = org.settings.webResearch && (provider.searches?.(org.settings.workerModel) ?? true);
+      const canSearch = org.settings.webResearch && allows(org, exec.id, 'web_search') && (provider.searches?.(org.settings.workerModel) ?? true);
       const result = await provider.agent({
         kind: 'task',
         system: prompts.systemForAgent(org, exec, canSearch),

@@ -218,6 +218,13 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(runner.view());
   });
 
+  // What each role may do. Only this route changes it, and no seat or agent has a way to call it.
+  app.patch('/api/orgs/:id/privileges', async (req, res) => {
+    const runner = runnerOf(req);
+    await runner.setPrivilege(req.body?.seatId, req.body?.privilege, req.body?.allowed);
+    res.json(runner.view());
+  });
+
   // The signatory's desk: the person answers a request (it is done, or it is refused and why), takes an answer
   // back, or leaves the organisation a message.
   app.post('/api/orgs/:id/requests/:requestId', (req, res) => {

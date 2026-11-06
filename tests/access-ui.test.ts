@@ -91,7 +91,34 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     await page.getByRole('button', { name: 'Unlock vault', exact: true }).click();
     await page.getByRole('button', { name: 'Accounts', exact: true }).click();
     await page.getByRole('heading', { name: 'Paperclip supplier portal', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Mailboxes', exact: true }).click();
+    expect(await text()).toContain('COO: reads and drafts');
+    await page.getByRole('button', { name: 'Accounts', exact: true }).click();
+    expect(await text()).toContain('COO: signs in and reads only');
+    // What a role may do is set on a page of its own, and what it holds shows up where the connection is.
+    const tick = (label: string) => page.getByRole('checkbox', { name: 'COO: ' + label, exact: true });
+    await page.getByRole('tab', { name: 'Privileges', exact: true }).click();
+    expect(await tick('Act on accounts').isChecked()).toBe(false);
+    expect(await tick('Read assigned mailboxes').isChecked()).toBe(true);
+    await tick('Sign in and read').click();
+    await page.waitForFunction(() => !document.querySelector<HTMLInputElement>('[aria-label="COO: Sign in and read"]')?.checked);
+    await tick('Act on accounts').click();
+    await page.getByText('can both read mail and act on accounts').waitFor();
+    expect(await tick('Sign in and read').isChecked()).toBe(true);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    if (process.env.UPDATE_SCREENSHOTS === '1') await page.screenshot({ path: 'docs/only-paperclips-privileges.png', fullPage: true });
+    await page.reload();
+    await page.getByRole('tab', { name: 'Privileges', exact: true }).click();
+    expect(await tick('Act on accounts').isChecked()).toBe(true);
+    await page.getByRole('tab', { name: 'Board', exact: true }).click();
+    await page.getByText('What the COO may do has changed').first().waitFor();
+    await page.getByRole('tab', { name: 'Email & accounts', exact: true }).click();
+    await page.getByRole('button', { name: 'Accounts', exact: true }).click();
+    await page.getByText('COO: can act').waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await page.getByRole('tab', { name: 'Privileges', exact: true }).click();
+    await tick('Act on accounts').waitFor();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     expect(errors).toEqual([]);
   } finally {

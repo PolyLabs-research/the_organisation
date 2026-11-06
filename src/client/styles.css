@@ -2686,3 +2686,25 @@ a.provider:hover {
 .access-panel .row { flex-wrap: wrap; gap: .7rem; }
 .access-add { margin-top: 1rem; }
 .access-add > summary { cursor: pointer; font-weight: 600; padding: .7rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
+
+/* What each role may do: one column per role, kept to its own scroll so that the page never goes sideways. */
+.privileges-panel { min-width: 0; }
+.privileges-scroll { overflow-x: auto; scroll-padding-left: 20rem; border: 1px solid var(--line); border-radius: 8px; }
+.privileges-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: .9rem; }
+.privileges-table th, .privileges-table td { padding: .55rem .6rem; border-top: 1px solid var(--line); background: var(--surface); text-align: center; vertical-align: middle; }
+.privileges-table thead th { border-top: 0; }
+.privileges-table thead th:first-child, .privileges-table th[scope='row'] { position: sticky; left: 0; z-index: 1; width: 20rem; min-width: 20rem; white-space: normal; text-align: left; font-weight: 600; border-right: 1px solid var(--line); }
+.privileges-table th[scope='row'] { color: var(--ink); font-size: .9rem; letter-spacing: normal; text-transform: none; }
+.privileges-table tr.privilege-group th { padding: .4rem .6rem; background: var(--surface-2); color: var(--ink-3); font-size: .78rem; font-weight: 600; text-align: left; white-space: normal; }
+.privilege-group span { position: sticky; left: .6rem; }
+.privilege-detail { display: block; margin-top: .15rem; color: var(--ink-3); font-size: .8rem; font-weight: 400; line-height: 1.35; }
+.privilege-tick { display: inline-flex; align-items: center; justify-content: center; min-width: 2.6rem; min-height: 2.6rem; cursor: pointer; }
+.privilege-tick input { width: 1.15rem; height: 1.15rem; margin: 0; }
+.privilege-none { color: var(--ink-3); }
+.privilege-always { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+.privilege-always ul { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--ink-2); list-style: disc; }
+.privilege-always li { margin: .25rem 0; }
+@media (max-width: 640px) {
+  .privileges-scroll { scroll-padding-left: 11rem; }
+  .privileges-table thead th:first-child, .privileges-table th[scope='row'] { width: 11rem; min-width: 11rem; }
+}

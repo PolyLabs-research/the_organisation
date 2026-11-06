@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Organisation } from '../shared/types';
 import type { AccessView, AccountPage, AccountView, MailboxView, MailMessage, MailSummary } from '../shared/access';
+import { allows } from '../shared/privileges';
 import { request, useAction } from './api';
 import { ErrorNote, Field } from './ui';
 
@@ -11,8 +12,16 @@ const teams = (org: Organisation) => org.executives.filter(exec => exec.kind ===
 function TeamPicker({ org, value, onChange }: { org: Organisation; value: string[]; onChange: (ids: string[]) => void }) {
   return <fieldset className="access-teams"><legend>Teams with agent access</legend>{teams(org).map(exec => <label key={exec.id}>
     <input type="checkbox" checked={value.includes(exec.id)} onChange={event => onChange(event.target.checked ? [...value, exec.id] : value.filter(id => id !== exec.id))} /> {exec.short} — {exec.title}
-  </label>)}<p className="muted">Leave all unchecked to keep this connection for a person only.</p></fieldset>;
+  </label>)}<p className="muted">Leave all unchecked to keep this connection for a person only. What a team may do with it is set under Privileges.</p></fieldset>;
 }
+/** What each team can do with a connection, which is its assignment and its role's privileges taken together. */
+function Reach({ org, ownerIds, describe }: { org: Organisation; ownerIds: string[]; describe: (seatId: string) => string }) {
+  const seats = teams(org).filter(seat => ownerIds.includes(seat.id));
+  return <p className="muted">{seats.length ? seats.map(seat => seat.short + ': ' + (seat.kind === 'ceo' ? 'no agents' : describe(seat.id))).join(' · ') : 'For a person only: no team is assigned.'}</p>;
+}
+const canRead = (org: Organisation, id: string) => allows(org, id, 'read_mail'), canDraft = (org: Organisation, id: string) => allows(org, id, 'draft_mail');
+const mailReach = (org: Organisation) => (id: string) => canRead(org, id) && canDraft(org, id) ? 'reads and drafts' : canRead(org, id) ? 'reads only' : canDraft(org, id) ? 'drafts only' : 'no access, see Privileges';
+const accountReach = (org: Organisation) => (id: string) => allows(org, id, 'act') ? 'can act' : allows(org, id, 'sign_in') ? 'signs in and reads only' : 'no access, see Privileges';
 function PasswordUpdate({ orgId, kind, id, onView }: { orgId: string; kind: 'accounts' | 'mailboxes'; id: string; onView: Update }) {
   const action = useAction();
   const [password, setPassword] = useState('');
@@ -99,7 +108,7 @@ function AccountConnect({ org, view, onView }: { org: Organisation; view: Access
   }); }}>
     <h3>Authorise a service account</h3>
     <p>Choose the service and the teams allowed to operate it. The browser fills saved credentials on this exact site. Account creation can accept the service’s terms, so authorise services you intend the business to use.</p>
-    <p className="note note-warn">Agents can press anything this account can press on the site, and are only told not to buy or commit. Do not authorise an account that holds a saved card or can order on credit.</p>
+    <p className="note note-warn">An assigned team can sign in and read, and the browser blocks anything else that would send a change. With Act on accounts on under Privileges, its agents can press anything this account can press, and are only told not to buy or commit. Do not give that to a role on an account that holds a saved card or can order on credit.</p>
     <div className="grid-2">
       <Field label="Service name"><input value={values.label} onChange={e => set('label', e.target.value)} required maxLength={160} /></Field>
       <Field label="Login URL"><input type="url" placeholder="https://service.example/login" value={values.loginUrl} onChange={e => set('loginUrl', e.target.value)} required /></Field>
@@ -108,7 +117,7 @@ function AccountConnect({ org, view, onView }: { org: Organisation; view: Access
       <Field label={signup ? 'Password (blank to generate)' : 'Existing account password'}><input type="password" value={values.password} onChange={e => set('password', e.target.value)} required={!signup} autoComplete="new-password" /></Field>
       <Field label="Trusted supporting origins (optional)" hint="Exact HTTPS origins for a service’s API, scripts or assets; separate with spaces."><input value={values.resources} onChange={e => set('resources', e.target.value)} placeholder="https://cdn.service.example" /></Field>
     </div>
-    <label className="access-check"><input type="checkbox" checked={signup} onChange={e => setSignup(e.target.checked)} /> Allow the agents to create this business account</label>
+    <label className="access-check"><input type="checkbox" checked={signup} onChange={e => setSignup(e.target.checked)} /> Allow the agents to create this business account (the role also needs Create accounts under Privileges)</label>
     {signup ? <Field label="Sign-up URL (same site as login)"><input type="url" value={values.signupUrl} onChange={e => set('signupUrl', e.target.value)} required /></Field> : null}
     <TeamPicker org={org} value={owners} onChange={setOwners} />
     <ErrorNote>{action.error}</ErrorNote><button className="button button-primary" disabled={action.busy}>Save service account</button>
@@ -164,7 +173,7 @@ function AccountCard({ org, account, onView }: { org: Organisation; account: Acc
   useEffect(() => { if (!secret) return; const timer = setTimeout(() => setSecret(''), 30000); return () => clearTimeout(timer); }, [secret]);
   return <article className="ops-card">
     <div className="row"><h3>{account.label}</h3><span className="tag">{account.enabled ? 'Enabled' : 'Disabled'}</span></div>
-    <p>{account.username} · {account.origin}</p><p className="muted">Saved account details do not confirm that registration or login has succeeded.</p>
+    <p>{account.username} · {account.origin}</p><Reach org={org} ownerIds={account.ownerIds} describe={accountReach(org)} /><p className="muted">Saved account details do not confirm that registration or login has succeeded.</p>
     <button className="button" type="button" disabled={action.busy || !account.enabled} onClick={() => secret ? setSecret('') : void action.run(async () => setSecret((await call<{ password: string }>(org.id, 'POST', '/accounts/' + account.id + '/reveal', {})).password))}>{secret ? 'Hide password' : 'Reveal password for 30 seconds'}</button>
     {secret ? <p className="access-secret"><code>{secret}</code></p> : null}
     <ErrorNote>{action.error}</ErrorNote>
@@ -207,7 +216,7 @@ function Unlocked({ org, view, onView }: { org: Organisation; view: AccessView; 
     {org.settings.execution === 'managed' ? <p className="note note-warn">The email and account tools run with local task execution. Switch Execution in Settings to local to give the agents these tools.</p> : null}
     <ErrorNote>{action.error}</ErrorNote>
     <nav className="ops-nav" aria-label="Email and account sections">{(['mail', 'accounts', 'drafts', 'requests', 'history'] as const).map(item => <button type="button" key={item} className={pane === item ? 'button button-primary' : 'button'} onClick={() => setPane(item)}>{({ mail: 'Mailboxes', accounts: 'Accounts', drafts: 'Email drafts', requests: 'Access requests', history: 'Access history' })[item]}{item === 'requests' && view.requests.some(request => request.status === 'open') ? ' (' + view.requests.filter(request => request.status === 'open').length + ')' : ''}</button>)}</nav>
-    {pane === 'mail' ? <><details className="access-add" open={view.mailboxes.length === 0}><summary>Connect a mailbox</summary><MailConnect org={org} configured={!!view.googleConfigured} onView={onView} /></details>{view.mailboxes.map(box => <article className="ops-card" key={box.id}><div className="row"><h3>{box.label}</h3><span className="tag">{box.provider === 'gmail' ? 'Google' : 'IMAP / SMTP'} · {box.enabled ? 'Enabled' : 'Disabled'}</span></div><p>{box.address}</p><Inbox orgId={org.id} box={box} /><GrantEditor org={org} kind="mailboxes" record={box} onView={onView} />{box.provider === 'imap' ? <PasswordUpdate orgId={org.id} kind="mailboxes" id={box.id} onView={onView} /> : null}</article>)}</> : null}
+    {pane === 'mail' ? <><details className="access-add" open={view.mailboxes.length === 0}><summary>Connect a mailbox</summary><MailConnect org={org} configured={!!view.googleConfigured} onView={onView} /></details>{view.mailboxes.map(box => <article className="ops-card" key={box.id}><div className="row"><h3>{box.label}</h3><span className="tag">{box.provider === 'gmail' ? 'Google' : 'IMAP / SMTP'} · {box.enabled ? 'Enabled' : 'Disabled'}</span></div><p>{box.address}</p><Reach org={org} ownerIds={box.ownerIds} describe={mailReach(org)} /><Inbox orgId={org.id} box={box} /><GrantEditor org={org} kind="mailboxes" record={box} onView={onView} />{box.provider === 'imap' ? <PasswordUpdate orgId={org.id} kind="mailboxes" id={box.id} onView={onView} /> : null}</article>)}</> : null}
     {pane === 'accounts' ? <><details className="access-add" open={view.accounts.length === 0}><summary>Add a service account</summary><AccountConnect org={org} view={view} onView={onView} /></details>{view.accounts.map(account => <AccountCard key={account.id} org={org} account={account} onView={onView} />)}</> : null}
     {pane === 'drafts' ? <Drafts org={org} view={view} onView={onView} /> : null}
     {pane === 'requests' ? <>{!view.requests.length ? <p className="muted">Agents can request a service or help with sign-in here.</p> : null}{[...view.requests].reverse().map(item => <article className="ops-card" key={item.id}><h3>{item.service}</h3><p>{item.reason}</p><p className="muted">{item.actorId} · {item.status}</p>{item.status === 'open' ? <button className="button" type="button" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/requests/' + item.id + '/resolve', {})))}>Mark handled</button> : null}</article>)}</> : null}

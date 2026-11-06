@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { browserActionSchema, draftSchema } from '../shared/access';
+import type { Privilege } from '../shared/privileges';
 import type { BusinessAccess } from './access';
 import { AccessError } from './access-vault';
 import type { AgentTool } from './providers/types';
@@ -10,7 +11,7 @@ export function accessTools(access: BusinessAccess, actorId: string, taskId: str
     try { return JSON.stringify(await work()); }
     catch (error) { return JSON.stringify({ error: error instanceof AccessError ? error.message : 'Account access could not complete this action.' }); }
   };
-  return [
+  const tools: AgentTool[] = [
     {
       name: 'business_access', description: 'List mailboxes and service accounts assigned to your team, or request a new service or human help with CAPTCHA/MFA. Never put passwords in requests.',
       schema: z.object({ action: z.enum(['list', 'request']), service: z.string().max(200).optional(), reason: z.string().max(2000).optional() }),
@@ -29,9 +30,12 @@ export function accessTools(access: BusinessAccess, actorId: string, taskId: str
       run: input => guard(() => access.draft(input, actorId)),
     },
     {
-      name: 'account_browser', description: 'Use an authorised service account. Open login/signup, inspect the page, fill or click an element ID from the latest inspection, navigate a verification link on the same service, or close. Fill source=password injects the saved password without revealing it; username/email use stored values. Never invent success. Use business_access to request help with CAPTCHA/MFA or new services; payments and contracts need the Signatory.',
+      name: 'account_browser', description: 'Use an authorised service account. Open login' + (access.may(actorId, 'create_accounts') ? '/signup' : '') + ', inspect the page, fill or click an element ID from the latest inspection, navigate a verification link on the same service, or close. Fill source=password injects the saved password without revealing it; username/email use stored values. Never invent success. Use business_access to request help with CAPTCHA/MFA or new services; payments and contracts need the Signatory.' + (access.may(actorId, 'act') ? '' : ' Your role may sign in and read only: apart from one sign-in, the browser blocks anything that would send a change to the site.'),
       schema: browserActionSchema,
       run: input => guard(async () => ({ untrustedContent: await access.browse(input, actorId, taskId, signal) })),
     },
   ];
+  // What a role may not do is not offered at all. The access service also refuses it, should that change during a task.
+  const needs: Record<string, Privilege | undefined> = { read_business_email: 'read_mail', draft_business_email: 'draft_mail', account_browser: 'sign_in' };
+  return tools.filter(tool => { const privilege = needs[tool.name]; return !privilege || access.may(actorId, privilege); });
 }

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { allows } from '../../shared/privileges';
 import { applyBusinessUpdates, businessContext } from './business';
 import type { Executive, ManagedSession, Plan, PlanPhase, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, ProviderError, type PlanHooks, type PlanJob, type PlanOutcome } from '../providers/types';
@@ -230,7 +231,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       const left = wanted.length - asked.length;
       const put =
         (asked.length ? ` ${asked.length} request${asked.length === 1 ? ' has' : 's have'} gone to the signatory.` : '') +
-        (left > 0 ? ` ${left} ${left === 1 ? 'was' : 'were'} not filed: a request needs a title, is filed once while it is open, and a phase may raise ${MAX_REQUESTS_PER_GATE}.` : '');
+        (left > 0 ? ` ${left} ${left === 1 ? 'was' : 'were'} not filed: ${allows(org, lead.id, 'ask_signatory') ? `a request needs a title, is filed once while it is open, and a phase may raise ${MAX_REQUESTS_PER_GATE}` : 'your role may not ask the signatory'}.` : '') +
+        (record.operations?.length && !allows(org, lead.id, 'update_records') ? ' Your role may not change business records, so those updates were not applied.' : '');
       // The reply is also where the lead hears what became of what it asked for earlier.
       const desk = (prompts.deskHasNews(org) ? `\n\n${prompts.signatoryBlock(org)}` : '') + '\n\n' + businessContext(org);
       return {
@@ -490,6 +492,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
   let outcome: PlanOutcome;
   try {
     const files = mountable(await workspace.list());
+    const web = org.settings.webResearch && allows(org, lead.id, 'web_search');
     const job: PlanJob = {
       planId: plan.id,
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),
@@ -501,8 +504,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       executiveEffort: org.settings.executiveEffort,
       workerModel: org.settings.workerModel,
       workerEffort: org.settings.workerEffort,
-      worker: { name: prompts.TEAM_AGENT_NAME, system: prompts.teamAgentSystem(org.settings.webResearch) },
-      web: org.settings.webResearch,
+      worker: { name: prompts.TEAM_AGENT_NAME, system: prompts.teamAgentSystem(web) },
+      web,
       workflows: org.settings.workflowRuns,
       budgetUsd: cap,
       session: managed.sessionId
