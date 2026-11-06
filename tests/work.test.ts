@@ -21,7 +21,9 @@ function plan(org: Organisation, ownerId: string, fields: Partial<Plan> = {}): P
     priority: 'medium',
     rationale: 'Because',
     approach: 'An approach',
-    phases: owner.phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null })),
+    workApproachId: 'standard',
+    workApproachReason: null,
+    phases: owner.phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null, gate: null, evidence: null })),
     status: 'planning',
     amendments: [],
     escalations: [],
@@ -32,6 +34,7 @@ function plan(org: Organisation, ownerId: string, fields: Partial<Plan> = {}): P
     updatedAt: at,
     execution: null,
     managed: null,
+    code: null,
     ...fields,
   };
   org.plans.push(p);
@@ -51,6 +54,17 @@ describe('what work is ready', () => {
     settle(org);
     expect(org.cycle.stage).toBe('direct');
     expect(kinds(org)).toEqual(['direct:ceo']);
+  });
+
+  it('keeps a plan with gates on this machine, where a hosted session could not be checked', () => {
+    const org = organisation();
+    org.settings.execution = 'managed';
+    const plain = plan(org, 'cto', { status: 'approved' });
+    const gated = plan(org, 'cmo', { status: 'approved' });
+    gated.phases[1]!.gate = 'checks';
+    settle(org);
+    expect(plain.execution).toBe('managed');
+    expect(gated.execution).toBe('local');
   });
 
   it('holds drafted plans for the board until nobody is still drafting, then has each lead review the others', () => {

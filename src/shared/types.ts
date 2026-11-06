@@ -1,5 +1,6 @@
 // Domain model shared by the server (engine, API) and the browser client.
 import type { BusinessState } from './business';
+import type { OrgApproaches } from './approaches';
 import type { OrgPrivileges } from './privileges';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -19,6 +20,43 @@ export interface SopPhase {
   purpose: string;
   /** What must exist when the phase is finished. */
   deliverable: string;
+  /** Something the system checks for itself at this phase's gate, whatever the lead and its agents say. */
+  gate?: PhaseGate;
+}
+
+/** `checks`: every automated check passes on the plan's latest commit. `pull_request`: that, and a pull request is open for it. */
+export type PhaseGate = 'checks' | 'pull_request';
+
+export interface CheckResult {
+  name: string;
+  /** `skipped` finished without objecting, but proves nothing: GitHub's "neutral" and "skipped". */
+  state: 'passed' | 'failed' | 'pending' | 'skipped';
+  url: string;
+}
+
+/** What the system found at a gate, as opposed to what anyone reported. */
+export interface GateEvidence {
+  gate: PhaseGate;
+  state: 'waiting' | 'passed' | 'failed';
+  sha: string | null;
+  summary: string;
+  checks: CheckResult[];
+  /** How long the gate has waited on this commit. Time the organisation spent paused does not count. */
+  waitedMs: number;
+  /** Another go cannot change this, so the plan stops rather than spending one. */
+  final?: boolean;
+  at: string;
+}
+
+/** The repository work behind a plan. Recorded by the tools that did it, never by what a model says. */
+export interface PlanCode {
+  repositoryId: string;
+  /** owner/name */
+  repository: string;
+  branch: string;
+  branchUrl: string;
+  sha: string;
+  pull: { number: number; url: string } | null;
 }
 
 /**
@@ -201,6 +239,9 @@ export interface PlanPhase {
   reworkRounds: number;
   /** The lead's gate review once the phase's tasks are in. */
   summary: string | null;
+  /** What the system itself must find before this phase can pass, if anything. */
+  gate: PhaseGate | null;
+  evidence: GateEvidence | null;
 }
 
 export type PlanStatus =
@@ -295,6 +336,9 @@ export interface Plan {
   rationale: string;
   /** The lead's approach, written when the plan is drafted. */
   approach: string | null;
+  /** The way of working the lead chose for this plan, and why. */
+  workApproachId: string;
+  workApproachReason: string | null;
   phases: PlanPhase[];
   status: PlanStatus;
   /** Binding instructions added by board rulings or the CEO enforcing steer. */
@@ -308,6 +352,7 @@ export interface Plan {
   /** How this plan is being carried out; fixed when execution begins. */
   execution: ExecutionMode | null;
   managed: ManagedSession | null;
+  code: PlanCode | null;
 }
 
 export interface Objection {
@@ -461,6 +506,8 @@ export interface Organisation {
   business: BusinessState;
   /** What each role and its agents may do, as far as the shareholders have said. */
   privileges: OrgPrivileges;
+  /** Which work approaches the shareholders have closed to a role. */
+  workApproaches: OrgApproaches;
   id: string;
   /** Counter behind the short ids of plans, tasks, decisions and messages. */
   seq: number;

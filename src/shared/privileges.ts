@@ -5,7 +5,9 @@ import type { Executive, Organisation } from './types';
 // does not waste its turns, but being told is not what stops it. A mailbox or an account must also be assigned to
 // the team under Email & accounts: the privilege says what a role may do, the assignment says with what.
 
-export type Privilege = 'web_search' | 'update_records' | 'ask_signatory' | 'read_mail' | 'draft_mail' | 'sign_in' | 'act' | 'create_accounts';
+export type Privilege =
+  | 'web_search' | 'update_records' | 'ask_signatory' | 'read_mail' | 'draft_mail' | 'sign_in' | 'act' | 'create_accounts'
+  | 'read_code' | 'push_code' | 'run_workflows' | 'edit_pipelines';
 
 export interface PrivilegeSpec {
   id: Privilege;
@@ -100,6 +102,45 @@ export const PRIVILEGES: readonly PrivilegeSpec[] = [
     hosted: false,
     needs: 'sign_in',
   },
+  {
+    id: 'read_code',
+    group: 'Code',
+    label: 'Read assigned repositories',
+    detail: 'Read files, checks and build results in repositories assigned to this team.',
+    forbids: 'read code repositories',
+    byDefault: true,
+    hosted: false,
+  },
+  {
+    id: 'push_code',
+    group: 'Code',
+    label: 'Push branches and open pull requests',
+    detail: 'Commit to a branch of the plan’s own and open a pull request. A person merges. Anything the repository’s checks run from that branch runs with what those checks can reach.',
+    forbids: 'push code or open pull requests',
+    byDefault: false,
+    hosted: false,
+    needs: 'read_code',
+  },
+  {
+    id: 'run_workflows',
+    group: 'Code',
+    label: 'Start build workflows',
+    detail: 'Start a GitHub Actions workflow on the plan’s branch, from the list set on the repository. It runs on GitHub’s machines and uses your account’s minutes.',
+    forbids: 'start build workflows',
+    byDefault: false,
+    hosted: false,
+    needs: 'read_code',
+  },
+  {
+    id: 'edit_pipelines',
+    group: 'Code',
+    label: 'Change build pipelines',
+    detail: 'Change files under .github, such as workflows. A workflow can use the repository’s secrets, so this comes close to handing them over.',
+    forbids: 'change files under .github',
+    byDefault: false,
+    hosted: false,
+    needs: 'push_code',
+  },
 ];
 
 /** What is always so, whatever is ticked: no setting changes these. */
@@ -107,6 +148,7 @@ export const EVERY_ROLE_CAN = ['Read and write files in the shared workspace', '
 export const NO_ROLE_CAN = [
   'Send an email: a person reviews and sends every message',
   'See a saved password, token or session cookie',
+  'Merge a pull request or push to a repository’s main branch: a person merges',
   'Change these privileges, or give itself access to anything',
   'Record a payment or a measurement as confirmed: only a person can',
   'Reach a private or local network address from the account browser',

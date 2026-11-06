@@ -16,8 +16,12 @@ export function changePrivilege(org: Organisation, seatId: unknown, privilege: u
   if (!applies(seat, spec)) throw new ValidationError(`This privilege does not apply to the ${seat.title}, which has no agents.`);
 
   const wanted = new Map<Privilege, boolean>([[spec.id, allowed]]);
-  if (allowed && spec.needs) wanted.set(spec.needs, true);
-  if (!allowed) for (const other of PRIVILEGES) if (other.needs === spec.id) wanted.set(other.id, false);
+  // All the way along the chain: Change build pipelines needs Push, which needs Read.
+  const follow = (id: Privilege) => {
+    if (allowed && PRIVILEGE_BY_ID[id].needs) { wanted.set(PRIVILEGE_BY_ID[id].needs!, true); follow(PRIVILEGE_BY_ID[id].needs!); }
+    if (!allowed) for (const other of PRIVILEGES) if (other.needs === id) { wanted.set(other.id, false); follow(other.id); }
+  };
+  follow(spec.id);
   const changes = [...wanted].filter(([id, value]) => allows(org, seat.id, id) !== value);
   if (!changes.length) return { changed: false, removed: false };
 

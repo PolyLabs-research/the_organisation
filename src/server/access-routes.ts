@@ -13,7 +13,7 @@ export function accessRoutes(registry: Registry, config: Config): express.Router
     const foreign = req.headers['sec-fetch-site'] === 'cross-site';
     if (!local || foreign) {
       if (req.method === 'GET' && req.path === '/' && !foreign) {
-        res.json({ available: false, reason: 'Email and account access requires HOST=127.0.0.1 or another loopback address. This server has no user login.', initialised: false, unlocked: false, mailboxes: [], accounts: [], drafts: [], requests: [], audit: [] });
+        res.json({ available: false, reason: 'Email and account access requires HOST=127.0.0.1 or another loopback address. This server has no user login.', initialised: false, unlocked: false, mailboxes: [], accounts: [], repositories: [], drafts: [], requests: [], audit: [] });
         return;
       }
       next(new AccessError('Email and account controls are available only on a loopback server from its own interface.', 403));
@@ -23,8 +23,8 @@ export function accessRoutes(registry: Registry, config: Config): express.Router
     next();
   });
   const access = (req: express.Request) => registry.get(String(req.params.id))!.access;
-  const kind = (req: express.Request): 'mailboxes' | 'accounts' => {
-    if (req.params.kind !== 'mailboxes' && req.params.kind !== 'accounts') throw new AccessError('No such connection type.', 404);
+  const kind = (req: express.Request): 'mailboxes' | 'accounts' | 'repositories' => {
+    if (req.params.kind !== 'mailboxes' && req.params.kind !== 'accounts' && req.params.kind !== 'repositories') throw new AccessError('No such connection type.', 404);
     return req.params.kind;
   };
   router.get('/', async (req, res) => { res.json(await access(req).view()); });
@@ -37,6 +37,8 @@ export function accessRoutes(registry: Registry, config: Config): express.Router
   });
   router.post('/mailboxes', async (req, res) => { await access(req).addMailbox(req.body); res.status(201).json(await access(req).view()); });
   router.post('/accounts', async (req, res) => { await access(req).addAccount(req.body); res.status(201).json(await access(req).view()); });
+  router.post('/repositories', async (req, res) => { await access(req).addRepository(req.body); res.status(201).json(await access(req).view()); });
+  router.patch('/repositories/:targetId/workflows', async (req, res) => { await access(req).setWorkflows(String(req.params.targetId), req.body); res.json(await access(req).view()); });
   router.patch('/:kind/:targetId', async (req, res) => { await access(req).grant(kind(req), String(req.params.targetId), req.body); res.json(await access(req).view()); });
   router.delete('/:kind/:targetId', async (req, res) => { await access(req).remove(kind(req), String(req.params.targetId)); res.json(await access(req).view()); });
   router.post('/:kind/:targetId/password', async (req, res) => { await access(req).password(kind(req), String(req.params.targetId), req.body?.password); res.json(await access(req).view()); });

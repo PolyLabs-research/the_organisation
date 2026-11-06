@@ -71,6 +71,14 @@ const RemitDecision = z.object({
   rationale: z.string(),
 });
 
+/** The choice of work approach, asked for only when a lead has more than one open to it. */
+export function workApproachSchema(ids: string[]) {
+  return z.object({
+    workApproach: idEnum(ids).describe('The work approach this plan follows'),
+    workApproachReason: z.string().describe('Why that one suits this objective, in a sentence'),
+  });
+}
+
 export function planDraftSchema(phaseIds: string[]) {
   return z.object({
     operations: BusinessUpdates,

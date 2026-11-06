@@ -539,6 +539,8 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
 
       case 'plan':
         return {
+          workApproach: 'standard',
+          workApproachReason: 'The standard operating profile fits this objective.',
           approach: `Work through ${sopText} in order with ${seat!.agentCount} agent${seat!.agentCount === 1 ? '' : 's'}. ${firstPhase?.name ?? 'The first phase'} settles scope before agent time is spent on later phases.`,
           phases: phaseList.map((p) => ({ phase: p.id, intent: `${noStop(p.deliverable)}, for: ${brief(plan!.objective, 90)}` })),
           decisions: [
@@ -596,7 +598,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
       case 'revise':
         return {
           approach: `Work through ${sopText} in order, starting with the parts that depend on nobody else. Dependent work begins only once the other function’s first deliverable is in the workspace.`,
-          phases: phaseList.map((p) => ({ phase: p.id, intent: `${noStop(p.deliverable)}, for: ${brief(plan!.objective, 90)}` })),
+          phases: (c.phases as Array<{ id: string; name: string }>).map((p) => ({ phase: p.id, intent: `${p.name}, for: ${brief(plan!.objective, 90)}` })),
           changes: 'Re-sequenced the plan so nothing in it waits on another function’s unfinished work, as the ruling requires.',
         };
 
