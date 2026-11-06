@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { BusinessAccess, type AccessOptions } from '../access';
 import { operatingDigest } from '../../shared/business';
 import { applyBusinessCommand, consumeBusinessWake, nextBusinessWake, syncBusinessJobs } from './business';
 import type {
@@ -42,6 +43,7 @@ import {
 import { cycleComplete, nextWork, settle, type WorkItem } from './work';
 
 export interface RunnerOptions {
+  access?: AccessOptions;
   /** Base delay before a failed call is retried; doubles each attempt. */
   retryDelayMs?: number;
   /** Minimum gap between pushes to subscribers. */
@@ -64,6 +66,7 @@ type Listener = (event: { type: 'view'; view: OrgView } | { type: 'activity'; en
  */
 export class OrgRunner {
   readonly workspace: Workspace;
+  readonly access: BusinessAccess;
   readonly activity: ActivityEntry[] = [];
   private readonly inFlight = new Map<string, ActiveWork>();
   private readonly attempts = new Map<string, number>();
@@ -94,6 +97,7 @@ export class OrgRunner {
     options: RunnerOptions = {},
   ) {
     this.workspace = new Workspace(store.workspaceRoot(org.id));
+    this.access = new BusinessAccess(path.join(store.orgDir(org.id), 'access-vault.json'), org.id, () => org.executives.filter(exec => exec.kind === 'lead' || exec.kind === 'ceo').map(exec => exec.id), options.access);
     this.retryDelayMs = options.retryDelayMs ?? 4000;
     this.emitIntervalMs = options.emitIntervalMs ?? 150;
   }
@@ -570,6 +574,7 @@ export class OrgRunner {
     const spent = { model: '', inputTokens: 0, outputTokens: 0, costUsd: 0 };
     const ctx: EngineContext = {
       org,
+      access: this.access,
       provider: this.provider,
       workspace: this.workspace,
       signal: this.abort.signal,

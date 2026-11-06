@@ -2664,3 +2664,25 @@ a.provider:hover {
 .calendar-job:focus-visible { outline: 2px solid #25452b; }
 .tabs { flex-wrap: wrap; }
 @media (max-width: 650px) { .ops-editor .grid-2 { grid-template-columns: 1fr; } .ops-card { padding: .8rem; } }
+
+/* Business mail and account access */
+.access-panel { overflow-wrap: anywhere; }
+.access-panel .ops-card, .access-panel .ops-editor { margin-top: 1rem; }
+.access-panel h3, .access-panel h4 { margin: 0 0 .7rem; }
+.access-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.access-teams { border: 1px solid var(--line); border-radius: 8px; padding: .85rem; margin: 1rem 0; }
+.access-teams legend { padding: 0 .3rem; font-weight: 600; }
+.access-teams label, .access-check { display: flex; gap: .5rem; align-items: center; margin: .4rem 0; }
+.access-teams input, .access-check input { width: auto; flex: 0 0 auto; }
+.access-details { padding-top: .85rem; margin-top: .7rem; border-top: 1px solid var(--line); }
+.access-details summary { cursor: pointer; margin-bottom: .8rem; }
+.access-messages { display: grid; gap: .4rem; margin-top: .8rem; }
+.access-message { text-align: left; background: var(--surface); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: .65rem; cursor: pointer; display: grid; gap: .3rem; }
+.access-message span { font-size: .8rem; color: var(--ink-3); }
+.access-message-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 28rem; overflow: auto; padding: .7rem; background: var(--surface); border-radius: 6px; }
+.access-secret { overflow-wrap: anywhere; padding: .75rem; border: 1px solid var(--line); border-radius: 6px; }
+.access-browser { margin-top: .8rem; }
+.access-history { font-size: .85rem; }
+.access-panel .row { flex-wrap: wrap; gap: .7rem; }
+.access-add { margin-top: 1rem; }
+.access-add > summary { cursor: pointer; font-weight: 600; padding: .7rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }

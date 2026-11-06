@@ -22,7 +22,7 @@ After a cycle, scheduled mode records the next standing review and waits. Waitin
 
 Manual pause, Stop, budget exhaustion and cycle limits always take precedence. Review requests and events remain queued while paused. Resume considers missed dates once. `resumeOnRestart` defaults to false; when enabled, a restart resumes only an organisation previously running/waiting or paused specifically for a restart. The service must be running to receive events and fire timers.
 
-At each cycle close, a deterministic digest records open, overdue, blocked and unverified jobs, upcoming dates, model spend, financial totals and open Signatory requests. The Business tab also computes a live digest. Runtime failures use the existing error banner and board feed; there is no external email/pager connection.
+At each cycle close, a deterministic digest records open, overdue, blocked and unverified jobs, upcoming dates, model spend, financial totals and open Signatory requests. The Business tab also computes a live digest. Runtime failures use the existing error banner and board feed; email connections are managed separately under Email & accounts, and there is no external pager connection.
 
 ## Registers and authority
 
@@ -38,7 +38,7 @@ Current records are supplied to executive calls. Local agents also get `read_bus
 
 ## Local API
 
-All routes inherit the existing localhost/origin controls. They are for a person or trusted local integration. This is not an authenticated public webhook receiver. A vendor connector must validate its vendor's events before forwarding them here. No vendor account is connected by this feature.
+All routes inherit the existing localhost/origin controls. They are for a person or trusted local integration. This is not an authenticated public webhook receiver. A vendor connector must validate its vendor's events before forwarding them here. No vendor account is connected by event ingestion itself. See [Email & accounts](email-and-accounts.md) for explicit Gmail and mailbox connections.
 
 Read `GET /api/orgs/:id/business` for all registers and the live digest. Send a command to `POST /api/orgs/:id/business`; it returns the updated organisation view. Owners must be actual executive IDs in that organisation.
 
@@ -69,4 +69,3 @@ Other command kinds are `job`, `customer`, `metric`, `finance`, `memory`, and `v
 The business tests cover old-state migration, optimistic revisions, remit checks, dependency cycles, evidence and independent review, financial provenance, event deduplication across reloads, recurring jobs, calendar wake-ups, manual pause, restart policy, cycle limits, archived execution evidence and the Only Paperclips handover. HTTP tests exercise the same commands and origin controls.
 
 After `npm run build`, `npm run test:browser` uses installed Chrome (override with `CHROME_PATH`) to exercise the example button, month view, a submitted job form, all registers, live execution and a narrow layout. The normal test suite includes this smoke test when Chrome and the built client are available, otherwise it skips that one test. `npm run docs:screenshots` updates the two README images from the same simulation.
-

@@ -190,7 +190,19 @@ The COO owns operational continuity: overdue commitments, handovers, recurring o
 
 In **Settings**, set the minutes between reviews (zero means continuous operation). New organisations from the interface or establish command default to 60 minutes; existing organisations and API callers retain continuous operation unless changed. **Resume after a server restart** is opt-in and applies only to organisations previously running or waiting. It never overrides a manual pause, spent budget or cycle limit. The server must be running for timers to fire; on resume, missed boundaries are considered once.
 
-The [operating API and data guide](docs/business-operations.md) describes event ingestion, permissions, revisions, recurrence and recovery. The event endpoint is a local integration point; vendor inboxes, payment services and outbound publishing are not connected automatically.
+The [operating API and data guide](docs/business-operations.md) describes event ingestion, permissions, revisions, recurrence and recovery. The event endpoint is a local integration point. Gmail and other mailboxes can be connected explicitly under **Email & accounts**; payment services and outbound publishing are not connected automatically.
+
+## Business email and service accounts
+
+**Email & accounts** connects a dedicated Gmail / Google Workspace mailbox through Google sign-in, keeps service passwords in an encrypted per-organisation vault, and grants access to selected executive teams. Agents can read their assigned inbox, prepare email drafts, create an authorised business account and use its saved login through an isolated browser. Passwords are filled by the server and are not returned to the model. A person reviews and sends outgoing email.
+
+Start by creating the vault, then follow the [Gmail setup and account-access guide](docs/email-and-accounts.md). Google sign-in needs your own OAuth client configured on the server. Other mail providers can use the IMAP/SMTP form. Install Chrome, or set `ORG_BROWSER_PATH`, for account browsing. These tools run with local task execution; hosted sessions cannot reach the vault.
+
+The vault normally locks after 30 minutes without use. For scheduled unattended work, you can keep it unlocked until you lock it or restart the server. There is no passphrase recovery. New services are authorised by a person; CAPTCHA, unsupported MFA and account-access requests are handled at the desk. The Only Paperclips demo connects no real accounts.
+
+![Only Paperclips account desk, showing a fictional supplier account](docs/only-paperclips-access.png)
+
+*Account controls exercised with a fake mailbox and supplier; no live account is connected in this capture.*
 
 ## The interface
 
@@ -199,6 +211,7 @@ The [operating API and data guide](docs/business-operations.md) describes event 
 - **The dashboard** shows the hierarchy on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what) and, on the right:
   - **Board**: the feed of everything said at board level, newest first, with completed cycles below it.
   - **Calendar**: persistent commitments in an agenda or month view, with owners, dependencies, dates and verification.
+  - **Email & accounts**: connected mailboxes, saved service accounts, team access, drafts for a person to send, access requests and vault controls.
   - **Business**: the operating digest, customers, scorecard, finances, knowledge, incoming events and revision history.
   - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report.
   - **Decisions**: what went to the board, each lead's position and the ruling, plus the decisions leads took in their own remit.
@@ -425,9 +438,11 @@ A folder is loaded only if its name is the organisation's id, so a copy kept bes
 | `PORT` | `4780` | Port to listen on. |
 | `HOST` | `127.0.0.1` | Address to listen on. |
 | `ORG_DATA_DIR` | `./data` | Where organisations are stored. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | OAuth Web application client for Gmail connections; see the [setup guide](docs/email-and-accounts.md). |
+| `ORG_BROWSER_PATH` | installed Google Chrome | Optional Chromium executable for the business account browser. |
 | `ANTHROPIC_WORKSPACE_ID` | Default workspace | The workspace your API key belongs to, for links from a plan to its hosted session in the Console. |
 
-The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection is switched off in that case: a login is one person's.
+The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection and business email/account controls are switched off in that case.
 
 ## Development
 
@@ -456,6 +471,7 @@ src/server/
                  catalogue of providers, models and prices (catalogue.ts)
     managed/     hosted sessions: the saved agents (resources.ts), files in
                  and out (files.ts), and following a session (session.ts)
+  access*.ts     encrypted business vault, Gmail/IMAP/SMTP, account browser and agent tools
   connections.ts the API keys the server holds
   workspace.ts   the confined file tools agents use
   app.ts         the HTTP API and live event stream
@@ -465,7 +481,7 @@ scripts/         establish an organisation from one prompt; set up hosted sessio
 tests/
 ```
 
-**How the engine runs.** The runner is a reconciler. It asks what work is ready given the organisation's state, starts as much as capacity allows, and asks again whenever something finishes. Each unit of work is one model call (or one agent run) whose result is written back to the state. Because all state is in `org.json`, pause, stop and restart need no special handling. A plan in a hosted session is one long unit of work: the session tells the engine what happens as it happens (phases recorded, agents given work, files, spend), and the plan's state is updated then, not at the end.
+**How the engine runs.** The runner is a reconciler. It asks what work is ready given the organisation's state, starts as much as capacity allows, and asks again whenever something finishes. Each unit of work is one model call (or one agent run) whose result is written back to the state. Because scheduling state is in `org.json`, pause, stop and restart need no special handling. Business credentials live separately in `access-vault.json` and require unlocking after restart. A plan in a hosted session is one long unit of work: the session tells the engine what happens as it happens (phases recorded, agents given work, files, spend), and the plan's state is updated then, not at the end.
 
 **Adding a provider.** One that speaks OpenAI's Chat Completions needs no code: add an entry to [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts) with its address, the variable its key is read from, how its API differs from the others (the `Dialect`) and the models to pick out with their prices. `tests/catalogue.test.ts` checks the entry is well formed. Update `PRICES_CHECKED` there when you re-read the prices.
 
@@ -473,7 +489,8 @@ A provider with an API of its own implements two methods ([`src/server/providers
 
 ## Limits of this version
 
-- On this machine, agents write files and execute nothing. Running and testing needs hosted sessions.
+- Local agents write files and can use explicitly granted email/account tools. They have no general shell or code-execution tool; running and testing generated code needs hosted sessions.
+- Gmail, IMAP/SMTP and account-browser integrations have been tested with stand-ins and a real local browser, not a live mailbox or third-party signup. See [email and account limits](docs/email-and-accounts.md).
 - Hosted sessions have not been run against the live API (see above), and hold a lead to its allocation of agents by instruction only.
 - No provider's API has been called from this code: not Claude's, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)). The one way to a real model that has been tried is the [Claude Code connection](#claude-code-in-place-of-a-key), on which one small organisation has run one cycle.
 - The Claude Code connection has been tried on Linux only, has no hosted sessions and no web search, and depends on how the `claude` command behaves, which changes from release to release.

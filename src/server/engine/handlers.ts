@@ -1,4 +1,6 @@
 import type { z } from 'zod';
+import type { BusinessAccess } from '../access';
+import { accessTools } from '../access-tools';
 import { jobReady } from '../../shared/business';
 import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
 import { describeRequest, isOpen } from '../../shared/signatory';
@@ -15,6 +17,7 @@ import type { WorkItem } from './work';
 
 export interface EngineContext {
   org: Organisation;
+  access: BusinessAccess;
   provider: Provider;
   workspace: Workspace;
   signal: AbortSignal;
@@ -142,7 +145,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     provider.structured({
       kind: item.kind,
       system,
-      prompt: prompt + '\n\n' + businessContext(org),
+      prompt: prompt + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
       schema,
       model: org.settings.executiveModel,
       effort: org.settings.executiveEffort,
@@ -392,13 +395,14 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         if (!written.includes(path)) written.push(path);
       });
       tools.push(...businessTools(org, { id: exec.id, worker: true }, ctx.touch, () => !ctx.halting() && !ctx.signal.aborted && isPlanActive(plan)));
+      tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       const files = await workspace.list();
       // Web search is switched on for the organisation, but only some providers' models can do it.
       const canSearch = org.settings.webResearch && (provider.searches?.(org.settings.workerModel) ?? true);
       const result = await provider.agent({
         kind: 'task',
         system: prompts.systemForAgent(org, exec, canSearch),
-        prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files) + '\n\n' + businessContext(org),
+        prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files) + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
         model: org.settings.workerModel,
         effort: org.settings.workerEffort,
         tools,
@@ -418,7 +422,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex },
           task: { id: task.id, title: task.title, brief: task.brief, rework: task.rework },
         },
-      });
+      }).finally(() => ctx.access.closeTask(task.id));
       if (result.stopped !== 'interrupted' && !result.text.trim() && !written.length) {
         throw new ProviderError('The agent ended without a report or any files.', 'invalid_output', true);
       }
@@ -675,4 +679,3 @@ export function describeWork(org: Organisation, item: WorkItem): string {
       return 'Carrying out the plan with its team in a hosted session';
   }
 }
-

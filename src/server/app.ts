@@ -1,4 +1,7 @@
 import { createOnlyPaperclips } from './only-paperclips';
+import { accessRoutes } from './access-routes';
+import { AccessError } from './access-vault';
+import { googleRoutes } from './access-google';
 import { operatingDigest } from '../shared/business';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_AGENTS_PER_LEAD, MAX_LEADS, PROFILES } from '../shared/profiles';
@@ -242,6 +245,9 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(runner.view());
   });
 
+  googleRoutes(app, registry, config);
+  app.use('/api/orgs/:id/access', accessRoutes(registry, config));
+
   app.get('/api/orgs/:id/activity', (req, res) => {
     res.json(runnerOf(req).activity);
   });
@@ -310,7 +316,8 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
       return;
     }
     const message = err instanceof Error ? err.message : String(err);
-    if (err instanceof NotFound) res.status(404).json({ error: message });
+    if (err instanceof AccessError) res.status(err.status).json({ error: message });
+    else if (err instanceof NotFound) res.status(404).json({ error: message });
     else if (err instanceof ValidationError || err instanceof WorkspaceError) res.status(400).json({ error: message });
     else if (err instanceof ProviderError) res.status(502).json({ error: message, code: err.code });
     else if ((err as { type?: string }).type === 'entity.parse.failed') res.status(400).json({ error: 'The request body is not valid JSON.' });

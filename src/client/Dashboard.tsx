@@ -1,8 +1,9 @@
 import { ArrowLeft, Pause, Play, Settings2, Square } from 'lucide-react';
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { OrgView } from '../shared/types';
 import { api, useAction, useOrgStream, type Meta } from './api';
 import { Operations } from './Operations';
+const Access = lazy(() => import('./Access').then(module => ({ default: module.Access })));
 import { Hierarchy } from './Hierarchy';
 import { EXECUTION, STAGES } from './labels';
 import { waitingOnPerson } from '../shared/signatory';
@@ -11,7 +12,7 @@ import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
 
-type Tab = 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
+type Tab = 'access' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
 
 function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
   const { org } = view;
@@ -46,7 +47,7 @@ function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void })
 export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const { view, setView, activity, connected, missing } = useOrgStream(id);
   const control = useAction();
-  const [tab, setTab] = useState<Tab>('board');
+  const [tab, setTab] = useState<Tab>(new URLSearchParams(window.location.search).get('access') === 'connected' ? 'access' : 'board');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planTarget, setPlanTarget] = useState<string | null>(null);
   const [file, setFile] = useState<string | null>(null);
@@ -85,6 +86,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: 'board', label: 'Board' },
     { id: 'calendar', label: 'Calendar' },
+    { id: 'access', label: 'Email & accounts' },
     { id: 'business', label: 'Business', count: org.business.jobs.filter((j) => j.status === 'review').length || undefined },
     { id: 'plans', label: 'Plans', count: livePlans || undefined },
     { id: 'decisions', label: 'Decisions', count: openDecisions || undefined },
@@ -193,6 +195,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
             ))}
           </div>
           <div className="tab-panel" role="tabpanel">
+            {tab === 'access' ? <Suspense fallback={<p className="muted">Loading email and accounts…</p>}><Access org={org} /></Suspense> : null}
             {tab === 'calendar' ? <Operations org={org} calendar onView={setView} onOpenPlan={openPlan} /> : null}
             {tab === 'business' ? <Operations org={org} onView={setView} onOpenPlan={openPlan} /> : null}
             {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
