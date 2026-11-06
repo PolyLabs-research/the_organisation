@@ -13,7 +13,7 @@
 // What it does is steered through the environment:
 //   FAKE_CLAUDE_LOG      a file to append one JSON line to for each run
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
-//                        | silent | extra | loop | maxturns | nostructured | invalid | refusal | badinput
+//                        | silent | extra | loop | maxturns | nostructured | invalid | refusal | badinput | swallow
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync } from 'node:fs';
@@ -225,6 +225,22 @@ async function main() {
     if (MODE === 'nostructured') {
       reply([{ type: 'text', text: 'Here is my answer in prose instead.' }]);
       return finish({ result: 'Here is my answer in prose instead.' });
+    }
+    if (MODE === 'swallow') {
+      // A slip the real model was seen to make: a text field ended with a tag of its own name, so that the field
+      // after it arrives inside its text. The real command refuses the answer and asks again, and in the end gives up.
+      const whole = fill(schema);
+      const keys = Object.keys(whole);
+      const at = Math.max(0, keys.findIndex((key, i) => typeof whole[key] === 'string' && i + 1 < keys.length && typeof whole[keys[i + 1]] !== 'string'));
+      const [field, next] = [keys[at], keys[at + 1]];
+      const written = typeof whole[next] === 'string' ? whole[next] : JSON.stringify(whole[next]);
+      const slipped = Object.fromEntries(keys.filter((key) => key !== next).map((key) => [key, key === field ? `${whole[field]}</${field}>\n<parameter name="${next}">${written}` : whole[key]]));
+      for (let attempt = 0; attempt < 5; attempt++) {
+        reply([{ type: 'tool_use', id: `toolu_slip_${attempt}`, name: 'StructuredOutput', input: slipped }], 24);
+        emit({ type: 'user', session_id: session, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_slip_${attempt}`, content: `Output does not match required schema: root: must have required property '${next}'`, is_error: true }] } });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      return finish({ subtype: 'error_max_structured_output_retries', is_error: true, result: null, errors: ['Failed to provide valid structured output after 5 attempts'], stop_reason: 'tool_use' });
     }
     const data = MODE === 'invalid' ? { unexpected: true } : fill(schema);
     reply([{ type: 'tool_use', id: 'toolu_structured', name: 'StructuredOutput', input: data }], 24);

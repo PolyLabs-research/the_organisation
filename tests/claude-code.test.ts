@@ -12,7 +12,7 @@ import type { Config } from '../src/server/config';
 import { loadConfig } from '../src/server/config';
 import { ConnectionStore } from '../src/server/connections';
 import { ValidationError } from '../src/server/engine/state';
-import { ClaudeCodeProvider, MIN_CLAUDE_CODE, checkClaudeCode, childEnv, describeStatus, type ClaudeCodeOptions } from '../src/server/providers/claude-code';
+import { ClaudeCodeProvider, MIN_CLAUDE_CODE, checkClaudeCode, childEnv, describeStatus, unswallow, type ClaudeCodeOptions } from '../src/server/providers/claude-code';
 import { ProviderRouter } from '../src/server/providers/router';
 import { ProviderError, type AgentRequest, type AgentTool, type CallUsage, type StructuredRequest } from '../src/server/providers/types';
 import { Registry } from '../src/server/registry';
@@ -270,6 +270,49 @@ describe('one call through Claude Code', () => {
     const error = await failure(provider({ FAKE_CLAUDE_MODE: mode }).structured(ask()));
     expect([error.code, error.retryable]).toEqual([code, retryable]);
     expect(error.message).toMatch(message);
+  });
+
+  it('takes an answer that is all there but for a slip in how the model wrote it, without waiting to be refused', async () => {
+    // What a real model sent, in short: the summary ended with a tag of its own name, and the list after it went in with it.
+    const slipped = {
+      headline: 'The site is built and not yet verified.',
+      summary: 'Spec, Build and Release produced their documents. It is not live.</summary>\n<parameter name="outcomes">["Delivered as files: site/index.html", "Nothing was run in a browser."]',
+      asks: ['Someone with a browser: run the checks.'],
+    };
+    expect(unswallow(slipped)).toEqual({
+      headline: 'The site is built and not yet verified.',
+      summary: 'Spec, Build and Release produced their documents. It is not live.',
+      outcomes: ['Delivered as files: site/index.html', 'Nothing was run in a browser.'],
+      asks: ['Someone with a browser: run the checks.'],
+    });
+    // Text that was swallowed stays text, more than one field can be, and a field that arrived is left as it came.
+    expect(unswallow({ proposal: 'Ship it.</proposal>\n<parameter name="rationale">Because [it] is ready.</rationale>\n<parameter name="needs">Nothing.', other: 1 })).toEqual({
+      proposal: 'Ship it.',
+      rationale: 'Because [it] is ready.',
+      needs: 'Nothing.',
+      other: 1,
+    });
+    expect(unswallow({ summary: 'One.</summary>\n<parameter name="asks">["swallowed"]', asks: ['kept'] })).toEqual({ summary: 'One.', asks: ['kept'] });
+    // An answer with no such slip in it is not touched.
+    const plain = { summary: 'Close with </p> as HTML does; <parameter name="x"> is not one.', asks: [] };
+    expect(unswallow(plain)).toEqual(plain);
+    expect(unswallow('text')).toBe('text');
+
+    // The run is not left to ask five times and give up: the first answer is put right and taken.
+    const Report = z.object({ headline: z.string(), summary: z.string(), outcomes: z.array(z.string()), asks: z.array(z.string()) });
+    const usage: CallUsage[] = [];
+    const began = Date.now();
+    const data = await provider({ FAKE_CLAUDE_MODE: 'swallow' }).structured({ kind: 'report', system: SYSTEM, prompt: 'Report to the board.', model: 'claude-haiku-5-5', effort: 'low', schema: Report, context: {}, onUsage: (u: CallUsage) => usage.push(u) });
+    expect(data).toEqual({ headline: 'Settled.', summary: 'Settled.', outcomes: ['Settled.'], asks: ['Settled.'] });
+    expect(Date.now() - began).toBeLessThan(1500);
+    // One reply was paid for, and counted: its input as reported, its output by the length of what it wrote.
+    expect(usage.map((u) => [u.inputTokens, u.adjustment ?? false])).toEqual([
+      [2000, false],
+      [0, true],
+    ]);
+    expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBeGreaterThan(24);
+    // An answer that is wrong in itself is still refused.
+    expect((await failure(provider({ FAKE_CLAUDE_MODE: 'invalid' }).structured(ask()))).code).toBe('invalid_output');
   });
 
   it('says so when the command is not there', async () => {

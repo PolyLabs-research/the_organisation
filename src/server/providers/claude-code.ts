@@ -80,7 +80,7 @@ export interface UsageLimits {
 }
 
 type Json = Record<string, unknown>;
-type Killed = 'abort' | 'stop' | 'idle' | 'extra_usage';
+type Killed = 'abort' | 'stop' | 'idle' | 'extra_usage' | 'answered';
 
 /** Runs in flight, in every provider. A run must not outlive the server that is answering its tool calls and counting its spend. */
 const LIVE = new Set<ChildProcess>();
@@ -121,12 +121,53 @@ interface Live {
   kill(why: Killed): void;
 }
 
+/** What a caller wants to hear of a run while it is under way. */
+interface Watch {
+  onStart?(live: Live): void;
+  /** The model has given a structured answer. True if that is all that was wanted, and the run can end here. */
+  onStructured?(input: unknown): boolean;
+}
+
 type RunRequest = Pick<StructuredRequest<unknown>, 'model' | 'effort' | 'system' | 'prompt' | 'signal' | 'onUsage'>;
 
 const num = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 const brief = (value: string, max = 400): string => (value.length > max ? `${value.slice(0, max)}…` : value);
+
+/**
+ * Put right a slip a model makes when it writes a structured answer: a long text field ended with a tag of its
+ * own name ("</summary>") instead of the proper ending, so that the fields after it are swallowed into its text.
+ * Claude Code then sees those fields as missing and asks again, sometimes until it gives up, though the answer
+ * was all there. Seen with Claude Haiku 5.5 on 2026-11-06, in one structured answer in ten.
+ */
+export function unswallow(input: unknown): unknown {
+  if (!isObject(input)) return input;
+  const out: Json = { ...input };
+  for (const [field, value] of Object.entries(input)) {
+    if (typeof value !== 'string') continue;
+    // The text, then for each swallowed field its name and what was written for it.
+    const parts = value.split(/<\/[\w.-]+>\s*<parameter name="([\w.-]+)">/);
+    if (parts.length < 3) continue;
+    out[field] = parts[0]!.trimEnd();
+    for (let i = 1; i + 1 < parts.length; i += 2) {
+      const name = parts[i]!;
+      // A field that did arrive is not written over by something found inside another.
+      if (name in input) continue;
+      const raw = parts[i + 1]!.replace(/<\/[\w.-]+>\s*$/, '').trim();
+      let found: unknown = raw;
+      if (/^[[{]/.test(raw)) {
+        try {
+          found = JSON.parse(raw);
+        } catch {
+          // Then it is text.
+        }
+      }
+      out[name] = found;
+    }
+  }
+  return out;
+}
 
 /** A model's name without the parts that vary between two names for the same model: a date, a context-window marker. */
 function canonical(model: string): string {
@@ -457,7 +498,7 @@ export class ClaudeCodeProvider implements Provider {
   }
 
   /** One run of Claude Code, from start to its end. Spend is reported as it goes, and settled when the run says what it came to. */
-  private async run(req: RunRequest, extra: string[], onStart?: (live: Live) => void): Promise<Outcome> {
+  private async run(req: RunRequest, extra: string[], watch: Watch = {}): Promise<Outcome> {
     await this.prepare();
     const args = [
       '-p',
@@ -552,13 +593,23 @@ export class ClaudeCodeProvider implements Provider {
             });
             report(model, tokens, costUsd);
           }
-          const said = (Array.isArray(message.content) ? message.content : [])
-            .filter((block): block is Json => isObject(block) && block.type === 'text')
+          const blocks = (Array.isArray(message.content) ? message.content : []).filter(isObject);
+          const said = blocks
+            .filter((block) => block.type === 'text')
             .map((block) => text(block.text))
             .join('');
           if (said) {
             words.set(id, `${words.get(id) ?? ''}${said}`);
             lastText = words.get(id)!;
+          }
+          const answer = blocks.find((block) => block.type === 'tool_use' && block.name === 'StructuredOutput');
+          if (answer && watch.onStructured?.(answer.input)) {
+            // The run ends here, before it says what it used. What this reply wrote is counted by its length.
+            const plain = canonical(model);
+            const written = Math.ceil(JSON.stringify(answer.input ?? '').length / 3.5);
+            const more: Tokens = { inputTokens: 0, outputTokens: Math.max(0, written - num(isObject(message.usage) ? message.usage.output_tokens : 0)), cacheReadTokens: 0, cacheWriteTokens: 0 };
+            if (more.outputTokens > 0) report(model, more, isKnownModel(plain) ? costOfRequest(plain, more) : 0, { webSearches: 0 });
+            kill('answered');
           }
           return;
         }
@@ -648,7 +699,7 @@ export class ClaudeCodeProvider implements Provider {
         resolve({ result, code, signal, stderr, lastText, turns: seen.size, killed });
       });
 
-      onStart?.({ turns: () => seen.size, kill });
+      watch.onStart?.({ turns: () => seen.size, kill });
       child.stdin.end(req.prompt);
     });
   }
@@ -700,7 +751,19 @@ export class ClaudeCodeProvider implements Provider {
 
   async structured<T>(req: StructuredRequest<T>): Promise<T> {
     const { $schema: _dialect, ...schema } = z.toJSONSchema(req.schema) as Json;
-    const outcome = await this.run(req, ['--json-schema', JSON.stringify(schema)]);
+    let mended: { data: T } | null = null;
+    const outcome = await this.run(req, ['--json-schema', JSON.stringify(schema)], {
+      onStructured: (input) => {
+        // An answer that is right as it stands is left for Claude Code to accept and account for. One that would
+        // be refused only for a slip in how it was written is put right here, and the run need not go on.
+        if (req.schema.safeParse(input).success) return false;
+        const repaired = req.schema.safeParse(unswallow(input));
+        if (!repaired.success) return false;
+        mended = { data: repaired.data };
+        return true;
+      },
+    });
+    if (outcome.killed === 'answered' && mended) return (mended as { data: T }).data;
     const result = this.settle(outcome);
     let data: unknown = result.structured_output;
     if (data === undefined) {
@@ -786,7 +849,7 @@ export class ClaudeCodeProvider implements Provider {
           '--max-turns',
           String(req.maxTurns + TURN_SLACK),
         ],
-        (started) => (live = started),
+        { onStart: (started) => (live = started) },
       );
     } finally {
       tools.close();
