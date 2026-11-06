@@ -4,7 +4,7 @@ Describe an idea and get an organisation of AI agents that works on it: a CEO wh
 
 You are the shareholders. You give steer; the CEO enforces it. The organisation cannot pay for anything or sign anything: for that it asks its [Authorised Signatory](#signing-and-paying), which is you unless you seat an AI there, and you do the paying and signing yourself, outside this program.
 
-Built around Claude, and able to run on other makers' models as well (OpenAI, Google, Meta and the main Chinese labs), with a web interface for establishing organisations and watching them work.
+Built around Claude, and able to run on other makers' models as well (OpenAI, Google, Meta and the main Chinese labs), or on the Claude Code installed on your machine in place of a key, with a web interface for establishing organisations and watching them work.
 
 ![The dashboard of a running organisation: the shareholders' steer and the CEO on the left, the board feed on the right](docs/dashboard.png)
 
@@ -34,6 +34,8 @@ npm run establish -- --budget 20 --steer "One city first." "…"
 npm run establish -- --hosted --budget 40 "…"    # plans carried out in hosted sessions (see below)
 npm run establish -- --model openai:gpt-6.1-sol --agent-model deepseek:deepseek-flash "…"
 ```
+
+With no key at all, the Claude Code installed on this machine can be connected on the same page, and organisations then run on its login: see [Claude Code in place of a key](#claude-code-in-place-of-a-key). Keys are the default, and what a new organisation starts on whenever there is one.
 
 For a production-style run, `npm run build && npm start`.
 
@@ -136,7 +138,7 @@ Answers are given with buttons on purpose. What you type in the message box is p
 
 ## Models and keys
 
-An organisation's executives and its agents each run on a model you choose, and the two can be from different makers. Which models are on offer depends on which API keys the server has.
+An organisation's executives and its agents each run on a model you choose, and the two can be from different makers. Which models are on offer depends on which API keys the server has, or, with no key, on whether [Claude Code is connected](#claude-code-in-place-of-a-key).
 
 **Adding a key.** The **Models and keys** page (linked from the top bar) lists the providers below. Choose one, paste a key, and the provider is asked what the key can call; a key it refuses is not kept. From then on that key's models can be chosen when establishing an organisation and in any organisation's settings: the handful picked out for the provider first, with their prices, then everything else the key can call. A key can also be given in the environment or in `.env`, under the variable in the table; it is then used as it is and never written to disk by this program.
 
@@ -206,7 +208,28 @@ The [Arena text leaderboard](https://arena.ai/leaderboard/text) of 27 October 20
 
 **How the other providers are called.** OpenAI is called through its Responses API, because its current models will not call tools through Chat Completions; nothing is stored on OpenAI's side, and each request carries the whole exchange. Everyone else is called through Chat Completions, with the differences between them written down per provider in the catalogue: what the output cap is called, whether a JSON schema is accepted or only a request for JSON, which effort levels a model takes (an organisation's effort setting is sent as the nearest one), and whether a model's reasoning has to be handed back with its tool calls. When an endpoint refuses something about the form of a request, the request is reshaped and sent again; once a reshaped request has gone through, that way of asking is kept until the server restarts. A refusal that does not say what it objects to is first repeated as it was, in case it was a passing fault, and then tried without each optional setting in turn.
 
-> **Not yet run against any live provider.** No key for any of these providers was available when this was written. Addresses, model names, prices and each API's particulars were read from the providers' documentation, and the code is tested against a local stand-in (`tests/fake-openai-api.ts`) that speaks Chat Completions and the Responses API, including whole organisations run end to end on it. That shows the pieces fit together; it does not show that a real provider accepts what is sent. Try a new provider with a small budget first, and expect the occasional rough edge that only a live run finds.
+### Claude Code in place of a key
+
+If [Claude Code](https://code.claude.com/docs/en/setup) is installed on the machine the server runs on, an organisation can run on it in place of a key: every call is then a run of the `claude` command, on whatever login that command already has. API keys remain the default. A new organisation starts on a key's model whenever there is a key; Claude Code's models are there to be chosen, and are what a new organisation starts on only when nothing else is connected.
+
+![The Models and keys page with Claude Code connected: which version it is, how it is signed in, and the Claude models it offers](docs/claude-code.png)
+
+**Connecting it.** On the **Models and keys** page choose **Claude Code** and connect. Claude Code is asked which version it is and whether it is signed in, which calls no model, and from then on its models can be chosen like any others, under names such as `claude-code:claude-sonnet-5-5`. `npm run claude-code:check` asks the same from the command line, and with `-- --call` makes two short calls on the smallest model to show that it works on your login.
+
+**What a run is given.** Nothing of your own Claude Code set-up: no settings, plugins, skills, memory files or tool servers, and none of Claude Code's built-in tools, so a run cannot execute a command or read a file on your machine. A seat's standing instructions take the place of Claude Code's own. An agent gets the organisation's three workspace tools and no others; they are served to that one run by a small tool server on a loopback port, at an address made for the run and handed to it in a file only you can read. Runs are not kept as Claude Code sessions, so they do not appear in its history. The login itself is never read, copied or sent anywhere by this program. An API key in the server's environment is not passed to Claude Code, which would use it in place of the login and bill it.
+
+**What it costs.** With a subscription login, nothing is billed for a call: usage counts against your plan's limits, the same ones your own use of Claude Code draws on, and an organisation that runs for long will use a good part of them. Spend is still counted, at what the API would charge for the same tokens (Claude Code works this out for each run), so that a budget stops an organisation here as it does anywhere else. For the same reason an organisation on Claude Code alone starts on Sonnet, not Opus. Two things can cost money:
+
+- If **extra usage** is switched on for your account, Claude Code carries on past what the plan includes and bills the rest. An organisation does not follow it there: when Claude Code reports that extra usage has begun, the run is stopped, and the organisation pauses and says so. To let it carry on at your expense, start the server with `CLAUDE_CODE_EXTRA_USAGE=allow`.
+- If Claude Code is signed in some other way than with a subscription (a Console account, say), its usage is billed to that account. The connection says how it is signed in.
+
+**Whose use it is for.** Yours, on your own machine. [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance) let you sign in to Claude Code with your own subscription and run it from scripts. They do not let a subscription login be offered to other people through a product, and a plan's advertised limits assume ordinary, individual use. This program runs the `claude` command as it is and nothing more, but it has no login of its own, so the connection is switched off whenever the server is set to listen on an address other machines can reach (a `HOST` that is not loopback). For anything shared, use an API key.
+
+**What it cannot do.** Plans cannot be carried out in hosted sessions, and agents cannot search the web: both belong to the API. An agent can be told to stop and report only when it next uses a tool, not in the middle of a reply, so a budget can be passed by a little more than on a key. A model your login is not entitled to fails when it is first called, with Claude Code's own message.
+
+> **Tried against the real Claude Code, in a small way.** The options passed to the command and the replies read from it were checked against Claude Code 2.1.317 on Linux, with about ten short calls on the smallest model: structured answers, tool calls through the tool server, an unknown model, a turn limit. No whole organisation has been run through it. What happens at a plan's usage limit, and when extra usage begins, is written from what Claude Code reports about limits on every run, not from reaching either. It is untried on macOS and on Windows. Claude Code's documentation says that a future release will make its minimal mode the default for non-interactive runs, and minimal mode does not read a subscription login: when that happens, this connection will need changing. The tests run on a stand-in for the command (`tests/fake-claude.mjs`).
+
+> **No provider's API has been called.** No key for any of these providers was available when this was written. Addresses, model names, prices and each API's particulars were read from the providers' documentation, and the code is tested against a local stand-in (`tests/fake-openai-api.ts`) that speaks Chat Completions and the Responses API, including whole organisations run end to end on it. That shows the pieces fit together; it does not show that a real provider accepts what is sent. Try a new provider with a small budget first, and expect the occasional rough edge that only a live run finds.
 
 ## Spend and limits
 
@@ -222,6 +245,8 @@ What drives spend, and where to change it (wizard or settings):
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
 If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. The same is true after a server restart: an organisation that was running comes back paused.
+
+On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is what the API would charge for the same tokens. With a subscription login none of it is billed; the budget is then a limit on how much of your plan an organisation may use.
 
 ## What agents can and cannot do
 
@@ -276,8 +301,10 @@ data/orgs/<id>/
   archive/         cycles that have left live state (the three most recent stay live)
   workspace/       the files the agents produce
   managed/         which workspace files have been uploaded for hosted sessions
+data/claude-code/      for the Claude Code connection: the standing instructions handed to its runs
 data/managed.json      ids of the agents and environments hosted sessions start from
 data/connections.json  the API keys added in the interface, and what each was last seen to offer
+                       (and whether Claude Code is connected, which has no key)
 ```
 
 `connections.json` holds keys in the clear, readable only by your user. Leave it out of anything you share or back up to somewhere others can read; the whole `data/` folder is already ignored by git.
@@ -293,13 +320,15 @@ A folder is loaded only if its name is the organisation's id, so a copy kept bes
 | `ANTHROPIC_API_KEY` | none | A key for Claude. Any other credential the Anthropic SDK resolves by itself (a login profile, say) works too. |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY`, and the rest | none | A key for another provider: the variable for each is in the table under [Models and keys](#models-and-keys). Keys can also be added in the interface. |
 | `<PROVIDER>_BASE_URL` | the provider's international address | Where a provider's key from the environment is used, for a provider with more than one platform: `MOONSHOT_BASE_URL`, `ALIBABA_BASE_URL`, `ZHIPU_BASE_URL`, `TENCENT_BASE_URL`, `MINIMAX_BASE_URL`, `BYTEDANCE_BASE_URL` (the name before the colon in a model's name, in capitals). |
+| `CLAUDE_CODE_PATH` | `claude` | The Claude Code command, for [the connection that uses its login in place of a key](#claude-code-in-place-of-a-key), where it is not on the `PATH`. |
+| `CLAUDE_CODE_EXTRA_USAGE` | not set | `allow` lets an organisation on the Claude Code connection carry on once the plan's included usage is spent and further usage is billed. Without it the organisation pauses. |
 | `ORG_PROVIDER` | `auto` | `auto` simulates until the server is first given a key, and calls real models from then on. `mock` simulates whatever keys there are. |
 | `PORT` | `4780` | Port to listen on. |
 | `HOST` | `127.0.0.1` | Address to listen on. |
 | `ORG_DATA_DIR` | `./data` | Where organisations are stored. |
 | `ANTHROPIC_WORKSPACE_ID` | Default workspace | The workspace your API key belongs to, for links from a plan to its hosted session in the Console. |
 
-The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend.
+The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection is switched off in that case: a login is one person's.
 
 ## Development
 
@@ -309,7 +338,7 @@ npm run typecheck
 npm run dev         # server with hot-reloading client on one port
 ```
 
-The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against local stand-ins for the Messages API and the Managed Agents API that speak their protocols, and the providers for everyone else against a stand-in for Chat Completions and OpenAI's Responses API, on which whole organisations are also run end to end. That checks what is sent and how replies are handled, not that the live APIs accept it or behave as the stand-ins do.
+The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against local stand-ins for the Messages API and the Managed Agents API that speak their protocols, the providers for everyone else against a stand-in for Chat Completions and OpenAI's Responses API, and the Claude Code connection against a stand-in for the `claude` command; whole organisations are also run end to end on the last two. That checks what is sent and how replies are handled, not that the live APIs accept it or behave as the stand-ins do.
 
 ```
 src/shared/      types and the profile library, used by server and client
@@ -321,14 +350,16 @@ src/server/
   providers/     Claude, the simulator, and pricing; the router that sends each
                  call to the provider its model is on (router.ts); the providers
                  for OpenAI-compatible endpoints and for OpenAI's Responses API;
-                 and the catalogue of providers, models and prices (catalogue.ts)
+                 Claude Code in place of a key (claude-code.ts); and the
+                 catalogue of providers, models and prices (catalogue.ts)
     managed/     hosted sessions: the saved agents (resources.ts), files in
                  and out (files.ts), and following a session (session.ts)
   connections.ts the API keys the server holds
   workspace.ts   the confined file tools agents use
   app.ts         the HTTP API and live event stream
 src/client/      the web interface (React)
-scripts/         establish an organisation from one prompt; set up hosted sessions
+scripts/         establish an organisation from one prompt; set up hosted sessions;
+                 check the Claude Code on this machine
 tests/
 ```
 
@@ -342,7 +373,8 @@ A provider with an API of its own implements two methods ([`src/server/providers
 
 - On this machine, agents write files and execute nothing. Running and testing needs hosted sessions.
 - Hosted sessions have not been run against the live API (see above), and hold a lead to its allocation of agents by instruction only.
-- No provider other than the simulator has been called from this code: not Claude's API, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)).
+- No provider's API has been called from this code: not Claude's, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)). The one way to a real model that has been tried is the [Claude Code connection](#claude-code-in-place-of-a-key), with single short calls and not yet with a whole organisation.
+- The Claude Code connection has been tried on Linux only, has no hosted sessions and no web search, and depends on how the `claude` command behaves, which changes from release to release.
 - Hosted sessions and web search are for Claude models only.
 - Nothing here pays or signs. The signatory's seat records what a person did elsewhere; an AI in the seat can authorise or decline a request, and no more. Paying from inside the program would need a payment service connected to it, which this version does not have.
 - Requests to the signatory are raised by leads at their phase gates. A lead cannot ask in the middle of a phase, and the CEO cannot ask at all.
