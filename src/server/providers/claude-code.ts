@@ -72,7 +72,7 @@ export interface UsageLimits {
   /** How much of that limit is used, from 0 to 1, where Claude Code says. */
   utilization: number | null;
   resetsAt: string | null;
-  /** True once the plan's included usage is spent and usage is being billed as extra. */
+  /** True when usage is being billed: the plan's included usage is spent, or the model draws on paid credits whatever the plan has left. */
   usingExtra: boolean;
   /** Whether the account lets that happen at all. */
   extraAllowed: boolean;
@@ -80,18 +80,31 @@ export interface UsageLimits {
 }
 
 type Json = Record<string, unknown>;
-type Killed = 'abort' | 'stop' | 'idle' | 'extra_usage' | 'answered';
+type Killed = 'abort' | 'stop' | 'idle' | 'extra_usage' | 'answered' | 'wrapped' | 'no_tools' | 'closed';
+
+/**
+ * End a run and whatever it started. A run is the leader of a process group of its own, so that a command which
+ * is a script around the real program is ended along with the program.
+ */
+function signalRun(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (child.pid) process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch {
+    child.kill(signal);
+  }
+}
 
 /** Runs in flight, in every provider. A run must not outlive the server that is answering its tool calls and counting its spend. */
 const LIVE = new Set<ChildProcess>();
 let watching = false;
 function track(child: ChildProcess): void {
   LIVE.add(child);
-  child.once('close', () => LIVE.delete(child));
+  child.once('exit', () => LIVE.delete(child));
   if (watching) return;
   watching = true;
   process.once('exit', () => {
-    for (const run of LIVE) run.kill('SIGTERM');
+    for (const run of LIVE) signalRun(run, 'SIGTERM');
   });
 }
 
@@ -117,15 +130,20 @@ interface Outcome {
 
 /** What a run in progress can be asked, by the tool server that is answering its calls. */
 interface Live {
+  /** How many replies the model has begun. */
   turns(): number;
+  /** The reply the model is on, or was last on. */
+  reply(): string | null;
   kill(why: Killed): void;
 }
 
-/** What a caller wants to hear of a run while it is under way. */
+/** What a caller wants of a run while it is under way. */
 interface Watch {
   onStart?(live: Live): void;
   /** The model has given a structured answer. True if that is all that was wanted, and the run can end here. */
   onStructured?(input: unknown): boolean;
+  /** The run is an agent's, and is of no use unless it can reach its tools. */
+  needsTools?: boolean;
 }
 
 type RunRequest = Pick<StructuredRequest<unknown>, 'model' | 'effort' | 'system' | 'prompt' | 'signal' | 'onUsage'>;
@@ -190,7 +208,7 @@ function olderThan(version: string, least: string): boolean {
 }
 
 /** Variables that say where Claude Code keeps its login, which a run needs; every other CLAUDE variable is left behind. */
-const KEPT = new Set(['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN']);
+const KEPT = new Set(['CLAUDE_CONFIG_DIR', 'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN']);
 
 /**
  * The environment a run is started in: the server's own, without anything that would change whose account the
@@ -267,7 +285,7 @@ export async function checkClaudeCode(command = 'claude', env: NodeJS.ProcessEnv
   }
   if (!status) throw new ProviderError('Claude Code did not say whether it is signed in. Run "claude auth status" in a terminal to see why.', 'auth', false);
   if (status.loggedIn !== true) {
-    throw new ProviderError('Claude Code is installed but not signed in. Run "claude" in a terminal, sign in, and then connect it here again.', 'auth', false);
+    throw new ProviderError('Claude Code is installed but not signed in. Run "claude" in a terminal, sign in, and then try again here.', 'auth', false);
   }
   return { version, authMethod: text(status.authMethod) || 'unknown', plan: text(status.subscriptionType) || null };
 }
@@ -419,6 +437,38 @@ class ToolBridge {
 
 // ---- the provider ----
 
+/** A run in flight, as the provider that started it knows it. */
+interface RunHandle {
+  /** The model it is on, by its plain name. */
+  model: string;
+  kill(why: Killed): void;
+}
+
+/** What one reply has been counted as so far. Each figure only grows: a later word on the same reply knows more, never less. */
+interface Counted extends Tokens {
+  model: string;
+  costUsd: number;
+}
+
+const NO_TOKENS: Tokens = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+const tokensOf = (usage: unknown): Tokens => {
+  const u = isObject(usage) ? usage : {};
+  return { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens), cacheReadTokens: num(u.cache_read_input_tokens), cacheWriteTokens: num(u.cache_creation_input_tokens) };
+};
+const most = (a: Tokens, b: Tokens): Tokens => ({
+  inputTokens: Math.max(a.inputTokens, b.inputTokens),
+  outputTokens: Math.max(a.outputTokens, b.outputTokens),
+  cacheReadTokens: Math.max(a.cacheReadTokens, b.cacheReadTokens),
+  cacheWriteTokens: Math.max(a.cacheWriteTokens, b.cacheWriteTokens),
+});
+const beyond = (a: Tokens, b: Tokens): Tokens => ({
+  inputTokens: Math.max(0, a.inputTokens - b.inputTokens),
+  outputTokens: Math.max(0, a.outputTokens - b.outputTokens),
+  cacheReadTokens: Math.max(0, a.cacheReadTokens - b.cacheReadTokens),
+  cacheWriteTokens: Math.max(0, a.cacheWriteTokens - b.cacheWriteTokens),
+});
+const any = (tokens: Tokens) => tokens.inputTokens + tokens.outputTokens + tokens.cacheReadTokens + tokens.cacheWriteTokens > 0;
+
 export class ClaudeCodeProvider implements Provider {
   private readonly command: string;
   private readonly dir: string;
@@ -428,7 +478,13 @@ export class ClaudeCodeProvider implements Provider {
   private readonly killGraceMs: number;
   private readonly bridge = new ToolBridge();
   private readonly written = new Map<string, Promise<string>>();
-  private prepared: Promise<void> | null = null;
+  /** This provider's runs in flight. */
+  private readonly live = new Set<RunHandle>();
+  /**
+   * Until when no run is started, because the last one was being billed: for one model, by its plain name, or
+   * under "*" for every model on the login.
+   */
+  private readonly held = new Map<string, number>();
   private lastLimits: UsageLimits | null = null;
 
   constructor(options: ClaudeCodeOptions) {
@@ -456,8 +512,9 @@ export class ClaudeCodeProvider implements Provider {
     return this.lastLimits;
   }
 
-  /** Stop answering tool calls. Runs in flight are not waited for. */
+  /** Stop answering tool calls and end the runs in flight: a run without its tools, or without anyone to count it, is of no use. */
   close(): void {
+    for (const run of [...this.live]) run.kill('closed');
     this.bridge.close();
   }
 
@@ -465,13 +522,11 @@ export class ClaudeCodeProvider implements Provider {
     return path.join(this.dir, 'cwd');
   }
 
-  private prepare(): Promise<void> {
-    this.prepared ??= (async () => {
-      await fs.mkdir(this.cwd, { recursive: true });
-      await fs.mkdir(path.join(this.dir, 'prompts'), { recursive: true, mode: 0o700 });
-      await fs.mkdir(path.join(this.dir, 'runs'), { recursive: true, mode: 0o700 });
-    })();
-    return this.prepared;
+  /** The directories a run needs. Made before every run: they are cheap to make, and may have been cleared away since the last. */
+  private async prepare(): Promise<void> {
+    await fs.mkdir(this.cwd, { recursive: true });
+    await fs.mkdir(path.join(this.dir, 'prompts'), { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(this.dir, 'runs'), { recursive: true, mode: 0o700 });
   }
 
   /**
@@ -494,17 +549,50 @@ export class ClaudeCodeProvider implements Provider {
       this.written.set(file, writing);
       writing.catch(() => this.written.delete(file));
     }
-    return writing;
+    // A file that was written once and has since been cleared away is written again.
+    return writing.then(async (kept) => {
+      try {
+        await fs.access(kept);
+        return kept;
+      } catch {
+        this.written.delete(file);
+        return this.systemFile(system);
+      }
+    });
   }
 
-  /** One run of Claude Code, from start to its end. Spend is reported as it goes, and settled when the run says what it came to. */
+  /** Why no run is started just now, if the last one was being billed and nobody has said that is wanted. */
+  private heldBack(model: string): ProviderError | null {
+    if (this.extraUsage) return null;
+    const all = this.held.get('*') ?? 0;
+    const one = this.held.get(canonical(model)) ?? 0;
+    if (all > Date.now()) return this.billed('*', all);
+    if (one > Date.now()) return this.billed(model, one);
+    return null;
+  }
+
+  /** The error that says usage has started to cost money, and what can be done about it. */
+  private billed(scope: string, until: number): ProviderError {
+    const when = `${new Date(until).toISOString().slice(0, 16).replace('T', ' at ')} UTC`;
+    const what =
+      scope === '*'
+        ? `Your Claude plan's included usage is used up, and Claude Code has started to bill further usage as extra. The organisation is paused so that it does not spend money without your say-so. Nothing more is run on this login until ${when}, when the plan's limit is due to reset.`
+        : `Claude Code reports that this model is being billed to paid usage, not counted against your plan. The organisation is paused so that it does not spend money without your say-so. Nothing more is run on this model until ${when}.`;
+    return new ProviderError(`${what} Resume it then, move it to another model, or start the server with CLAUDE_CODE_EXTRA_USAGE=allow to let it carry on at your expense.`, 'rate_limit', false);
+  }
+
+  /** One run of Claude Code, from start to its end. Spend is reported as each reply comes, and settled when the run says what it came to. */
   private async run(req: RunRequest, extra: string[], watch: Watch = {}): Promise<Outcome> {
+    const held = this.heldBack(req.model);
+    if (held) throw held;
     await this.prepare();
     const args = [
       '-p',
       '--output-format',
       'stream-json',
       '--verbose',
+      // Each reply's size is then told as the reply ends, not only when the whole run does.
+      '--include-partial-messages',
       '--no-session-persistence',
       '--model',
       req.model,
@@ -524,75 +612,98 @@ export class ClaudeCodeProvider implements Provider {
     ];
     return new Promise<Outcome>((resolve, reject) => {
       if (req.signal?.aborted) return reject(new ProviderError('The call was stopped before it began.', 'aborted', false));
-      const child = spawn(this.command, args, { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      // In a process group of its own, so that it can be ended together with anything it started.
+      const child = spawn(this.command, args, { cwd: this.cwd, env: this.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
       track(child);
       let settled = false;
       let killed: Killed | null = null;
       let hard: NodeJS.Timeout | undefined;
+      let drain: NodeJS.Timeout | undefined;
       let result: Json | null = null;
       let stderr = '';
       let buffer = '';
       let lastText = '';
+      let lastReply: string | null = null;
       /** The words of each reply, by the reply's id: a reply arrives a block at a time. */
       const words = new Map<string, string>();
-      const seen = new Set<string>();
-      /** What has been reported of each model's spend so far, by the model's plain name. */
-      const reported = new Map<string, Tokens & { costUsd: number }>();
+      /** What each reply has been counted as so far, by the reply's id. */
+      const replies = new Map<string, Counted>();
 
       const kill = (why: Killed) => {
         if (settled || killed) return;
         killed = why;
-        child.kill('SIGTERM');
-        hard = setTimeout(() => child.kill('SIGKILL'), this.killGraceMs);
+        signalRun(child, 'SIGTERM');
+        hard = setTimeout(() => signalRun(child, 'SIGKILL'), this.killGraceMs);
       };
+      const handle: RunHandle = { model: canonical(req.model), kill };
+      this.live.add(handle);
       let idle = setTimeout(() => kill('idle'), this.idleTimeoutMs);
       const onAbort = () => kill('abort');
       req.signal?.addEventListener('abort', onAbort, { once: true });
       const finish = () => {
         settled = true;
+        this.live.delete(handle);
         clearTimeout(idle);
         clearTimeout(hard);
+        clearTimeout(drain);
         req.signal?.removeEventListener('abort', onAbort);
       };
 
       /** The name spend is reported under: the one the organisation chose the model by, where the run was served by that model. */
       const nameOf = (served: string) => (canonical(served) === canonical(req.model) ? req.model : served);
       const report = (model: string, tokens: Tokens, costUsd: number, settling?: { webSearches: number }) => {
-        // What is added when a run is settled is more spend on replies already counted, not another reply.
+        // What is added to a reply already counted is more spend, not another reply.
         const usage: CallUsage = { model: nameOf(model), ...tokens, webSearches: settling?.webSearches ?? 0, costUsd, ...(settling ? { adjustment: true } : {}) };
         req.onUsage?.(usage);
       };
+      /**
+       * Count what is now known of one reply. A reply is heard of more than once: when it starts, with its input
+       * in full and little of its output; block by block; and when it ends, with its output in full. Only what is
+       * new each time is reported, so the budget sees a long run as it goes and a run that is cut off has been
+       * counted up to the reply it was cut off in.
+       */
+      const count = (id: string, model: string, known: Tokens) => {
+        // A reply Claude Code wrote itself, to say what went wrong, is not the model's and cost nothing.
+        if (!id || !model || model === '<synthetic>') return;
+        lastReply = id;
+        const before = replies.get(id);
+        const total = most(before ?? NO_TOKENS, known);
+        const plain = canonical(model);
+        const costUsd = Math.max(before?.costUsd ?? 0, isKnownModel(plain) ? costOfRequest(plain, total) : 0);
+        replies.set(id, { ...total, model: plain, costUsd });
+        const more = beyond(total, before ?? NO_TOKENS);
+        const moreCost = costUsd - (before?.costUsd ?? 0);
+        if (!before) report(model, more, moreCost);
+        else if (moreCost > 0 || any(more)) report(model, more, moreCost, { webSearches: 0 });
+      };
+      /** The model each reply was on, for the word on a reply's end, which does not say. */
+      const modelOf = (id: string) => replies.get(id)?.model ?? '';
 
-      const handle = (event: Json) => {
+      const onEvent = (event: Json) => {
+        if (event.type === 'stream_event' && isObject(event.event)) {
+          const inner = event.event;
+          if (inner.type === 'message_start' && isObject(inner.message)) {
+            count(text(inner.message.id), text(inner.message.model), tokensOf(inner.message.usage));
+          } else if (inner.type === 'message_delta') {
+            const id = text(event.api_message_id) || lastReply || '';
+            count(id, modelOf(id), tokensOf(inner.usage));
+          }
+          return;
+        }
+        if (event.type === 'system' && event.subtype === 'init') {
+          if (!watch.needsTools) return;
+          // A run that could not reach its tools would end in words about work it never did.
+          const servers = Array.isArray(event.mcp_servers) ? event.mcp_servers.filter(isObject) : [];
+          const ours = servers.find((server) => server.name === SERVER_NAME);
+          if (!ours || (ours.status !== 'connected' && ours.status !== 'pending')) kill('no_tools');
+          return;
+        }
         if (event.type === 'assistant' && isObject(event.message)) {
           const message = event.message;
           const id = text(message.id);
           const model = text(message.model);
-          // A reply Claude Code wrote itself, to say what went wrong, is not the model's and cost nothing.
           if (!id || model === '<synthetic>') return;
-          if (!seen.has(id)) {
-            seen.add(id);
-            // What a reply says of its own size when it starts: its input in full, its output only so far.
-            // It is counted now, so that the budget sees a long run as it goes, and made exact at the end.
-            const usage = isObject(message.usage) ? message.usage : {};
-            const tokens: Tokens = {
-              inputTokens: num(usage.input_tokens),
-              outputTokens: num(usage.output_tokens),
-              cacheReadTokens: num(usage.cache_read_input_tokens),
-              cacheWriteTokens: num(usage.cache_creation_input_tokens),
-            };
-            const plain = canonical(model);
-            const costUsd = isKnownModel(plain) ? costOfRequest(plain, tokens) : 0;
-            const before = reported.get(plain);
-            reported.set(plain, {
-              inputTokens: (before?.inputTokens ?? 0) + tokens.inputTokens,
-              outputTokens: (before?.outputTokens ?? 0) + tokens.outputTokens,
-              cacheReadTokens: (before?.cacheReadTokens ?? 0) + tokens.cacheReadTokens,
-              cacheWriteTokens: (before?.cacheWriteTokens ?? 0) + tokens.cacheWriteTokens,
-              costUsd: (before?.costUsd ?? 0) + costUsd,
-            });
-            report(model, tokens, costUsd);
-          }
+          count(id, model, tokensOf(message.usage));
           const blocks = (Array.isArray(message.content) ? message.content : []).filter(isObject);
           const said = blocks
             .filter((block) => block.type === 'text')
@@ -604,69 +715,84 @@ export class ClaudeCodeProvider implements Provider {
           }
           const answer = blocks.find((block) => block.type === 'tool_use' && block.name === 'StructuredOutput');
           if (answer && watch.onStructured?.(answer.input)) {
-            // The run ends here, before it says what it used. What this reply wrote is counted by its length.
-            const plain = canonical(model);
-            const written = Math.ceil(JSON.stringify(answer.input ?? '').length / 3.5);
-            const more: Tokens = { inputTokens: 0, outputTokens: Math.max(0, written - num(isObject(message.usage) ? message.usage.output_tokens : 0)), cacheReadTokens: 0, cacheWriteTokens: 0 };
-            if (more.outputTokens > 0) report(model, more, isKnownModel(plain) ? costOfRequest(plain, more) : 0, { webSearches: 0 });
+            // The run ends here, before this reply has said how long it was. It is counted by the length of what it wrote.
+            count(id, model, { ...NO_TOKENS, outputTokens: Math.ceil(JSON.stringify(answer.input ?? '').length / 3.5) });
             kill('answered');
           }
           return;
         }
         if (event.type === 'rate_limit_event' && isObject(event.rate_limit_info)) {
           const info = event.rate_limit_info;
+          // Claude Code has two words for usage that costs money. "isUsingOverage": the plan's included usage is
+          // spent and extra usage has begun. "overageInUse": this reply was billed to paid usage whatever the plan
+          // has left, as some models are.
+          const spent = info.isUsingOverage === true;
+          const billedNow = spent || info.overageInUse === true;
           this.lastLimits = {
             status: text(info.status) || 'unknown',
             window: text(info.rateLimitType) || null,
             utilization: typeof info.utilization === 'number' ? info.utilization : null,
             resetsAt: typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000).toISOString() : null,
-            usingExtra: info.isUsingOverage === true,
+            usingExtra: billedNow,
             extraAllowed: info.overageEnabled === true || info.overageStatus === 'allowed',
             seenAt: new Date().toISOString(),
           };
-          // Past the plan's included usage, every further call is billed. That is not for this program to decide.
-          if (this.lastLimits.usingExtra && !this.extraUsage) kill('extra_usage');
+          if (!billedNow || this.extraUsage) return;
+          // Every further call is billed, and that is not for this program to decide. The run is ended, so are the
+          // others it applies to, and no more are started until the plan's limit is due to reset.
+          const resets = typeof info.resetsAt === 'number' ? info.resetsAt * 1000 : 0;
+          const until = resets > Date.now() ? resets : Date.now() + 30 * 60_000;
+          const scope = spent ? '*' : canonical(req.model);
+          this.held.set(scope, Math.max(this.held.get(scope) ?? 0, until));
+          for (const other of [...this.live]) {
+            if (scope === '*' || other.model === scope) other.kill('extra_usage');
+          }
           return;
         }
         if (event.type === 'result') {
           result = event;
           // The run's own account of what it used, by model, which is exact where the running count was not.
-          const byModel = isObject(event.modelUsage) ? Object.entries(event.modelUsage).filter((entry): entry is [string, Json] => isObject(entry[1])) : [];
-          const exact = byModel.length
-            ? byModel.map(([model, used]) => ({
-                model: text(used.canonicalModel) || model,
-                tokens: {
-                  inputTokens: num(used.inputTokens),
-                  outputTokens: num(used.outputTokens),
-                  cacheReadTokens: num(used.cacheReadInputTokens),
-                  cacheWriteTokens: num(used.cacheCreationInputTokens),
-                },
-                costUsd: typeof used.costUSD === 'number' ? used.costUSD : null,
-                webSearches: num(used.webSearchRequests),
-              }))
-            : [];
+          const exact = (isObject(event.modelUsage) ? Object.entries(event.modelUsage) : [])
+            .filter((entry): entry is [string, Json] => isObject(entry[1]))
+            .map(([model, used]) => ({
+              model: text(used.canonicalModel) || model,
+              tokens: { inputTokens: num(used.inputTokens), outputTokens: num(used.outputTokens), cacheReadTokens: num(used.cacheReadInputTokens), cacheWriteTokens: num(used.cacheCreationInputTokens) },
+              costUsd: typeof used.costUSD === 'number' ? used.costUSD : null,
+              webSearches: num(used.webSearchRequests),
+            }));
+          const counted = new Map<string, Tokens & { costUsd: number }>();
+          for (const reply of replies.values()) {
+            const sum = counted.get(reply.model);
+            counted.set(reply.model, {
+              inputTokens: (sum?.inputTokens ?? 0) + reply.inputTokens,
+              outputTokens: (sum?.outputTokens ?? 0) + reply.outputTokens,
+              cacheReadTokens: (sum?.cacheReadTokens ?? 0) + reply.cacheReadTokens,
+              cacheWriteTokens: (sum?.cacheWriteTokens ?? 0) + reply.cacheWriteTokens,
+              costUsd: (sum?.costUsd ?? 0) + reply.costUsd,
+            });
+          }
           for (const entry of exact) {
+            // One model in the run and one in its account are the same model, whatever each is called.
+            const before = exact.length === 1 && counted.size === 1 ? [...counted.values()][0] : counted.get(canonical(entry.model));
             const plain = canonical(entry.model);
-            const before = reported.get(plain);
             const costUsd = entry.costUsd ?? (isKnownModel(plain) ? costOfRequest(plain, entry.tokens) : 0);
-            const more: Tokens = {
-              inputTokens: Math.max(0, entry.tokens.inputTokens - (before?.inputTokens ?? 0)),
-              outputTokens: Math.max(0, entry.tokens.outputTokens - (before?.outputTokens ?? 0)),
-              cacheReadTokens: Math.max(0, entry.tokens.cacheReadTokens - (before?.cacheReadTokens ?? 0)),
-              cacheWriteTokens: Math.max(0, entry.tokens.cacheWriteTokens - (before?.cacheWriteTokens ?? 0)),
-            };
+            const more = beyond(entry.tokens, before ?? NO_TOKENS);
             const moreCost = Math.max(0, costUsd - (before?.costUsd ?? 0));
-            if (moreCost > 0 || entry.webSearches > 0 || Object.values(more).some((n) => n > 0)) report(entry.model, more, moreCost, { webSearches: entry.webSearches });
+            if (moreCost > 0 || entry.webSearches > 0 || any(more)) report(entry.model, more, moreCost, { webSearches: entry.webSearches });
           }
           // A run that gives only a total is settled to that total, under the model that was asked for.
           if (!exact.length) {
-            const counted = [...reported.values()].reduce((sum, r) => sum + r.costUsd, 0);
-            const missing = num(event.total_cost_usd) - counted;
-            if (missing > 0) report(req.model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, missing, { webSearches: 0 });
+            const missing = num(event.total_cost_usd) - [...counted.values()].reduce((sum, c) => sum + c.costUsd, 0);
+            if (missing > 0) report(req.model, NO_TOKENS, missing, { webSearches: 0 });
           }
         }
       };
 
+      const done = (code: number | null, signal: NodeJS.Signals | null) => {
+        if (settled) return;
+        finish();
+        resolve({ result, code, signal, stderr, lastText, turns: replies.size, killed });
+      };
       child.on('error', (err: NodeJS.ErrnoException) => {
         if (settled) return;
         finish();
@@ -684,7 +810,7 @@ export class ClaudeCodeProvider implements Provider {
           if (!line) continue;
           try {
             const event: unknown = JSON.parse(line);
-            if (isObject(event)) handle(event);
+            if (isObject(event)) onEvent(event);
           } catch {
             // A line that is not an event is nothing this program can act on.
           }
@@ -693,30 +819,29 @@ export class ClaudeCodeProvider implements Provider {
       child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
         if (stderr.length < 20_000) stderr += chunk;
       });
-      child.on('close', (code, signal) => {
-        if (settled) return;
-        finish();
-        resolve({ result, code, signal, stderr, lastText, turns: seen.size, killed });
+      // The run is over when the process is. What it had still to say is waited for, but not for long: something
+      // it started may be holding its output open.
+      child.on('exit', (code, signal) => {
+        drain = setTimeout(() => done(code, signal), 500);
       });
+      child.on('close', done);
 
-      watch.onStart?.({ turns: () => seen.size, kill });
+      watch.onStart?.({ turns: () => replies.size, reply: () => lastReply, kill });
       child.stdin.end(req.prompt);
     });
   }
 
   /** The result of a run that ended as a run should, or the reason it did not, as an error the engine can act on. */
-  private settle(outcome: Outcome, options: { turnLimitIsAnEnd?: boolean } = {}): Json {
+  private settle(outcome: Outcome, model: string, options: { turnLimitIsAnEnd?: boolean } = {}): Json {
     if (outcome.killed === 'abort') throw new ProviderError('The call was stopped.', 'aborted', false);
+    if (outcome.killed === 'closed') throw new ProviderError('Claude Code was disconnected while this call was running.', 'auth', false);
     if (outcome.killed === 'idle') {
       throw new ProviderError(`Claude Code said nothing for ${Math.round(this.idleTimeoutMs / 60_000)} minutes and was stopped.`, 'unavailable', true);
     }
+    if (outcome.killed === 'no_tools') throw new ProviderError('The run could not reach the organisation’s tools, so it was stopped before it did anything.', 'unavailable', true);
     if (outcome.killed === 'extra_usage') {
-      const resets = this.lastLimits?.resetsAt ? ` The limit resets on ${this.lastLimits.resetsAt.slice(0, 16).replace('T', ' at ')} UTC.` : '';
-      throw new ProviderError(
-        `Your Claude plan's included usage is used up, and Claude Code has started to bill further usage as extra. The organisation is paused so that it does not spend money without your say-so.${resets} Resume it then, move it to another model, or start the server with CLAUDE_CODE_EXTRA_USAGE=allow to let it carry on at your expense.`,
-        'rate_limit',
-        false,
-      );
+      const all = this.held.get('*') ?? 0;
+      throw all > Date.now() ? this.billed('*', all) : this.billed(model, Math.max(this.held.get(canonical(model)) ?? 0, Date.now()));
     }
     const result = outcome.result;
     if (!result) {
@@ -737,10 +862,15 @@ export class ClaudeCodeProvider implements Provider {
     }
     const said = brief(text(result.result) || (Array.isArray(result.errors) ? result.errors.map(String).join('; ') : '') || 'It gave no reason.', 600);
     const status = num(result.api_error_status);
+    // The kinds of refusal Claude Code names for itself, wherever in the result it names them.
+    const whole = JSON.stringify(result);
+    if (/model_requires_usage_credits|long_context_credits_required/.test(whole)) {
+      throw new ProviderError(`Claude Code would have to bill this call to paid usage, which your plan does not cover: ${said} The organisation is paused. Move it to another model, or allow the usage in Claude Code yourself and resume.`, 'rate_limit', false);
+    }
     if (status === 401 || status === 403 || /not logged in|\/login|authentication/i.test(said)) {
       throw new ProviderError(`Claude Code's login was not accepted: ${said} Run "claude" in a terminal, sign in again, then resume.`, 'auth', false);
     }
-    if (status === 429 || /usage limit|hit your (?:\w+ )?limit|limit reached|rate limit/i.test(said)) {
+    if (status === 429 || /usage_limit_reached/.test(whole) || /usage limit|hit your (?:\w+ )?limit|limit reached|rate limit/i.test(said)) {
       throw new ProviderError(`Claude Code has reached a usage limit of your plan: ${said} The organisation is paused. Resume it once the limit has reset, or move it to another model.`, 'rate_limit', false);
     }
     if (status === 404) throw new ProviderError(`Claude Code could not use that model on this login: ${said}`, 'bad_request', false);
@@ -764,7 +894,7 @@ export class ClaudeCodeProvider implements Provider {
       },
     });
     if (outcome.killed === 'answered' && mended) return (mended as { data: T }).data;
-    const result = this.settle(outcome);
+    const result = this.settle(outcome, req.model);
     let data: unknown = result.structured_output;
     if (data === undefined) {
       // No structured answer was recorded. What the model said instead may still be one.
@@ -795,7 +925,8 @@ export class ClaudeCodeProvider implements Provider {
 
     let live: Live | null = null;
     let stopped = false;
-    let wrappingUp = false;
+    /** The reply in which the agent was told to stop and report, once it has been. */
+    let toldIn: string | null | undefined;
     /** Tools run one at a time, in the order asked for, as they do on every other provider. */
     let queue: Promise<unknown> = Promise.resolve();
     const call = (name: string, input: unknown) => {
@@ -805,26 +936,33 @@ export class ClaudeCodeProvider implements Provider {
           live?.kill('stop');
           return { text: 'The run has been stopped.', isError: true };
         }
-        if (wrappingUp) return { text: WRAP_UP, isError: true };
-        const tool = req.tools.find((t) => t.name === name);
-        if (!tool) return { text: `Unknown tool: ${name}`, isError: true };
-        const parsed = tool.schema.safeParse(input);
-        if (!parsed.success) {
-          const issue = parsed.error.issues[0];
-          return { text: `That is not an input ${name} takes (${issue?.path.join('.') || 'input'}: ${issue?.message}). Call it again with the input corrected.`, isError: true };
+        const reply = live?.reply() ?? null;
+        if (toldIn !== undefined && reply !== toldIn) {
+          // Told to stop, the agent has gone on to use a tool in a later reply. The run ends here, with whatever it last said.
+          live?.kill('wrapped');
+          return { text: WRAP_UP, isError: true };
         }
-        let said: string;
-        try {
-          said = await tool.run(parsed.data);
-        } catch (err) {
-          return { text: `Error: ${(err as Error).message}`, isError: true };
+        const outcome = await (async (): Promise<{ text: string; isError: boolean }> => {
+          const tool = req.tools.find((t) => t.name === name);
+          if (!tool) return { text: `Unknown tool: ${name}`, isError: true };
+          const parsed = tool.schema.safeParse(input);
+          if (!parsed.success) {
+            const issue = parsed.error.issues[0];
+            return { text: `That is not an input ${name} takes (${issue?.path.join('.') || 'input'}: ${issue?.message}). Call it again with the input corrected.`, isError: true };
+          }
+          try {
+            return { text: await tool.run(parsed.data), isError: false };
+          } catch (err) {
+            return { text: `Error: ${(err as Error).message}`, isError: true };
+          }
+        })();
+        // Instructions to the agent mid-run ride on a tool result, whether the call worked or not: it is the one
+        // thing the agent is sure to read next. Other calls made in the same reply are still carried out.
+        if (toldIn !== undefined || (live?.turns() ?? 0) >= req.maxTurns || req.shouldWrapUp?.()) {
+          toldIn ??= reply;
+          return { text: `${outcome.text}\n\n${WRAP_UP}`, isError: outcome.isError };
         }
-        // Instructions to the agent mid-run ride on a tool result: it is the one thing the agent is sure to read next.
-        if ((live?.turns() ?? 0) >= req.maxTurns || req.shouldWrapUp?.()) {
-          wrappingUp = true;
-          return { text: `${said}\n\n${WRAP_UP}`, isError: false };
-        }
-        return { text: said, isError: false };
+        return outcome;
       });
       queue = next.catch(() => {});
       return next;
@@ -849,15 +987,16 @@ export class ClaudeCodeProvider implements Provider {
           '--max-turns',
           String(req.maxTurns + TURN_SLACK),
         ],
-        { onStart: (started) => (live = started) },
+        { onStart: (started) => (live = started), needsTools: true },
       );
     } finally {
       tools.close();
       await fs.rm(told, { force: true });
     }
     if (stopped || outcome.killed === 'stop') return { text: '', turns: outcome.turns, stopped: 'interrupted' };
-    const result = this.settle(outcome, { turnLimitIsAnEnd: true });
+    if (outcome.killed === 'wrapped') return { text: outcome.lastText.trim(), turns: outcome.turns, stopped: 'cut_short' };
+    const result = this.settle(outcome, req.model, { turnLimitIsAnEnd: true });
     if (result.subtype === 'error_max_turns') return { text: outcome.lastText.trim(), turns: outcome.turns, stopped: 'cut_short' };
-    return { text: (text(result.result) || outcome.lastText).trim(), turns: outcome.turns, stopped: wrappingUp ? 'cut_short' : 'done' };
+    return { text: (text(result.result) || outcome.lastText).trim(), turns: outcome.turns, stopped: toldIn !== undefined ? 'cut_short' : 'done' };
   }
 }

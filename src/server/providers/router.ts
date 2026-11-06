@@ -149,7 +149,7 @@ export class ProviderRouter implements Provider {
         tier: m.tier,
         hosted: api,
         web: api,
-        ...(api ? {} : { note: 'On your Claude Code login: spend is counted at these API prices, and on a subscription none of it is billed.' }),
+        ...(api ? {} : { note: 'On your Claude Code login: spend is counted at these API prices. A subscription is not billed for it; if Claude Code says a call is being billed, the organisation pauses.' }),
       }));
     }
     const listed = new Map<string, ListedModel>(connection.models.map((m) => [m.id, m]));
@@ -534,7 +534,9 @@ export class ProviderRouter implements Provider {
     const updated = await this.store.update(id, (c) => {
       // The key may have been changed while the provider was answering for the old one. Its answer is then of no use.
       if (c.apiKey === looked.apiKey && c.baseURL === looked.baseURL) {
-        Object.assign(c, { models: looked.models, checkedAt: looked.checkedAt, listingError: looked.listingError, ...(looked.detail ? { detail: looked.detail } : {}) });
+        Object.assign(c, { models: looked.models, checkedAt: looked.checkedAt, listingError: looked.listingError });
+        if (looked.detail) c.detail = looked.detail;
+        else delete c.detail;
       }
     });
     if (!updated) throw new ValidationError('There is no such connection.');
@@ -549,7 +551,10 @@ export class ProviderRouter implements Provider {
     if (this.options.forceMock) return;
     await Promise.all(
       this.store.list().map(async (connection) => {
-        if (connection.checkedAt && Date.now() - Date.parse(connection.checkedAt) < maxAgeMs) return;
+        // Claude Code is asked every time: it costs nothing, and whether it can be used may have changed with how
+        // the server was started.
+        const local = this.preset(connection).kind === 'claude-code';
+        if (!local && connection.checkedAt && Date.now() - Date.parse(connection.checkedAt) < maxAgeMs) return;
         await this.refresh(connection.id).catch(() => {});
       }),
     );
@@ -573,6 +578,8 @@ export class ProviderRouter implements Provider {
         const message = err instanceof Error ? err.message : String(err);
         if (adding) throw new ValidationError(message);
         connection.listingError = message;
+        // What it was found to be last time is no longer known to be so.
+        delete connection.detail;
       }
       connection.models = [];
       connection.checkedAt = new Date().toISOString();

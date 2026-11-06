@@ -78,8 +78,13 @@ export class ConnectionStore {
         throw new Error(`${this.file} cannot be read: it is not valid JSON. Repair it, or move it aside and add the keys again, then start the server.`);
       }
       // A connection is a key for an address, or, for Claude Code, the program on this machine, which has neither.
-      const placed = (c: Connection) => !!address(String(c.baseURL ?? '')) || presetById(c.presetId)?.kind === 'claude-code';
-      this.stored = Array.isArray(parsed.connections) ? parsed.connections.filter((c) => c && ID.test(c.id) && typeof c.apiKey === 'string' && placed(c)).map(tidy) : [];
+      const local = (c: Connection) => presetById(c.presetId)?.kind === 'claude-code';
+      const kept = (c: Connection) => (local(c) ? true : typeof c.apiKey === 'string' && !!address(String(c.baseURL ?? '')));
+      this.stored = Array.isArray(parsed.connections)
+        ? parsed.connections
+            .filter((c) => c && ID.test(c.id) && kept(c))
+            .map((c) => tidy(local(c) ? { ...c, apiKey: '', baseURL: '' } : c))
+        : [];
       this.remembered = parsed.environment && typeof parsed.environment === 'object' ? parsed.environment : {};
       this.everHadKeys = parsed.hadKeys === true || this.stored.length > 0;
     }

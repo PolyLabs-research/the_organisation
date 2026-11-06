@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -149,6 +149,7 @@ describe('the environment a run of Claude Code is given', () => {
       CLAUDE_EFFORT: 'max',
       CLAUDE_PID: '5060',
       CLAUDE_CONFIG_DIR: '/home/someone/.claude-work',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: '/home/someone/.claude-secure',
       CLAUDE_CODE_OAUTH_TOKEN: 'long-lived-token',
       UNSET: undefined,
     });
@@ -157,6 +158,7 @@ describe('the environment a run of Claude Code is given', () => {
       HOME: '/home/someone',
       HTTPS_PROXY: 'http://proxy.example:3128',
       CLAUDE_CONFIG_DIR: '/home/someone/.claude-work',
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: '/home/someone/.claude-secure',
       CLAUDE_CODE_OAUTH_TOKEN: 'long-lived-token',
       // Nothing of the person's own instructions or memory goes into a seat's prompt, and nothing is left running.
       CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
@@ -218,11 +220,14 @@ describe('one call through Claude Code', () => {
     expect(run!.envNames).not.toContain('CLAUDE_CODE_SESSION_ID');
     expect(run!.envNames).toContain('CLAUDE_CODE_DISABLE_CLAUDE_MDS');
 
-    // Spend is counted as the reply starts, and made exact when the run says what it came to.
-    expect(usage.map((u) => u.model)).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5']);
-    expect(usage[0]).toMatchObject({ inputTokens: 2000, outputTokens: 24 });
-    // What settles the run is more spend on the reply already counted, not a second reply.
-    expect(usage.map((u) => u.adjustment ?? false)).toEqual([false, true]);
+    // Spend is counted as the reply starts, again as more of it is known, and made exact when the run says what it came to.
+    expect(new Set(usage.map((u) => u.model))).toEqual(new Set(['claude-haiku-5-5']));
+    expect(usage[0]).toMatchObject({ inputTokens: 2000, outputTokens: 1 });
+    // One reply was given. Everything after the first word on it is more spend on that reply, not another reply.
+    expect(usage.map((u) => u.adjustment ?? false)).toEqual([false, ...Array(usage.length - 1).fill(true)]);
+    expect(usage.length).toBeGreaterThan(2);
+    // The run asked for each reply's size as the reply ends.
+    expect(run!.flags['--include-partial-messages']).toBe(true);
     const total = usage.reduce((sum, u) => ({ input: sum.input + u.inputTokens, output: sum.output + u.outputTokens, cost: sum.cost + u.costUsd }), { input: 0, output: 0, cost: 0 });
     expect(total.input).toBe(2000);
     expect(total.output).toBe(500);
@@ -304,12 +309,11 @@ describe('one call through Claude Code', () => {
     const began = Date.now();
     const data = await provider({ FAKE_CLAUDE_MODE: 'swallow' }).structured({ kind: 'report', system: SYSTEM, prompt: 'Report to the board.', model: 'claude-haiku-5-5', effort: 'low', schema: Report, context: {}, onUsage: (u: CallUsage) => usage.push(u) });
     expect(data).toEqual({ headline: 'Settled.', summary: 'Settled.', outcomes: ['Settled.'], asks: ['Settled.'] });
-    expect(Date.now() - began).toBeLessThan(1500);
+    // Left to itself the run would ask five times, over six seconds.
+    expect(Date.now() - began).toBeLessThan(3000);
     // One reply was paid for, and counted: its input as reported, its output by the length of what it wrote.
-    expect(usage.map((u) => [u.inputTokens, u.adjustment ?? false])).toEqual([
-      [2000, false],
-      [0, true],
-    ]);
+    expect(usage.filter((u) => !u.adjustment)).toHaveLength(1);
+    expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2000);
     expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBeGreaterThan(24);
     // An answer that is wrong in itself is still refused.
     expect((await failure(provider({ FAKE_CLAUDE_MODE: 'invalid' }).structured(ask()))).code).toBe('invalid_output');
@@ -344,14 +348,42 @@ describe('one call through Claude Code', () => {
   });
 
   it('pauses rather than carry on into paid extra usage, unless told it may', async () => {
-    const guarded = provider({ FAKE_CLAUDE_MODE: 'extra', FAKE_CLAUDE_EXTRA_WAIT_MS: '3000' });
-    const error = await failure(guarded.structured(ask()));
-    expect([error.code, error.retryable]).toEqual(['rate_limit', false]);
-    expect(error.message).toMatch(/has started to bill further usage as extra\. The organisation is paused so that it does not spend money without your say-so\..*CLAUDE_CODE_EXTRA_USAGE=allow/);
+    const guarded = provider({ FAKE_CLAUDE_MODE: 'extra-once', FAKE_CLAUDE_EXTRA_WAIT_MS: '3000' });
+    // Two runs are in flight when one of them hears that the plan's included usage is spent. Both are ended,
+    // the one that heard nothing as well: its next reply would have been billed.
+    const [error, other] = await Promise.all([failure(guarded.structured(ask())), failure(guarded.structured(ask({ model: 'claude-sonnet-5-5' })))]);
+    expect([error.code, error.retryable, other.code, other.retryable]).toEqual(['rate_limit', false, 'rate_limit', false]);
+    expect(error.message).toMatch(/has started to bill further usage as extra\. The organisation is paused so that it does not spend money without your say-so\. Nothing more is run on this login until 2026-11-11 at 01:00 UTC.*CLAUDE_CODE_EXTRA_USAGE=allow/);
     expect(guarded.limits()).toMatchObject({ usingExtra: true, extraAllowed: true, utilization: 1, window: 'seven_day' });
+    // And nothing more is started on the login, on any model, until the limit is due to reset: resuming costs nothing.
+    const before = (await runs()).length;
+    expect((await failure(guarded.structured(ask()))).message).toMatch(/Nothing more is run on this login until/);
+    expect((await failure(guarded.agent(task({ tools: tools().tools, model: 'claude-opus-5-5' })))).code).toBe('rate_limit');
+    expect((await runs()).length).toBe(before);
 
     const allowed = provider({ FAKE_CLAUDE_MODE: 'extra', FAKE_CLAUDE_EXTRA_WAIT_MS: '10' }, { extraUsage: true });
     expect(await allowed.structured(ask())).toEqual({ proposal: 'Settled.', priority: 'high' });
+    expect(await allowed.structured(ask())).toEqual({ proposal: 'Settled.', priority: 'high' });
+  });
+
+  it('pauses when a model is billed to paid usage though the plan has plenty left, and holds only that model', async () => {
+    // Claude Code has a second word for this, which says nothing about the plan being spent.
+    const guarded = provider({ FAKE_CLAUDE_MODE: 'credits', FAKE_CLAUDE_EXTRA_WAIT_MS: '3000' });
+    const error = await failure(guarded.structured(ask({ model: 'claude-fable-5-1' })));
+    expect([error.code, error.retryable]).toEqual(['rate_limit', false]);
+    expect(error.message).toMatch(/this model is being billed to paid usage, not counted against your plan\. The organisation is paused.*Nothing more is run on this model until/);
+    expect(guarded.limits()).toMatchObject({ usingExtra: true, utilization: 0.3 });
+    const before = (await runs()).length;
+    expect((await failure(guarded.structured(ask({ model: 'claude-fable-5-1' })))).code).toBe('rate_limit');
+    expect((await runs()).length).toBe(before);
+    // Another model on the same login is not held: it is started, and judged on what Claude Code says of it.
+    await failure(guarded.structured(ask({ model: 'claude-haiku-5-5' })));
+    expect((await runs()).length).toBe(before + 1);
+
+    // A model the plan does not cover, on a login that has not agreed to pay for it, is refused by Claude Code itself.
+    const refused = await failure(provider({ FAKE_CLAUDE_MODE: 'needscredits' }).structured(ask({ model: 'claude-fable-5-1' })));
+    expect([refused.code, refused.retryable]).toEqual(['rate_limit', false]);
+    expect(refused.message).toMatch(/would have to bill this call to paid usage, which your plan does not cover: This model needs usage credits\./);
   });
 });
 
@@ -436,6 +468,84 @@ describe('an agent run through Claude Code', () => {
     // Claude Code's own limit is the backstop behind that, and ends the run with whatever was said last.
     const backstop = await provider({ FAKE_CLAUDE_MODE: 'maxturns' }).agent(task({ tools: tools().tools }));
     expect(backstop).toMatchObject({ stopped: 'cut_short', text: '' });
+
+    // An agent that takes no notice is not left to run on: the next time it uses a tool, in a later reply, the run is ended.
+    const deaf = tools();
+    const ignored = await provider({ FAKE_CLAUDE_MODE: 'stubborn' }).agent(task({ tools: deaf.tools, shouldWrapUp: () => deaf.calls.length >= 2 }));
+    expect(ignored.stopped).toBe('cut_short');
+    expect(deaf.calls).toHaveLength(2);
+    expect(ignored.turns).toBe(3);
+
+    // An agent whose calls keep failing is told all the same: the notice rides on a refusal as it does on a result.
+    const failing = tools();
+    let asked = 0;
+    const told = await provider({ FAKE_CLAUDE_MODE: 'badloop' }).agent(task({ tools: failing.tools, shouldWrapUp: () => ++asked > 2 }));
+    expect(told).toMatchObject({ stopped: 'cut_short', text: 'Stopped as told, with nothing written.' });
+    expect(failing.calls).toEqual([]);
+    // Two calls that failed, the second of them carrying the notice, and the closing report.
+    expect(told.turns).toBe(3);
+
+    // Tools asked for together, in the reply that reaches the limit, are all carried out, as on every other provider.
+    const three = tools();
+    const together = await provider({ FAKE_CLAUDE_MODE: 'parallel' }).agent(task({ tools: three.tools, maxTurns: 1 }));
+    expect(three.calls.map(([, input]) => input.path)).toEqual(['shared/a.md', 'shared/b.md', 'shared/c.md']);
+    expect(together.stopped).toBe('cut_short');
+    expect(together.text.match(/You have to stop here/g)).toHaveLength(3);
+  });
+
+  it('counts each reply in full as it ends, so that a run cut off has been paid for up to the reply it was cut off in', async () => {
+    const kit = tools();
+    const usage: CallUsage[] = [];
+    const halted = await provider({ FAKE_CLAUDE_MODE: 'loop' }).agent(task({ tools: kit.tools, shouldStop: () => kit.calls.length >= 2, onUsage: (u) => usage.push(u) }));
+    expect(halted.stopped).toBe('interrupted');
+    // Two replies had ended and a third had begun. The two are counted whole, the third as far as it had got.
+    expect(usage.filter((u) => !u.adjustment)).toHaveLength(3);
+    expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(6000);
+    expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(1005);
+  });
+
+  it('settles a run to its own account when the model goes by another name there', async () => {
+    const usage: CallUsage[] = [];
+    await provider({ FAKE_CLAUDE_MODE: 'renamed' }).structured(ask({ onUsage: (u) => usage.push(u) }));
+    // One model in the run and one in its account: the same model, counted once.
+    expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2000);
+    expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(500);
+    expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.01, 9);
+  });
+
+  it('ends a run that could not reach its tools, and the runs in flight when the connection is closed', async () => {
+    const lost = await failure(provider({ FAKE_CLAUDE_MODE: 'notools' }).agent(task({ tools: tools().tools })));
+    expect([lost.code, lost.retryable]).toEqual(['unavailable', true]);
+    expect(lost.message).toMatch(/could not reach the organisation’s tools/);
+
+    const closing = provider({ FAKE_CLAUDE_MODE: 'hang' });
+    const hung = closing.agent(task({ tools: tools().tools }));
+    await waitFor(() => existsSync(log) && readFileSync(log, 'utf8').includes('"mode":"hang"'), 'the run to start');
+    closing.close();
+    const error = await failure(hung);
+    expect([error.code, error.message]).toEqual(['auth', 'Claude Code was disconnected while this call was running.']);
+  });
+
+  it('ends whatever the command started along with it, when the command is a script around the real one', async () => {
+    const wrapper = path.join(dir, 'claude-wrapper.sh');
+    // No "exec": the script waits on the program, as a wrapper someone wrote for their own set-up might.
+    writeFileSync(wrapper, `#!/bin/sh\n"${FAKE}" "$@"\n`, { mode: 0o755 });
+    const cut = new AbortController();
+    const hung = provider({ FAKE_CLAUDE_MODE: 'hang' }, { command: wrapper }).structured(ask({ signal: cut.signal }));
+    await waitFor(() => existsSync(log), 'the run to start');
+    const pid = (await runs()).at(-1)! as Run & { pid: number };
+    const began = Date.now();
+    cut.abort();
+    expect((await failure(hung)).code).toBe('aborted');
+    expect(Date.now() - began).toBeLessThan(3000);
+    await waitFor(() => {
+      try {
+        process.kill(pid.pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 'the program behind the script to end');
   });
 
   it('ends the run at once when the organisation is halted, and starts none when it already is', async () => {
@@ -485,7 +595,7 @@ describe('the Claude Code connection', () => {
       ['claude-code:claude-sonnet-5-5', 'Claude Code', false, false, true],
       ['claude-code:claude-haiku-5-5', 'Claude Code', false, false, true],
     ]);
-    expect(router.info().models[0]!.note).toContain('on a subscription none of it is billed');
+    expect(router.info().models[0]!.note).toContain('if Claude Code says a call is being billed, the organisation pauses');
     expect(router.knows('claude-code:claude-haiku-5-5')).toBe(true);
     // Neither hosted sessions nor web search are to be had through it.
     expect(router.hosts('claude-code:claude-opus-5-5', 'claude-code:claude-opus-5-5')).toBe(false);
@@ -501,6 +611,12 @@ describe('the Claude Code connection', () => {
     expect(again.list().map((c) => [c.id, c.apiKey, c.baseURL, c.detail])).toEqual([['claude-code', '', '', 'Claude Code 2.1.317, signed in with a Claude Max plan']]);
     expect(JSON.parse(await readFile(path.join(dir, 'connections.json'), 'utf8')).hadKeys).toBe(true);
     expect(store.hadKeys).toBe(true);
+
+    // An entry written by hand, with nothing but what it is, is kept too: it must not fall back to the simulator.
+    await writeFile(path.join(dir, 'connections.json'), JSON.stringify({ version: 1, connections: [{ id: 'claude-code', presetId: 'claude-code', label: 'Claude Code', baseURL: 'https://left.over' }] }));
+    const byHand = await connections();
+    expect(byHand.store.list().map((c) => [c.id, c.apiKey, c.baseURL])).toEqual([['claude-code', '', '']]);
+    expect(byHand.router.simulated).toBe(false);
   });
 
   it('is never what a new organisation starts on while there is a key', async () => {
@@ -554,6 +670,18 @@ describe('the Claude Code connection', () => {
     const looked = await router.refresh('claude-code');
     expect(looked).toMatchObject({ detail: 'Claude Code 2.1.317, signed in with a Claude Max plan', listingError: null });
     expect(looked.checkedAt).not.toBeNull();
+
+    // Signed out since, it says so when looked at again, and no longer says how it was signed in.
+    const signedOut = await connections({}, { env: fakeEnv({ FAKE_CLAUDE_AUTH: '{"loggedIn":false}' }) });
+    const stale = await signedOut.router.refresh('claude-code');
+    expect(stale.listingError).toMatch(/installed but not signed in.*try again here/);
+    expect(stale.detail).toBeUndefined();
+    expect(signedOut.router.info().connections![0]).not.toHaveProperty('detail');
+    // It is asked afresh every time the server starts, however lately it was last asked.
+    const again = await connections();
+    expect(again.store.get('claude-code')!.listingError).toMatch(/not signed in/);
+    await again.router.refreshStale();
+    expect(again.store.get('claude-code')).toMatchObject({ listingError: null, detail: 'Claude Code 2.1.317, signed in with a Claude Max plan' });
 
     // A call goes to the command, under the name the organisation knows the model by.
     const usage: CallUsage[] = [];

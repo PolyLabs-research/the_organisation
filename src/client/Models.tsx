@@ -131,7 +131,8 @@ function KeyCard({ connection, preset, models, onView }: { connection: Connectio
       {login ? (
         <p className="muted">
           Each call is a run of Claude Code on this machine, with none of your own Claude Code settings, plugins or memory, and no tools but the organisation’s own. Spend is counted at what the
-          API would charge; on a subscription none of it is billed, and it counts against your plan’s limits. {connection.usage}
+          API would charge. A subscription is not billed for it: it counts against your plan’s limits, and if Claude Code says a call is being billed after all, the organisation pauses.{' '}
+          {connection.usage}
         </p>
       ) : null}
       {connection.listingError ? <p className="note note-warn">{connection.listingError}</p> : null}

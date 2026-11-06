@@ -13,15 +13,25 @@
 // What it does is steered through the environment:
 //   FAKE_CLAUDE_LOG      a file to append one JSON line to for each run
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
-//                        | silent | extra | loop | maxturns | nostructured | invalid | refusal | badinput | swallow
+//                        | silent | extra | extra-once | credits | needscredits | loop | stubborn | badloop | parallel | notools
+//                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const argv = process.argv.slice(2);
 const env = process.env;
 const VERSION = env.FAKE_CLAUDE_VERSION ?? '2.1.317';
-const MODE = env.FAKE_CLAUDE_MODE ?? 'follow';
+let MODE = env.FAKE_CLAUDE_MODE ?? 'follow';
+if (MODE === 'extra-once') {
+  // Of runs started together, one hears that the plan is spent. The others say nothing more, and wait.
+  try {
+    writeFileSync(`${env.FAKE_CLAUDE_LOG}.once`, '', { flag: 'wx' });
+    MODE = 'extra';
+  } catch {
+    MODE = 'hang';
+  }
+}
 
 if (argv[0] === '--version') {
   console.log(`${VERSION} (Claude Code)`);
@@ -36,7 +46,7 @@ if (argv[0] === 'auth' && argv[1] === 'status') {
 // ---- a run ----
 
 const VALUED = new Set(['--output-format', '--model', '--effort', '--system-prompt-file', '--json-schema', '--mcp-config', '--allowedTools', '--max-turns', '--tools', '--permission-prompts']);
-const BARE = new Set(['-p', '--verbose', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--disable-slash-commands']);
+const BARE = new Set(['-p', '--verbose', '--include-partial-messages', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--disable-slash-commands']);
 const flags = {};
 for (let i = 0; i < argv.length; i++) {
   const name = argv[i];
@@ -74,26 +84,38 @@ const server = Object.entries(servers).find(([, s]) => s.type === 'http' && s.ur
 if (env.FAKE_CLAUDE_LOG) {
   appendFileSync(
     env.FAKE_CLAUDE_LOG,
-    `${JSON.stringify({ argv, flags, prompt, system, cwd: process.cwd(), envNames: Object.keys(env).sort(), mode: MODE })}\n`,
+    `${JSON.stringify({ argv, flags, prompt, system, cwd: process.cwd(), envNames: Object.keys(env).sort(), mode: MODE, pid: process.pid })}\n`,
   );
 }
 
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 const session = 'fake-session';
 let messages = 0;
-/** What one reply cost: its input in full when it starts, and only a little of its output, as the real stream reports it. */
+const partial = !!flags['--include-partial-messages'];
+/** The end of the reply before, which the real stream tells late: after the tools the reply called have answered. */
+let ending = null;
+const endReply = () => {
+  if (!ending) return;
+  const id = ending;
+  ending = null;
+  if (partial) emit({ type: 'stream_event', session_id: session, api_message_id: id, event: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 2000, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
+};
+/** One reply: its input in full when it starts and only a little of its output, as the real stream reports it, and its whole size when it ends. */
 const reply = (content, partialOut = 5) => {
+  endReply();
   messages += 1;
-  emit({
-    type: 'assistant',
-    session_id: session,
-    message: { id: `msg_${messages}`, type: 'message', role: 'assistant', model, content, stop_reason: null, usage: { input_tokens: 2000, output_tokens: partialOut, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
-  });
+  const id = `msg_${messages}`;
+  const usage = { input_tokens: 2000, output_tokens: partialOut, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  if (partial) emit({ type: 'stream_event', session_id: session, event: { type: 'message_start', message: { id, type: 'message', role: 'assistant', model, content: [], usage: { ...usage, output_tokens: 1 } } } });
+  emit({ type: 'assistant', session_id: session, message: { id, type: 'message', role: 'assistant', model, content, stop_reason: null, usage } });
+  ending = id;
 };
 const limits = (more = {}) =>
   emit({ type: 'rate_limit_event', session_id: session, rate_limit_info: { status: 'allowed', resetsAt: 1794358800, rateLimitType: 'seven_day', utilization: 0.25, overageStatus: 'rejected', isUsingOverage: false, overageEnabled: false, ...more } });
 const finish = (more = {}) => {
-  const exact = { inputTokens: 2000 * messages, outputTokens: 500 * messages, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.01 * messages, canonicalModel: model };
+  endReply();
+  const named = MODE === 'renamed' ? 'some-other-name-for-it' : model;
+  const exact = { inputTokens: 2000 * messages, outputTokens: 500 * messages, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.01 * messages, canonicalModel: named };
   emit({
     type: 'result',
     subtype: 'success',
@@ -107,7 +129,7 @@ const finish = (more = {}) => {
     permission_denials: [],
     total_cost_usd: exact.costUSD,
     usage: { input_tokens: exact.inputTokens, output_tokens: exact.outputTokens, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-    modelUsage: messages ? { [model]: exact } : {},
+    modelUsage: messages ? { [named]: exact } : {},
     ...more,
   });
 };
@@ -189,7 +211,7 @@ async function main() {
     apiKeySource: 'none',
     claude_code_version: VERSION,
     tools: [...(schema ? ['StructuredOutput'] : []), ...tools.map((t) => `mcp__${server[0]}__${t.name}`)],
-    mcp_servers: server ? [{ name: server[0], status: 'connected' }] : [],
+    mcp_servers: server ? [{ name: server[0], status: MODE === 'notools' ? 'failed' : 'connected' }] : [],
   });
 
   switch (MODE) {
@@ -207,6 +229,18 @@ async function main() {
     // eslint-disable-next-line no-fallthrough
     case 'hang':
       return new Promise(() => setInterval(() => {}, 1000));
+    case 'needscredits':
+      // A model the plan does not cover, on a login that has not agreed to pay for it.
+      emit({ type: 'assistant', session_id: session, message: { id: 'synthetic', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'This model needs usage credits.' }], usage: {} } });
+      finish({ is_error: true, result: 'This model needs usage credits.', api_error_status: 403, api_error_kind: 'model_requires_usage_credits', terminal_reason: 'api_error', total_cost_usd: 0, modelUsage: {} });
+      process.exit(1);
+    // eslint-disable-next-line no-fallthrough
+    case 'credits':
+      // A reply billed to paid usage while the plan itself has plenty left, as some models are.
+      reply([{ type: 'text', text: 'Working.' }]);
+      limits({ status: 'allowed', utilization: 0.3, overageStatus: 'allowed', overageEnabled: true, isUsingOverage: false, overageInUse: true });
+      await new Promise((resolve) => setTimeout(resolve, Number(env.FAKE_CLAUDE_EXTRA_WAIT_MS ?? 300)));
+      break;
     case 'extra':
       reply([{ type: 'text', text: 'Working.' }]);
       limits({ status: 'allowed', utilization: 1, overageStatus: 'allowed', overageEnabled: true, isUsingOverage: true });
@@ -238,7 +272,7 @@ async function main() {
       for (let attempt = 0; attempt < 5; attempt++) {
         reply([{ type: 'tool_use', id: `toolu_slip_${attempt}`, name: 'StructuredOutput', input: slipped }], 24);
         emit({ type: 'user', session_id: session, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_slip_${attempt}`, content: `Output does not match required schema: root: must have required property '${next}'`, is_error: true }] } });
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 1200));
       }
       return finish({ subtype: 'error_max_structured_output_retries', is_error: true, result: null, errors: ['Failed to provide valid structured output after 5 attempts'], stop_reason: 'tool_use' });
     }
@@ -268,6 +302,36 @@ async function main() {
     limits();
     reply([{ type: 'text', text: 'Stopped as told. Nothing is finished.' }]);
     return finish({ result: 'Stopped as told. Nothing is finished.' });
+  }
+  if (MODE === 'notools') {
+    // The real command carries on without a tool server that did not connect, and the model answers in words.
+    reply([{ type: 'text', text: 'I have no tools here, but the note would say hello.' }]);
+    return finish({ result: 'I have no tools here, but the note would say hello.' });
+  }
+  if (MODE === 'stubborn') {
+    // An agent that takes no notice of being told to stop.
+    for (let i = 0; i < 40; i++) await useTool('list_files', {});
+    reply([{ type: 'text', text: 'Finally done.' }]);
+    return finish({ result: 'Finally done.' });
+  }
+  if (MODE === 'badloop') {
+    // An agent whose calls never work, which stops only when it is told to.
+    for (let i = 0; i < 40; i++) {
+      const refused = await useTool('write_file', { path: 7 });
+      if (/You have to stop here/.test(refused.text)) break;
+    }
+    reply([{ type: 'text', text: 'Stopped as told, with nothing written.' }]);
+    return finish({ result: 'Stopped as told, with nothing written.' });
+  }
+  if (MODE === 'parallel') {
+    // Three tools used in one reply, as a model may.
+    const ids = ['a', 'b', 'c'];
+    reply(ids.map((name) => ({ type: 'tool_use', id: `toolu_${name}`, name: `mcp__${server[0]}__write_file`, input: { path: `shared/${name}.md`, content: name } })));
+    const results = await Promise.all(ids.map((name, i) => rpc('tools/call', { name: 'write_file', arguments: { path: `shared/${name}.md`, content: name } }, 200 + i)));
+    emit({ type: 'user', session_id: session, message: { role: 'user', content: results.map((r, i) => ({ type: 'tool_result', tool_use_id: `toolu_${ids[i]}`, content: r.content, is_error: r.isError })) } });
+    const said = results.map((r) => r.content.map((c) => c.text).join('')).join(' | ');
+    reply([{ type: 'text', text: `Three files asked for: ${said}` }]);
+    return finish({ result: `Three files asked for: ${said}` });
   }
   if (MODE === 'badinput') {
     const refused = await useTool('write_file', { path: 7 });
