@@ -87,7 +87,7 @@ export function Wizard({ meta }: { meta: Meta }) {
   const [recommendationCost, setRecommendationCost] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [custom, setCustom] = useState({ title: '', function: '', remit: '', phases: '' });
-  const [settings, setSettings] = useState<OrgSettings>(meta.defaults);
+  const [settings, setSettings] = useState<OrgSettings>({ ...meta.defaults, reviewIntervalMinutes: 60 });
   const [fellBack, setFellBack] = useState(false);
   const [limitCycles, setLimitCycles] = useState(false);
   const [steer, setSteer] = useState('');
@@ -424,6 +424,7 @@ export function Wizard({ meta }: { meta: Meta }) {
               >
                 <input type="number" min={0.1} step={0.5} value={settings.budgetUsd} onChange={(e) => set('budgetUsd', Number(e.target.value))} />
               </Field>
+              <Field label="Minutes between operating reviews" hint="Wait between cycles without model calls. Incoming events and calendar dates wake it sooner. Zero runs continuously."><input type="number" min={0} max={43200} value={settings.reviewIntervalMinutes} onChange={(e) => set('reviewIntervalMinutes', Number(e.target.value))} /></Field>
               <Field label="Follow-up work per cycle" hint="How far one board report may set off further plans before the CEO takes stock.">
                 <select value={settings.maxFollowUpDepth} onChange={(e) => set('maxFollowUpDepth', Number(e.target.value))}>
                   <option value={0}>None: reports wait for the next cycle</option>

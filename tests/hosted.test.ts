@@ -29,6 +29,25 @@ class Scripted extends MockProvider {
 const planOf = (org: Organisation, ownerId = 'cto'): Plan => org.plans.find((p) => p.ownerId === ownerId)!;
 
 describe('a plan carried out in a hosted session', () => {
+  it('applies business updates at a phase gate once, including after a replay', async () => {
+    const provider = new Scripted(async (job) => {
+      job.hooks.session({ id: 'business-session', consoleUrl: null, budgetUsd: job.budgetUsd });
+      const phases = job.context.phases as Array<{ name: string }>;
+      const first = { phase: phases[0]!.name, summary: 'Reviewed the evidence.', decisions: [], operations: [{
+        kind: 'memory', record: { ownerId: 'cto', title: 'Hosted lesson', category: 'lesson', content: 'The phase gate keeps shared knowledge current.', source: 'Hosted check' },
+      }] };
+      expect(job.hooks.phase(first).ok).toBe(true);
+      expect(job.hooks.phase(first).ok).toBe(true);
+      for (const phase of phases.slice(1)) job.hooks.phase({ phase: phase.name, summary: 'Checked.', decisions: [] });
+      job.hooks.report({ headline: 'Delivered', summary: 'Checked in the scripted hosted session.', outcomes: [], asks: [] });
+      return { status: 'reported' };
+    });
+    h = await harness({ provider, settings: HOSTED, executives: ONE_LEAD });
+    await runToRest(h.runner);
+    expect(h.org.business.memory.filter((m) => m.title === 'Hosted lesson')).toHaveLength(1);
+    expect(h.org.business.jobs[0]!.status).toBe('review');
+  });
+
   it('runs every phase of the operating profile in one session per plan and reports to the board', async () => {
     h = await harness({ settings: HOSTED });
     await runToRest(h.runner);

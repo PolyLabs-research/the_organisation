@@ -16,10 +16,16 @@ export class Registry {
   ) {}
 
   async load(): Promise<void> {
+    const resume: OrgRunner[] = [];
     for (const org of await this.store.loadAll()) {
+      const shouldResume = org.settings.resumeOnRestart && (org.status === 'running' || (org.status === 'paused' && org.pauseReason === 'restart'));
       const runner = new OrgRunner(normaliseLoaded(org), this.provider, this.store, this.options);
       await runner.workspace.init();
       this.runners.set(org.id, runner);
+      if (shouldResume) resume.push(runner);
+    }
+    for (const runner of resume) {
+      try { runner.start(); } catch (error) { runner.org.lastError = 'Automatic resume: ' + (error as Error).message; await runner.flush(); }
     }
   }
 

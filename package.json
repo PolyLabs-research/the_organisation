@@ -21,11 +21,14 @@
     "build": "vite build",
     "start": "NODE_ENV=production tsx src/server/main.ts",
     "establish": "tsx scripts/establish.ts",
+    "example:paperclips": "tsx scripts/only-paperclips.ts",
     "managed:setup": "tsx scripts/managed-setup.ts",
     "claude-code:check": "tsx scripts/claude-code-check.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:browser": "tsx scripts/smoke-business.ts",
+    "docs:screenshots": "vitest run --config vitest.screenshots.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.5.0",

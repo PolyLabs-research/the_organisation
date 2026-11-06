@@ -96,6 +96,7 @@ export const PLAN_TOOLS = { recordPhase: 'record_phase', reportToBoard: 'report_
 
 /** What a lead recorded when a phase of its operating profile passed its gate. */
 export interface PhaseRecord {
+  operations?: unknown[];
   /** The phase, by name or id, as the lead gave it. */
   phase: string;
   summary: string;

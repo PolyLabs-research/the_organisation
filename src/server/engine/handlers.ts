@@ -1,4 +1,6 @@
 import type { z } from 'zod';
+import { jobReady } from '../../shared/business';
+import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
 import { describeRequest, isOpen } from '../../shared/signatory';
 import type { BoardReport, Executive, Organisation, Plan, PlanOrigin } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
@@ -48,7 +50,7 @@ export class StaleWork extends Error {}
 function newPlan(
   org: Organisation,
   owner: Executive,
-  fields: { objective: string; successCriteria: string; priority: Plan['priority']; rationale: string },
+  fields: { objective: string; successCriteria: string; priority: Plan['priority']; rationale: string; jobId?: string },
   origin: PlanOrigin,
   depth: number,
 ): Plan {
@@ -88,6 +90,11 @@ function newPlan(
     execution: null,
     managed: null,
   };
+  const known = fields.jobId || org.business.jobs.find((j) => j.ownerId === owner.id && j.title === plan.objective.slice(0, 200) && jobReady(org, j))?.id;
+  const job = known ? org.business.jobs.find((j) => j.id === known) : applyBusinessCommand(org, {
+    kind: 'job', record: { ownerId: owner.id, title: plan.objective.slice(0, 200), description: plan.successCriteria, nextAction: 'Carry out the approved plan and submit evidence for verification.' },
+  }, { id: owner.id });
+  if (job) linkBusinessJob(org, job.id, plan);
   org.plans.push(plan);
   return plan;
 }
@@ -135,7 +142,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     provider.structured({
       kind: item.kind,
       system,
-      prompt,
+      prompt: prompt + '\n\n' + businessContext(org),
       schema,
       model: org.settings.executiveModel,
       effort: org.settings.executiveEffort,
@@ -152,6 +159,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       });
       return () => {
         if (org.cycle.number !== cycle || org.cycle.stage !== 'consult') return;
+        applyBusinessUpdates(org, data.operations, { id: exec.id });
         org.cycle.consults[exec.id] = {
           proposal: clean(data.proposal),
           rationale: clean(data.rationale),
@@ -165,8 +173,10 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'direct': {
       const leads = leadsOf(org);
       const steerIds = org.steers.filter((s) => s.status === 'new').map((s) => s.id);
-      const data = await ask(system, prompts.directPrompt(org), schemas.directionSchema(leads.map((l) => l.id)), {
+      const data = await ask(system, prompts.directPrompt(org), schemas.directionSchema(leads.map((l) => l.id), org.business.jobs.filter((j) => jobReady(org, j)).map((j) => j.id)), {
         leads: leads.map(seatContext),
+        readyJobs: org.business.jobs.filter((j) => jobReady(org, j)).map((j) => ({ id: j.id, ownerId: j.ownerId, title: j.title, description: j.description })),
+        scheduled: org.settings.reviewIntervalMinutes > 0,
         consults: org.cycle.consults,
         newSteer: org.steers.filter((s) => s.status === 'new').map((s) => s.text),
         signatory: deskContext(org),
@@ -174,17 +184,20 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const seen = new Set<string>();
       const directives = data.directives.filter((d) => {
         if (!leads.some((l) => l.id === d.to) || seen.has(d.to) || !d.objective.trim()) return false;
+        if (d.jobId && !org.business.jobs.some((j) => j.id === d.jobId && j.ownerId === d.to && jobReady(org, j))) return false;
         seen.add(d.to);
         return true;
       });
-      if (!directives.length) throw new ProviderError('The CEO issued no directive to any lead.', 'invalid_output', true);
+      if (!directives.length && org.settings.reviewIntervalMinutes === 0) throw new ProviderError('The CEO issued no directive to any lead.', 'invalid_output', true);
       return () => {
         if (org.cycle.number !== cycle || org.cycle.stage !== 'direct') return;
+        applyBusinessUpdates(org, data.operations, { id: exec.id });
         org.cycle.intent = clean(data.shareholderIntent);
         org.cycle.priorities = data.priorities.map((p) => clean(p, 400)).filter(Boolean).slice(0, 6);
         org.cycle.stage = 'work';
         const lines: string[] = [];
         for (const d of directives) {
+          if (d.jobId && !org.business.jobs.some((j) => j.id === d.jobId && j.ownerId === d.to && jobReady(org, j))) continue;
           const lead = leads.find((l) => l.id === d.to)!;
           newPlan(org, lead, d, { type: 'directive' }, 0);
           lines.push(`- **${lead.short}** (${d.priority}): ${clean(d.objective, 600)}`);
@@ -216,6 +229,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       });
       return () => {
         if (plan.status !== 'planning') return;
+        applyBusinessUpdates(org, data.operations, { id: exec.id });
         plan.approach = clean(data.approach);
         applyIntents(plan, data.phases);
         plan.escalations = data.escalations
@@ -377,13 +391,14 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const tools = workspaceTools(workspace, (path) => {
         if (!written.includes(path)) written.push(path);
       });
+      tools.push(...businessTools(org, { id: exec.id, worker: true }, ctx.touch, () => !ctx.halting() && !ctx.signal.aborted && isPlanActive(plan)));
       const files = await workspace.list();
       // Web search is switched on for the organisation, but only some providers' models can do it.
       const canSearch = org.settings.webResearch && (provider.searches?.(org.settings.workerModel) ?? true);
       const result = await provider.agent({
         kind: 'task',
         system: prompts.systemForAgent(org, exec, canSearch),
-        prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files),
+        prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files) + '\n\n' + businessContext(org),
         model: org.settings.workerModel,
         effort: org.settings.workerEffort,
         tools,
@@ -440,6 +455,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         if (plan.status !== 'executing' || phase.status !== 'working') return;
         if (!phase.tasks.every((t) => t.status === 'done' || t.status === 'failed')) return;
         logRemitDecisions(org, exec, plan, data.decisions);
+        applyBusinessUpdates(org, data.operations, { id: exec.id });
         phase.summary = clean(data.summary, 4000);
         plan.updatedAt = now();
         const rework = data.reworkTasks.filter((t) => t.title.trim() && t.brief.trim()).slice(0, Math.max(exec.agentCount, 1));
@@ -481,6 +497,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       });
       return () => {
         if (plan.status !== 'reporting') return;
+        applyBusinessUpdates(org, data.operations, { id: exec.id });
         fileReport(org, plan, exec, data, files);
       };
     }
@@ -499,6 +516,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       return () => {
         drop();
         if (org.cycle.number !== cycle) return;
+        applyBusinessUpdates(org, data.operations, { id: exec.id });
         if (data.note.trim()) postToBoard(org, 'reaction', exec.id, `${exec.short} on the reports`, clean(data.note, 1200));
         for (const f of data.followUps.filter((x) => x.objective.trim()).slice(0, MAX_FOLLOW_UPS)) {
           const sources = f.reportIds.filter((id) => item.reportIds.includes(id));
@@ -523,6 +541,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         plans: active.map((p) => planContext(org, p)),
       });
       return () => {
+        applyBusinessUpdates(org, data.operations, { id: exec.id });
         const changes: string[] = [];
         for (const verdict of data.verdicts) {
           const plan = planById(org, verdict.planId);

@@ -1,3 +1,5 @@
+import { createOnlyPaperclips } from './only-paperclips';
+import { operatingDigest } from '../shared/business';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_AGENTS_PER_LEAD, MAX_LEADS, PROFILES } from '../shared/profiles';
 import type { CreateOrgRequest } from '../shared/types';
@@ -138,6 +140,11 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(connectionsView());
   });
 
+  app.post('/api/examples/only-paperclips', async (_req, res) => {
+    const runner = await createOnlyPaperclips(registry);
+    res.status(201).json(runner.view());
+  });
+
   app.get('/api/orgs', (_req, res) => {
     res.json(registry.list());
   });
@@ -216,6 +223,22 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
   app.post('/api/orgs/:id/signatory/notes', (req, res) => {
     const runner = runnerOf(req);
     runner.noteFromSignatory(text(req.body?.text));
+    res.json(runner.view());
+  });
+
+  app.post('/api/orgs/:id/business', async (req, res) => {
+    const runner = runnerOf(req);
+    await runner.businessCommand(req.body);
+    res.json(runner.view());
+  });
+  app.get('/api/orgs/:id/business', (req, res) => {
+    const runner = runnerOf(req);
+    res.json({ ...runner.org.business, digest: operatingDigest(runner.org) });
+  });
+  app.post('/api/orgs/:id/review-now', async (req, res) => {
+    const runner = runnerOf(req);
+    runner.reviewNow();
+    await runner.flush();
     res.json(runner.view());
   });
 

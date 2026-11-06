@@ -54,6 +54,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 }
 
 export const api = {
+  paperclips: () => request<OrgView>('POST', '/api/examples/only-paperclips'),
   meta: () => request<Meta>('GET', '/api/meta'),
   recommend: (idea: string) => request<TeamRecommendation>('POST', '/api/recommend', { idea }),
   orgs: () => request<OrgSummary[]>('GET', '/api/orgs'),
@@ -65,6 +66,8 @@ export const api = {
   steer: (id: string, text: string) => request<OrgView>('POST', `/api/orgs/${id}/steer`, { text }),
   settings: (id: string, patch: Partial<OrgSettings>) => request<OrgView>('PATCH', `/api/orgs/${id}/settings`, patch),
   agents: (id: string, execId: string, agentCount: number) => request<OrgView>('PATCH', `/api/orgs/${id}/executives/${execId}`, { agentCount }),
+  business: (id: string, command: unknown) => request<OrgView>('POST', `/api/orgs/${id}/business`, command),
+  reviewNow: (id: string) => request<OrgView>('POST', `/api/orgs/${id}/review-now`),
   activity: (id: string) => request<ActivityEntry[]>('GET', `/api/orgs/${id}/activity`),
   task: (id: string, taskId: string) => request<{ task: Task }>('GET', `/api/orgs/${id}/tasks/${taskId}`),
   /** Answer a request to the signatory: it is done, it is rejected (with the reason), or the answer is taken back. */

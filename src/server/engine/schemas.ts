@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BusinessUpdates } from '../../shared/business-schema';
 import { LEAD_PROFILES } from '../../shared/profiles';
 
 // Shapes of what each seat is asked to return. They are sent to the model as
@@ -35,14 +36,16 @@ export const RecommendTeam = z.object({
 export type RecommendTeam = z.infer<typeof RecommendTeam>;
 
 export const Consult = z.object({
+  operations: BusinessUpdates,
   proposal: z.string().describe('What your function should do next and what it would deliver'),
   rationale: z.string().describe('Why the shareholders would want that now'),
   needs: z.string().describe('What you need from other leads or the board; empty if nothing'),
 });
 export type Consult = z.infer<typeof Consult>;
 
-export function directionSchema(leadIds: string[]) {
+export function directionSchema(leadIds: string[], jobIds: string[] = []) {
   return z.object({
+    operations: BusinessUpdates,
     shareholderIntent: z.string().describe('Your answer to: what would the shareholders want now?'),
     priorities: z.array(z.string()).describe('The priorities for this cycle, most important first'),
     steerResponse: z
@@ -51,6 +54,7 @@ export function directionSchema(leadIds: string[]) {
     directives: z.array(
       z.object({
         to: idEnum(leadIds),
+        jobId: idEnum(['', ...jobIds]).default('').describe('The ready business commitment to execute, or empty for new work.'),
         objective: z.string(),
         successCriteria: z.string(),
         priority: z.enum(['high', 'medium', 'low']),
@@ -69,6 +73,7 @@ const RemitDecision = z.object({
 
 export function planDraftSchema(phaseIds: string[]) {
   return z.object({
+    operations: BusinessUpdates,
     approach: z.string().describe('How you will meet the objective, in a short paragraph'),
     phases: z.array(
       z.object({
@@ -144,6 +149,7 @@ export const RequestSpec = z.object({
 export type RequestSpec = z.infer<typeof RequestSpec>;
 
 export const PhaseReview = z.object({
+  operations: BusinessUpdates,
   verdict: z.enum(['pass', 'rework']),
   summary: z.string().describe('What the phase produced and what the next phase should rely on'),
   reworkTasks: z.array(TaskSpec).describe('For "rework": the tasks that close the gap. Otherwise empty'),
@@ -159,6 +165,7 @@ export const Authorise = z.object({
 export type Authorise = z.infer<typeof Authorise>;
 
 export const ReportOut = z.object({
+  operations: BusinessUpdates,
   headline: z.string().describe('One line the board can read at a glance'),
   summary: z.string().describe('What was delivered against the success criteria, stated honestly'),
   outcomes: z.array(z.string()),
@@ -168,6 +175,7 @@ export type ReportOut = z.infer<typeof ReportOut>;
 
 export function reactionSchema(reportIds: string[]) {
   return z.object({
+    operations: BusinessUpdates,
     note: z.string().describe('One or two sentences to the board if the reports change anything for your function; empty if they do not'),
     followUps: z.array(
       z.object({
@@ -183,6 +191,7 @@ export type Reaction = z.infer<ReturnType<typeof reactionSchema>>;
 
 export function steerReviewSchema(planIds: string[]) {
   return z.object({
+    operations: BusinessUpdates,
     response: z.string().describe('Your reply to the shareholders: what changes as a result of their steer'),
     verdicts: z
       .array(

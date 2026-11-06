@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { BusinessUpdates } from '../../../shared/business-schema';
+import { strictSchema } from '../schema';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -72,6 +75,7 @@ const RECORD_PHASE: CustomTool = {
   input_schema: {
     type: 'object',
     properties: {
+      operations: strictSchema(z.toJSONSchema(BusinessUpdates)),
       phase: { type: 'string', description: 'The name of the phase, as it is written in your operating profile.' },
       summary: {
         type: 'string',

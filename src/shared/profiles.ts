@@ -96,12 +96,12 @@ export const PROFILES: OperatingProfile[] = [
     short: 'COO',
     title: 'Chief Operating Officer',
     function: 'Operations',
-    remit: 'How the organisation runs day to day: processes, delivery, suppliers and service levels.',
+    remit: 'Operational continuity: delivery, suppliers, service levels, overdue commitments, cross-team handovers, recurring obligations and unresolved incidents. Maintain the shared jobs and calendar and bring blockers to the CEO.',
     phases: [
       phase('Map', 'Lay out how the work flows today or must flow.', 'A process map with owners and hand-offs.'),
       phase('Design', 'Design the operating process.', 'An operating procedure with service levels.'),
       phase('Implement', 'Put the process in place.', 'Runbooks, checklists and templates.'),
-      phase('Monitor', 'Define how the process is watched and improved.', 'A monitoring plan with thresholds and responses.'),
+      phase('Monitor', 'Review live commitments and evidence, resolve blockers and arrange the next check.', 'An updated operating register, measured results and owned follow-up actions.'),
     ],
     defaultAgents: 2,
     hue: 28,
@@ -249,6 +249,16 @@ export const PROFILES: OperatingProfile[] = [
     ],
     defaultAgents: 1,
     hue: 88,
+  },
+  {
+    id: 'assurance', kind: 'lead', short: 'QA', title: 'Head of Assurance', function: 'Assurance',
+    remit: 'Independent verification of deliveries against acceptance criteria and evidence. Review assigned business commitments, record what is verified and escalate unsupported completion claims.',
+    phases: [
+      phase('Scope', 'Establish what completion requires.', 'Acceptance criteria and evidence to inspect.'),
+      phase('Inspect', 'Examine the delivery and supporting evidence.', 'Checks and their results, with unverified claims marked.'),
+      phase('Verify', 'Accept evidence or request correction.', 'Verified commitments or specific gaps assigned to the owner.'),
+      phase('Report', 'Record the outcome and recurring problems.', 'An assurance report and lessons in shared knowledge.'),
+    ], defaultAgents: 1, hue: 110,
   },
   {
     id: 'judge',

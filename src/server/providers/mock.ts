@@ -504,6 +504,8 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
 
       case 'direct': {
         const leads = c.leads as Seat[];
+        const ready = (c.readyJobs ?? []) as Array<{ id: string; ownerId: string; title: string; description: string }>;
+        const workingLeads = c.scheduled && (cycle > 1 || ready.length) ? leads.filter((l) => ready.some((j) => j.ownerId === l.id)) : leads;
         const consults = c.consults as Record<string, { proposal: string }>;
         const steer = (c.newSteer as string[]) ?? [];
         const latest = steer.at(-1);
@@ -524,9 +526,10 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
             ...(desk.waiting.length ? [`Do not depend on the ${desk.waiting.length} request${desk.waiting.length === 1 ? '' : 's'} still waiting for the signatory.`] : []),
           ],
           steerResponse: latest ? `Understood. This cycle’s directives are set to deliver on your steer: "${brief(latest, 160)}".` : '',
-          directives: leads.map((lead, i) => ({
+          directives: workingLeads.map((lead, i) => ({
             to: lead.id,
-            objective: brief(consults[lead.id]?.proposal ?? `Run ${lead.function} through its operating profile for this cycle.`, 300),
+            jobId: ready.find((j) => j.ownerId === lead.id)?.id ?? '',
+            objective: ready.find((j) => j.ownerId === lead.id)?.title ?? brief(consults[lead.id]?.proposal ?? `Run ${lead.function} through its operating profile for this cycle.`, 300),
             successCriteria: `${noStop(lead.phases.at(-1)?.deliverable ?? 'The deliverable')} is in the workspace and the board can act on it.`,
             priority: i === 0 ? 'high' : 'medium',
             rationale: latest ? 'It is the part of the steer that falls in this remit.' : 'It is the next step the mission needs from this function.',

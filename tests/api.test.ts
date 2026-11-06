@@ -60,6 +60,35 @@ async function establish(extra: Record<string, unknown> = {}): Promise<OrgView> 
 }
 
 describe('the API', () => {
+  it('persists operating records, rejects stale edits and validates event ingestion', async () => {
+    const created = await establish();
+    const root = '/api/orgs/' + created.org.id;
+    const added = await api<OrgView>('POST', root + '/business', { kind: 'job', record: { title: 'Only Paperclips quote', ownerId: 'coo', dueAt: '2030-01-01T10:00:00Z' } });
+    expect(added.status).toBe(200);
+    const job = added.data.org.business.jobs[0]!;
+    expect((await api('GET', root + '/business')).data.jobs[0].id).toBe(job.id);
+    expect((await api('POST', root + '/business', { kind: 'job', record: { id: job.id, revision: 999, title: job.title, ownerId: job.ownerId } })).status).toBe(400);
+    expect((await api('POST', root + '/business', { kind: 'job', record: { title: 'Invalid date', ownerId: 'coo', dueAt: 'soon' } })).status).toBe(400);
+    const event = { kind: 'event', record: { title: 'Quote enquiry', detail: 'A sample customer request', ownerId: 'coo', source: 'test', externalId: 'quote-1' } };
+    await api('POST', root + '/business', event);
+    await api('POST', root + '/business', event);
+    const business = (await api('GET', root + '/business')).data;
+    expect(business.events).toHaveLength(1);
+    expect(business.jobs).toHaveLength(2);
+    expect((await api('POST', root + '/business', event, { origin: 'https://foreign.invalid' })).status).toBe(403);
+    await api('POST', root + '/review-now');
+    expect(registry.get(created.org.id)!.org.status).toBe('idle');
+  });
+
+  it('creates the Only Paperclips simulation with linked customer work', async () => {
+    const result = await api<OrgView>('POST', '/api/examples/only-paperclips');
+    expect(result.status).toBe(201);
+    expect(result.data.org.name).toBe('Only Paperclips');
+    expect(result.data.org.status).toBe('idle');
+    expect(result.data.org.business.jobs).toHaveLength(3);
+    expect(result.data.org.business.finances[0]!.status).toBe('forecast');
+  });
+
   it('describes the provider and the profile library', async () => {
     const { status, data } = await api('GET', '/api/meta');
     expect(status).toBe(200);

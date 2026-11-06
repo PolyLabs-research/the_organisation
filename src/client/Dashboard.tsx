@@ -2,6 +2,7 @@ import { ArrowLeft, Pause, Play, Settings2, Square } from 'lucide-react';
 import { useState } from 'react';
 import type { OrgView } from '../shared/types';
 import { api, useAction, useOrgStream, type Meta } from './api';
+import { Operations } from './Operations';
 import { Hierarchy } from './Hierarchy';
 import { EXECUTION, STAGES } from './labels';
 import { waitingOnPerson } from '../shared/signatory';
@@ -10,7 +11,7 @@ import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
 
-type Tab = 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
+type Tab = 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
 
 function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
   const { org } = view;
@@ -19,7 +20,7 @@ function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void })
     return (
       <div className="note note-bad" role="alert">
         <span>
-          <strong>The organisation paused itself because a call failed.</strong> {org.lastError} Nothing was lost: put the cause right, then
+          <strong>The organisation paused because an operation failed.</strong> {org.lastError} Nothing was lost: put the cause right, then
           resume.
         </span>
       </div>
@@ -79,10 +80,12 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const sessions = active.filter((a) => a.kind === 'execute').length;
   const calls = active.length - sessions;
   const winding = [calls ? `${calls} call${calls === 1 ? '' : 's'} finishing` : '', sessions ? `${sessions} session${sessions === 1 ? '' : 's'} being held` : ''].filter(Boolean).join(', ');
-  const statusLabel = org.status === 'running' ? 'Running' : draining ? `Pausing: ${winding}` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
+  const statusLabel = org.status === 'running' ? org.business.waiting ? 'Waiting for scheduled work' : 'Running' : draining ? `Pausing: ${winding}` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
 
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: 'board', label: 'Board' },
+    { id: 'calendar', label: 'Calendar' },
+    { id: 'business', label: 'Business', count: org.business.jobs.filter((j) => j.status === 'review').length || undefined },
     { id: 'plans', label: 'Plans', count: livePlans || undefined },
     { id: 'decisions', label: 'Decisions', count: openDecisions || undefined },
     { id: 'signatory', label: 'Signatory', count: waiting || undefined },
@@ -190,6 +193,8 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
             ))}
           </div>
           <div className="tab-panel" role="tabpanel">
+            {tab === 'calendar' ? <Operations org={org} calendar onView={setView} onOpenPlan={openPlan} /> : null}
+            {tab === 'business' ? <Operations org={org} onView={setView} onOpenPlan={openPlan} /> : null}
             {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
             {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
             {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { applyBusinessUpdates, businessContext } from './business';
 import type { Executive, ManagedSession, Plan, PlanPhase, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, ProviderError, type PlanHooks, type PlanJob, type PlanOutcome } from '../providers/types';
 import { WorkspaceError } from '../workspace';
@@ -206,6 +207,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         return { ok: false, message: `${plan.phases[named]!.name} cannot be recorded yet: ${current.name} comes before it and has not been recorded.` };
       }
       if (!record.summary.trim()) return { ok: false, message: 'Give a summary: what the phase produced, in which files, and how it passed your gate.' };
+      if (plan.status === 'executing') applyBusinessUpdates(org, record.operations ?? [], { id: lead.id });
       current.status = 'done';
       current.summary = clean(record.summary, 4000);
       logRemitDecisions(org, lead, plan, record.decisions);
@@ -230,7 +232,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         (asked.length ? ` ${asked.length} request${asked.length === 1 ? ' has' : 's have'} gone to the signatory.` : '') +
         (left > 0 ? ` ${left} ${left === 1 ? 'was' : 'were'} not filed: a request needs a title, is filed once while it is open, and a phase may raise ${MAX_REQUESTS_PER_GATE}.` : '');
       // The reply is also where the lead hears what became of what it asked for earlier.
-      const desk = prompts.deskHasNews(org) ? `\n\n${prompts.signatoryBlock(org)}` : '';
+      const desk = (prompts.deskHasNews(org) ? `\n\n${prompts.signatoryBlock(org)}` : '') + '\n\n' + businessContext(org);
       return {
         ok: true,
         message: `Recorded.${put} ${next ? `${next.name} is next.` : `Every phase is now recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`}${binding}${desk}`,
@@ -493,8 +495,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),
       system: prompts.sessionSystem(org, lead),
       // The kickoff states every instruction the board has given so far.
-      kickoff: { message: prompts.sessionKickoff(org, lead, plan, files), instructions: plan.amendments.length },
-      resume: () => ({ message: prompts.sessionResume(org, lead, plan, pendingInstructions()), instructions: plan.amendments.length }),
+      kickoff: { message: prompts.sessionKickoff(org, lead, plan, files) + '\n\n' + businessContext(org), instructions: plan.amendments.length },
+      resume: () => ({ message: prompts.sessionResume(org, lead, plan, pendingInstructions()) + '\n\n' + businessContext(org), instructions: plan.amendments.length }),
       executiveModel: org.settings.executiveModel,
       executiveEffort: org.settings.executiveEffort,
       workerModel: org.settings.workerModel,
