@@ -4,27 +4,105 @@ Each organisation has an **Email & accounts** desk for connected mailboxes, serv
 
 ## Connect Gmail or Google Workspace
 
-The app uses Google OAuth with Gmail read and send scopes. It does not ask for your Google password. Tokens are kept in the organisation's encrypted vault.
+The app signs in to Gmail with Google OAuth: you approve it on Google's own page, and it never sees your Google password. Tokens are kept in the organisation's encrypted vault.
 
-1. In your [Google Cloud project](https://console.cloud.google.com/apis/library/gmail.googleapis.com), enable the Gmail API.
-2. Configure the OAuth consent screen. For a Workspace organisation, use an internal app if available. For an external app in testing, add the Google accounts that will connect as test users. Your Workspace administrator may need to allow the app.
-3. Create an OAuth client of type **Web application**. Add the exact redirect URI shown in **Email & accounts**. With the default address it is:
-   ```text
-   http://127.0.0.1:4780/api/oauth/google/callback
-   ```
-   If you open the app through `localhost` instead, register that hostname too. The hostname and port must match.
-4. Add the following to the server's ignored `.env`, then restart the server:
-   ```dotenv
-   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=your-client-secret
-   ```
-5. Open an organisation's **Email & accounts**, create its vault, and keep its passphrase somewhere safe. Select the teams that may use the mailbox and click **Connect Gmail with Google**. Grant both requested permissions and return to the dashboard.
+This takes about 15 minutes, once per server. Steps 1 to 6 happen in the Google Cloud console, step 7 on this machine and step 8 in the app. Keep this guide open beside the console.
+
+**Which account to use.** Sign in to the console with the account that owns the mailbox, or with an administrator of its Google Workspace. Use a dedicated business mailbox rather than a personal inbox: everything an agent reads is sent to its model provider.
+
+### 1. Create a Google Cloud project
+
+- **Where:** [Create a project](https://console.cloud.google.com/projectcreate)
+- **Do:** Name it, for example `the-organisation`, and click **Create**. Leave billing alone: nothing here needs it.
+- **Check:** The project picker at the top of the console shows the new project. Every link below opens in whichever project is selected there, so keep this one selected.
+
+### 2. Turn on the Gmail API
+
+- **Where:** [Gmail API in the API Library](https://console.cloud.google.com/apis/library/gmail.googleapis.com)
+- **Do:** Click **Enable**.
+- **Check:** The page changes to **API Enabled**, with a **Manage** button.
+
+### 3. Describe the app (Branding)
+
+- **Where:** [Google Auth Platform → Branding](https://console.cloud.google.com/auth/branding). If it says Google Auth Platform is not configured yet, click **Get started**.
+- **Do:** Give an app name, such as `The Organisation`, and choose your address as the user support email. Add your address again as the developer contact. Click **Save**, or **Create** if you came through Get started.
+- You do not need a logo, a home page or authorised domains for an app that runs on `127.0.0.1`.
+
+### 4. Choose who may sign in (Audience)
+
+- **Where:** [Google Auth Platform → Audience](https://console.cloud.google.com/auth/audience)
+- **Google Workspace mailbox:** choose **Internal**. Only accounts in your Workspace can sign in, and nothing more is needed. If the choice is greyed out, your Workspace administrator has to allow it, or set it up for you.
+- **Personal Gmail address** (`@gmail.com`): choose **External** and leave the publishing status on **Testing**. Under **Test users**, click **Add users** and add the address of the mailbox you will connect.
+- **Testing expires sign-ins after 7 days.** Google ends a Testing app's sign-in a week after it is given, so you will need to reconnect the mailbox weekly (step 8 again, under **Mailboxes**). An Internal app does not expire. Publishing an External app removes the limit, but the Gmail read permission then needs Google's verification, which is meant for apps used by the public.
+
+### 5. Create the OAuth client (Clients)
+
+- **Where:** [Google Auth Platform → Clients](https://console.cloud.google.com/auth/clients)
+- **Do:** Click **Create client**. Set **Application type** to **Web application** and give it a name.
+- Under **Authorized redirect URIs**, click **Add URI** and paste exactly:
+  ```text
+  http://127.0.0.1:4780/api/oauth/google/callback
+  ```
+  That is for the app at its default address. In the app's **Help**, this shows the address the app is actually open on. It has to match character for character: `http`, not `https`, the same host name and port, and no slash at the end. If you sometimes open the app through `localhost`, add that form as a second URI too.
+- Leave **Authorized JavaScript origins** empty, and click **Create**.
+- **Copy the client ID and the client secret now** and keep them for step 7. Google may not show the secret again; if you lose it, add a new secret to the client.
+
+### 6. Allow the Gmail permissions (Data Access)
+
+- **Where:** [Google Auth Platform → Data Access](https://console.cloud.google.com/auth/scopes)
+- **Do:** Click **Add or remove scopes**. In **Manually add scopes**, paste these two lines, click **Add to table**, then **Update** and **Save**:
+  ```text
+  https://www.googleapis.com/auth/gmail.readonly
+  https://www.googleapis.com/auth/gmail.send
+  ```
+- For a Testing or Internal app this only lists what the app will ask for; nothing is sent for review.
+- Changes in Google Auth Platform can take a few minutes, sometimes longer, to apply. If step 8 fails straight away, wait and try again.
+
+### 7. Give the client to the server
+
+- **Where:** the `.env` file in the folder where the_organisation is installed, beside `package.json`. If there is none, copy `.env.example` to `.env`. Git ignores this file, so the secret is not committed.
+- **Do:** Add these two lines with the values from step 5:
+  ```dotenv
+  GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
+  GOOGLE_CLIENT_SECRET=GOCSPX-...
+  ```
+- **Restart the server:** in the terminal where it runs, press `Ctrl+C`, then start it again with `npm run dev` (or `npm start`). The server reads `.env` only when it starts.
+- **Check:** In the app, **Email & accounts → Mailboxes → Connect a mailbox** no longer shows the yellow "Google sign-in needs one-time server setup" note, and **Connect Gmail with Google** can be pressed.
+
+### 8. Connect the mailbox in the app
+
+- **Where:** open the organisation, then the **Email & accounts** tab in the row of tabs above the board.
+- **Create the vault**, if this organisation has none. Choose a passphrase of at least 12 characters and store it in your password manager: there is no way to recover it. Tick **Keep unlocked until I lock it or the server restarts** if the organisation is to work while you are away. See [Vault storage and recovery](#vault-storage-and-recovery).
+- Click **Mailboxes**, then **Connect a mailbox**. Give the mailbox a label, and tick the teams whose agents may use it. Leave every team unticked to keep it for yourself.
+- Click **Connect Gmail with Google**. On Google's page, choose the mailbox account. A Testing app shows "Google hasn't verified this app": click **Continue**. Tick both permissions, to read and to send, and continue.
+- **Check:** You are back on the dashboard, and the mailbox is listed under **Mailboxes** with its address and a **Google** tag.
+
+What each team may then do with the mailbox is set role by role on the **Privileges** tab: see [Give the agents access](#give-the-agents-access).
+
+### If it goes wrong
+
+| Google or the app says | What to do |
+| --- | --- |
+| `redirect_uri_mismatch` | The URI in step 5 differs from the address the app is open on. Compare them character by character, including the port, and save the client. |
+| `Access blocked: … has not completed the Google verification process` | The account is not a test user. Add it under Audience (step 4). |
+| `access_denied`, or "Google did not grant offline Gmail read and send access" | A permission was left unticked. Connect again and tick both. |
+| `invalid_client` | The ID or secret in `.env` is wrong or has a stray space. Fix it and restart the server. |
+| A mailbox that worked stops after about a week | The Testing limit from step 4. Reconnect it. |
+| **Connect Gmail with Google** stays greyed out | The server has not read the client. Check both lines in `.env` and restart the server. |
 
 The scopes are `gmail.readonly` and `gmail.send`. No delete, forwarding or settings permission is requested. Google classifies these as restricted and sensitive respectively; distributing an OAuth app outside your own testing or Workspace organisation can require Google's verification. See [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes) and [Google's web-server OAuth guide](https://developers.google.com/identity/protocols/oauth2/web-server) for consent, publication and refresh-token requirements. Reconnect if consent expires, access is revoked, or Google refuses a refresh.
 
 The OAuth callback uses an expiring, single-use state, a browser cookie, PKCE and the current vault session. Locking the vault invalidates a pending sign-in. The server discovers the mailbox address from Google; an agent cannot supply a different sender identity.
 
-**Other providers:** the expandable IMAP/SMTP form supports an app password with IMAP over TLS on port 993 and SMTP over TLS on 465 or required STARTTLS on 587. It checks both connections before saving. Use Google sign-in for Gmail. Microsoft OAuth is not implemented.
+### Other mail providers: IMAP and SMTP
+
+For a mailbox that is not Gmail, open **Email & accounts → Mailboxes → Connect a mailbox** and expand **Other providers: IMAP and SMTP**.
+
+- **App password:** most providers want an app password here rather than your normal one. Create it in your provider's security settings; its help pages list the IMAP and SMTP host names too.
+- **Hosts and ports:** IMAP must accept TLS on port 993. For SMTP choose 465 (TLS) or 587 (STARTTLS).
+- **Check:** clicking **Connect mailbox** tries both connections before anything is saved, and says which one failed.
+
+Use Google sign-in for Gmail rather than an app password. Microsoft OAuth is not implemented.
 
 ## Give the agents access
 
@@ -38,13 +116,29 @@ There is no background inbox poller. Give a lead a calendar commitment to review
 
 ## Service accounts and passwords
 
-Under **Accounts**, enter the service's HTTPS login URL, username, existing password, verification mailbox and allowed teams. For a new account, enable account creation and provide a sign-up URL on the same origin; the role also needs **Create accounts** under Privileges. Leaving the password blank generates and saves a random password before the agent submits a form. Authorising a service grants the selected teams browser access to that service. Choose services and registration terms you intend the business to use.
+This lets agents sign in to a website on the business's behalf, such as a supplier portal, in a browser the server runs. The password stays in the vault: the server types it in, and no model ever sees it.
+
+**Before you start:** install [Google Chrome](https://www.google.com/chrome/) on the machine the server runs on, or set `ORG_BROWSER_PATH` in `.env` to a Chromium executable. Restart the server after either.
+
+**An account that already exists:**
+
+1. Open the organisation's **Email & accounts** tab, click **Accounts**, then **Add a service account**.
+2. **Service name:** what you call it, such as `Wholesaler portal`.
+3. **Login URL:** the full `https://` address of the service's sign-in page. Open the service in your own browser, go to its sign-in page and copy the address bar.
+4. **Account username or email** and **Existing account password:** what you would type on that page.
+5. **Mailbox for verification:** a connected mailbox the service sends codes and links to. Connect it first under **Mailboxes** if it is not listed.
+6. Tick the teams whose agents may use it, then click **Save service account**.
+7. **Privileges tab:** an assigned team can sign in and read. To let it change anything on the site, tick **Act on accounts** for that role. Read [what is enforced and what is only instructed](#what-is-enforced-and-what-is-only-instructed) first.
+
+**A new account the agents should register:** in the same form, tick **Allow the agents to create this business account** and give the service's sign-up page as **Sign-up URL (same site as login)**. It must be on the same site as the login URL. Leave the password blank to have a strong one generated and saved before the agent submits the form. On the **Privileges** tab, the role also needs **Create accounts**.
+
+**Where agents ask you for help:** **Email & accounts → Access requests** lists what an agent could not do alone: a new service, a CAPTCHA, a code sent to a phone. Click **Mark handled** once you have dealt with it.
 
 The account browser opens the authorised site, describes visible form controls, fills or clicks a returned element ID, and follows verification links on that same origin. Passwords are filled by the server into password inputs; the model receives neither the password nor cookies. Saved passwords are also removed from everything a page returns, as they are and as URLs and web forms encode them. A site that shows one in some other form, such as base64, is not caught. A person can reveal a saved account password for 30 seconds in the dashboard. **Update saved password** records a password already changed at the external service; it does not rotate that service's password for you.
 
 A service can have additional explicitly trusted origins for its scripts, assets and APIs. Top-level navigation stays on the account's main origin. Private, loopback and reserved network destinations are refused, DNS answers are pinned for the connection, TLS certificates are verified, and browser downloads, popups, service workers and WebSockets are disabled.
 
-Install Google Chrome on the server for account browsing, or set `ORG_BROWSER_PATH` to an installed Chromium executable. The package uses `playwright-core`; it does not download a browser automatically. Browser sessions are isolated per task, close when the task finishes or access is revoked, and expire after ten minutes idle. Sessions are not exported or reused across tasks.
+The package uses `playwright-core`; it does not download a browser automatically. Browser sessions are isolated per task, close when the task finishes or access is revoked, and expire after ten minutes idle. Sessions are not exported or reused across tasks.
 
 A form submission is not evidence that an account exists or login succeeded. The agent must inspect the resulting page. It can request help under **Access requests** for a new service, CAPTCHA, MFA or an unsupported login flow. The dashboard's account browser can fill a text verification code. Graphical challenges, passkeys and cross-origin SSO may need a person or another integration. Agents are told that payments and new contractual commitments go to the Signatory. The browser is not a payment integration, but for a role with **Act on accounts** it can press whatever the account can press.
 

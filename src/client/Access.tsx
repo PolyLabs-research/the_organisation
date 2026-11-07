@@ -73,6 +73,7 @@ function MailConnect({ org, configured, onView }: { org: Organisation; configure
       <p>Enable the Gmail API in your Google Cloud project, create a Web application OAuth client, and set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in the server’s <code>.env</code>. Restart the server.</p>
       <p>Register this exact authorised redirect URI: <code>{window.location.origin}/api/oauth/google/callback</code></p>
       <p>Add your Google account as a test user, or use your Workspace organisation’s approved internal app.</p>
+      <p><HelpLink guide="email-and-accounts" section="connect-gmail-or-google-workspace">Step-by-step setup, with a link for each step</HelpLink></p>
     </div></div> : null}
     <button type="button" className="button button-primary" disabled={!configured || action.busy || !label.trim()} onClick={() => void action.run(async () => {
       const result = await call<{ url: string }>(org.id, 'POST', '/google/start', { label, ownerIds: owners });
