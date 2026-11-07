@@ -19,6 +19,8 @@ export const GUIDES = {
 export type GuideId = keyof typeof GUIDES;
 type Target = { guide: GuideId; section?: string };
 
+// The docs give addresses for the app's default origin; here they can name the one it is open on.
+const DEFAULT_ORIGIN = 'http://127.0.0.1:4780';
 const SOURCE = 'https://github.com/PolyLabs-research/the_organisation/blob/main/';
 const IMAGES = import.meta.glob<string>('../../docs/*.png', { eager: true, query: '?url', import: 'default' });
 
@@ -132,7 +134,7 @@ function GuideDialog({ target, onNavigate, onClose }: { target: Target; onNaviga
             },
           }}
         >
-          {GUIDES[target.guide].text}
+          {GUIDES[target.guide].text.replaceAll(DEFAULT_ORIGIN, window.location.origin)}
         </ReactMarkdown>
       </div>
     </dialog>

@@ -4,21 +4,56 @@ An organisation can work on real repositories. Agents get a branch of their own 
 
 ## Connect a repository
 
-1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) limited to that one repository, with an expiry date. Give it:
+About 10 minutes. Steps 1 to 3 happen on GitHub, steps 4 to 6 in the app.
 
-   | Permission | Level | Why |
-   | --- | --- | --- |
-   | Contents | Read and write | Read files and commit to a branch |
-   | Pull requests | Read and write | Open a pull request |
-   | Actions | Read and write | Start workflows, and read runs and logs |
-   | Commit statuses | Read | See results from outside GitHub Actions. Without it no gate can pass |
-   | Workflows | Write | Only if a role will change pipelines |
+### 1. Create a token for that one repository
 
-2. Open **Email & accounts**, then **Repositories**. Enter `owner/name`, the token and the teams that may use it. The server asks GitHub whether the token works, then keeps it in the encrypted vault. It never comes back to the browser, and it goes to no address but `api.github.com`.
-3. List the workflows agents may start, by file name, such as `ci.yml`. Leave out anything that deploys.
-4. Under **Privileges**, give each role what it needs. Reading is on. Pushing, starting workflows and changing pipelines are off.
+- **Where:** [New fine-grained personal access token](https://github.com/settings/personal-access-tokens/new). This is GitHub → your picture → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
+- **Token name:** say what it is for, such as `the_organisation – my-repo`.
+- **Resource owner:** the account or organisation that owns the repository. For a repository in an organisation, pick the organisation, not yourself.
+- **Expiration:** choose a date, such as 90 days. When it passes, replace the token as in step 6.
+- **Repository access:** **Only select repositories**, then pick the one repository.
+- **Permissions:** click **Add permissions**, choose these under **Repository permissions**, and set each one's level:
 
-**Protect the main branch on GitHub as well.** Require a pull request and a review. This program never writes to the main branch, but a rule on GitHub holds even if this program is wrong, or a token is taken.
+  | Permission | Level | Why |
+  | --- | --- | --- |
+  | Contents | Read and write | Read files and commit to a branch |
+  | Pull requests | Read and write | Open a pull request |
+  | Actions | Read and write | Start workflows, and read runs and logs |
+  | Commit statuses | Read-only | See results from outside GitHub Actions. Without it no gate can pass |
+  | Workflows | Read and write | Only if a role will change pipelines |
+
+  Metadata, read-only, is added by itself.
+- Click **Generate token** and **copy it now**. GitHub shows it only once.
+
+### 2. If the repository belongs to an organisation: get the token approved
+
+An organisation can refuse fine-grained tokens, or hold them until an owner approves them. If you see that the token is pending, an owner of the organisation approves it under the organisation's **Settings → Personal access tokens → Pending requests** (`https://github.com/organizations/<organisation>/settings/personal-access-token-requests`). Until then step 5 fails with GitHub refusing the token.
+
+### 3. Protect the main branch
+
+- **Where:** the repository on GitHub → **Settings** → **Rules** → **Rulesets** → **New ruleset** → **New branch ruleset** (`https://github.com/<owner>/<repository>/settings/rules`).
+- **Do:** Set **Enforcement status** to **Active**. Under **Target branches** click **Add target** → **Include default branch**. Tick **Restrict deletions**, **Block force pushes** and **Require a pull request before merging**, with at least one required approval. Click **Create**.
+- This program never writes to the main branch, but a rule on GitHub holds even if this program is wrong, or a token is taken.
+
+### 4. Open the form in the app
+
+Open the organisation, the **Email & accounts** tab, then **Repositories** → **Connect a repository**. The vault has to be unlocked: see [Email & accounts](email-and-accounts.md#8-connect-the-mailbox-in-the-app) for creating it.
+
+### 5. Connect
+
+- **Name:** what you call it.
+- **Repository:** `owner/name`, as it appears in the repository's address on GitHub.
+- **Token:** the token from step 1.
+- **Workflows agents may start:** file names from the repository's `.github/workflows` folder, such as `ci.yml`. Leave out anything that deploys. You can change this later on the repository's card.
+- Tick the teams whose agents may use it, and click **Connect repository**.
+- **Check:** the server asks GitHub whether the token works before saving it. The repository then shows as a card, with Private or Public. The token is kept in the encrypted vault, never comes back to the browser, and is sent to no address but `api.github.com`.
+
+### 6. Say what each role may do
+
+On the **Privileges** tab, give each role what it needs. Reading is on. Pushing, starting workflows and changing pipelines are off. [What agents can do](#what-agents-can-do) explains each one.
+
+To replace an expired token later, use **Replace token** on the repository's card.
 
 ## What agents can do
 
