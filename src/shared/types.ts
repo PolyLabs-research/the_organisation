@@ -98,6 +98,13 @@ export interface Executive {
   hue: number;
 }
 
+/**
+ * How fast the organisation moves on. step: nothing starts until a person says so, one piece of work each
+ * time. slow: one piece of work at a time, with a pause after each. steady: one at a time, no pause.
+ * free: as many at once as maxConcurrentCalls allows, as fast as the provider answers.
+ */
+export type Pace = 'step' | 'slow' | 'steady' | 'free';
+
 export interface OrgSettings {
   /** Minutes between standing reviews. Zero retains the continuous loop. */
   reviewIntervalMinutes: number;
@@ -121,6 +128,8 @@ export interface OrgSettings {
   workerEffort: Effort;
   /** Upper bound on model calls in flight at once across the organisation. */
   maxConcurrentCalls: number;
+  /** How fast work is started, so a person can follow it. */
+  pace: Pace;
   /** How plans are carried out. */
   execution: ExecutionMode;
   /**
@@ -602,12 +611,21 @@ export interface OrgSummary {
   updatedAt: string;
 }
 
+export interface PaceView {
+  /** What is ready to start, in the order it would start. */
+  next: Array<{ kind: WorkKind; execId: string; label: string }>;
+  /** When the next piece of work may start under the slow pace; null when it is not waiting on the clock. */
+  nextAt: string | null;
+}
+
 /** What the server pushes to an open dashboard. */
 export interface OrgView {
   org: Organisation;
   active: ActiveWork[];
   /** True while a pause is draining calls that were already in flight. */
   draining: boolean;
+  /** What would start next, for the pace control: what a step would do, and when a paced step is due. */
+  pace: PaceView;
 }
 
 /** A model an organisation can be set to run on. */

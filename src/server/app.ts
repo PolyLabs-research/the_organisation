@@ -193,6 +193,12 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(runner.view());
   });
 
+  app.post('/api/orgs/:id/step', (req, res) => {
+    const runner = runnerOf(req);
+    runner.step();
+    res.json(runner.view());
+  });
+
   app.post('/api/orgs/:id/stop', (req, res) => {
     const runner = runnerOf(req);
     runner.stop();
