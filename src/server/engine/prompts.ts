@@ -14,6 +14,21 @@ function sop(exec: Executive): string {
   return exec.phases.map((p) => p.name).join(' → ');
 }
 
+/**
+ * The founder's idea in their own words. The mission is a one- or two-sentence summary of it, and a summary
+ * drops the specifics (a product, a link, the goal behind it) that the founder may care about most.
+ */
+function founding(org: Organisation): string {
+  const idea = org.idea.trim();
+  if (!idea || idea === org.mission.trim()) return '';
+  return `
+# The founding idea
+The founders described what the organisation is for in their own words. The mission summarises it; where the summary leaves something out, this is what they meant.
+
+${idea}
+`;
+}
+
 function charter(org: Organisation): string {
   const arbiter = arbiterOf(org);
   const board = org.executives.map((e) => {
@@ -33,7 +48,7 @@ function charter(org: Organisation): string {
 
 # Mission
 ${org.mission}
-
+${founding(org)}
 # How the organisation works
 - The shareholders are people. They own the organisation and give it steer. The CEO enforces that steer.
 - The CEO works out what the shareholders want, consults the executive team, and issues directives to the leads.
