@@ -3,6 +3,7 @@ import type { Organisation, OrgView } from '../shared/types';
 import { dependenciesMet, financeTotals, jobOpen, operatingDigest, type BusinessJob } from '../shared/business';
 import { api, useAction } from './api';
 import { Empty, ErrorNote, Field } from './ui';
+import { HelpLink } from './Guide';
 
 type Kind = 'job' | 'customer' | 'metric' | 'finance' | 'memory' | 'event';
 type Pane = 'summary' | 'customers' | 'metrics' | 'finances' | 'memory' | 'events' | 'history';
@@ -175,7 +176,7 @@ export function Operations({ org, calendar = false, onView, onOpenPlan }: { org:
   return <div className="operations">
     {editor ? <Editor key={editor.kind + String(editor.record?.id ?? 'new')} org={org} kind={editor.kind} record={editor.record} onView={onView} onClose={() => setEditor(null)} /> : null}
     {calendar ? <>
-      <div className="row"><h2>Shared calendar</h2><button type="button" className="button button-primary" onClick={() => edit('job')}>Add commitment</button>
+      <div className="row"><h2>Shared calendar</h2><HelpLink guide="business-operations" section="working-with-the-calendar">How the calendar works</HelpLink><button type="button" className="button button-primary" onClick={() => edit('job')}>Add commitment</button>
         <button type="button" className="button" onClick={() => setMonthView(!monthView)}>{monthView ? 'Show agenda' : 'Show month'}</button></div>
       <p className="muted">Each date belongs to a persistent job. Undated work stays in the agenda. Times use {Intl.DateTimeFormat().resolvedOptions().timeZone}.</p>
       <div className="ops-filters"><input aria-label="Search commitments" placeholder="Find a commitment…" value={query} onChange={(e) => { setQuery(e.target.value); setSelected(null); }} />

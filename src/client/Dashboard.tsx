@@ -9,6 +9,7 @@ import { Privileges } from './Privileges';
 import { Hierarchy } from './Hierarchy';
 import { EXECUTION, STAGES } from './labels';
 import { waitingOnPerson } from '../shared/signatory';
+import { HelpButton, HelpProvider } from './Guide';
 import { SettingsPanel } from './SettingsPanel';
 import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
@@ -100,6 +101,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   ];
 
   return (
+    <HelpProvider>
     <div className="dashboard">
       <a className="back" href="#/">
         <ArrowLeft size={15} aria-hidden="true" /> Organisations
@@ -130,6 +132,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
               <Square size={14} aria-hidden="true" /> Stop now
             </button>
           ) : null}
+          <HelpButton guide={tab === 'access' ? 'email-and-accounts' : tab === 'calendar' || tab === 'business' ? 'business-operations' : 'user-guide'} />
           <button type="button" className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Settings">
             <Settings2 size={18} />
           </button>
@@ -219,5 +222,6 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
 
       {settingsOpen ? <SettingsPanel org={org} meta={meta} onClose={() => setSettingsOpen(false)} onView={setView} /> : null}
     </div>
+    </HelpProvider>
   );
 }
