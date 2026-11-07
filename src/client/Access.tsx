@@ -3,6 +3,7 @@ import type { Organisation } from '../shared/types';
 import type { AccessView, AccountPage, AccountView, MailboxView, MailMessage, MailSummary, RepositoryView } from '../shared/access';
 import { allows } from '../shared/privileges';
 import { request, useAction } from './api';
+import { HelpLink } from './Guide';
 import { ErrorNote, Field } from './ui';
 
 const call = <T,>(id: string, method: string, path = '', body?: unknown) => request<T>(method, '/api/orgs/' + id + '/access' + path, body);
@@ -63,7 +64,7 @@ function MailConnect({ org, configured, onView }: { org: Organisation; configure
   const [smtpHost, setSmtpHost] = useState('');
   const [smtpPort, setSmtpPort] = useState(465);
   return <section className="ops-editor">
-    <h3>Connect a business mailbox</h3>
+    <div className="row"><h3>Connect a business mailbox</h3><HelpLink guide="email-and-accounts" section="connect-gmail-or-google-workspace" /></div>
     <p>Use a dedicated business mailbox. Agents you select can read its messages and prepare drafts; you review each outgoing message before sending. Messages an agent reads are shared with its configured model provider.</p>
     <Field label="Mailbox label"><input value={label} onChange={e => setLabel(e.target.value)} maxLength={160} required /></Field>
     <TeamPicker org={org} value={owners} onChange={setOwners} />
@@ -109,7 +110,7 @@ function AccountConnect({ org, view, onView }: { org: Organisation; view: Access
       setValues({ label: '', loginUrl: '', signupUrl: '', username: '', mailboxId: '', password: '', resources: '' });
     } finally { set('password', ''); }
   }); }}>
-    <h3>Authorise a service account</h3>
+    <div className="row"><h3>Authorise a service account</h3><HelpLink guide="email-and-accounts" section="service-accounts-and-passwords" /></div>
     <p>Choose the service and the teams allowed to operate it. The browser fills saved credentials on this exact site. Account creation can accept the service’s terms, so authorise services you intend the business to use.</p>
     <p className="note note-warn">An assigned team can sign in and read, and the browser blocks anything else that would send a change. With Act on accounts on under Privileges, its agents can press anything this account can press, and are only told not to buy or commit. Do not give that to a role on an account that holds a saved card or can order on credit.</p>
     <div className="grid-2">
@@ -140,7 +141,7 @@ function RepositoryConnect({ org, onView }: { org: Organisation; onView: Update 
       setLabel(''); setRepository(''); setWorkflows('');
     } finally { setToken(''); }
   }); }}>
-    <h3>Connect a GitHub repository</h3>
+    <div className="row"><h3>Connect a GitHub repository</h3><HelpLink guide="code-repositories" section="connect-a-repository" /></div>
     <p>Agents get a branch of their own for each plan. They can commit there, open a pull request and start the workflows you list, so builds and tests run on GitHub’s machines. A person merges.</p>
     <p className="note note-warn">Use a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer">fine-grained token</a> limited to this repository, with Contents, Pull requests and Actions set to read and write, and Commit statuses to read. Add Workflows only if a role will change pipelines. Protect the main branch on GitHub as well: that lock holds whatever happens here.</p>
     <div className="grid-2">
@@ -288,14 +289,14 @@ export function Access({ org }: { org: Organisation }) {
   }, [org.id]);
   return <section className="operations access-panel">
     <h2>Email &amp; accounts</h2>
-    <p>Business mail, saved logins and access for the agents, held in this organisation’s encrypted vault.</p>
+    <p>Business mail, saved logins and access for the agents, held in this organisation’s encrypted vault. <HelpLink guide="email-and-accounts">Setup guide</HelpLink></p>
     <ErrorNote onDismiss={action.clearError}>{action.error}</ErrorNote>
     {!view ? <p className="muted">Loading access settings…</p> : !view.available ? <p className="note note-warn">{view.reason}</p> : view.unlocked ? <Unlocked org={org} view={view} onView={update} /> :
       <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => {
         if (!view.initialised && passphrase !== confirm) throw new Error('The passphrases do not match.');
         try { update(await call(org.id, 'POST', view.initialised ? '/unlock' : '/create', { passphrase, keepUnlocked })); } finally { setPassphrase(''); setConfirm(''); }
       }); }}>
-        <h3>{view.initialised ? 'Unlock the business vault' : 'Create a business vault'}</h3>
+        <div className="row"><h3>{view.initialised ? 'Unlock the business vault' : 'Create a business vault'}</h3><HelpLink guide="email-and-accounts" section="vault-storage-and-recovery">About the vault</HelpLink></div>
         <p>{view.initialised ? 'Unlocking makes saved connections available to the teams you authorised.' : 'Choose a passphrase you can keep safely. It is not sent to the agents or stored on disk. There is no passphrase recovery.'}</p>
         <Field label="Vault passphrase"><input type="password" autoComplete={view.initialised ? 'current-password' : 'new-password'} value={passphrase} onChange={e => setPassphrase(e.target.value)} required minLength={12} maxLength={1024} /></Field>
         {!view.initialised ? <Field label="Repeat vault passphrase"><input type="password" autoComplete="new-password" value={confirm} onChange={e => setConfirm(e.target.value)} required minLength={12} maxLength={1024} /></Field> : null}

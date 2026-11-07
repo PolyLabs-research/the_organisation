@@ -2,6 +2,7 @@ import { EVERY_ROLE_CAN, NO_ROLE_CAN, PRIVILEGES, allows, applies, rolesOf, type
 import type { Executive, Organisation, OrgView } from '../shared/types';
 import { api, useAction } from './api';
 import { ErrorNote, SeatBadge } from './ui';
+import { HelpLink } from './Guide';
 
 // What each role and its agents may do, on one page. A tick here is a decision for the shareholders, and each one is
 // enforced where the thing is done: what an agent is told about it only saves it wasting its turns.
@@ -26,7 +27,7 @@ export function Privileges({ org, onView, onSettings }: { org: Organisation; onV
   return (
     <section className="operations privileges-panel">
       <h2>Privileges</h2>
-      <p>What each role and its agents may do. Each tick is checked where the thing is done, so an agent cannot talk its way past one. A change holds at once, and what a role is doing with something it has just lost stops.</p>
+      <p>What each role and its agents may do. Each tick is checked where the thing is done, so an agent cannot talk its way past one. A change holds at once, and what a role is doing with something it has just lost stops. <HelpLink guide="reference" section="what-each-role-may-do">What each privilege means</HelpLink></p>
       <p className="muted">Mailboxes and accounts are assigned to teams under Email &amp; accounts. A role needs both: the assignment there, and the privilege here.</p>
       {org.settings.execution === 'managed' ? (
         <p className="note note-warn">
