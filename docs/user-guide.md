@@ -76,6 +76,19 @@ Each cycle goes the same way. The CEO consults the leads and sets direction, eac
 
 The spend bar shows the estimate against your budget. At the budget the organisation pauses itself.
 
+### Set the pace
+
+**Pace**, in the strip under the organisation's name, sets how fast work starts, so that you can keep up with it. Change it at any time, including while the organisation runs.
+
+| Pace | What happens |
+| --- | --- |
+| **Step** | Nothing starts until you press **Next step**, and then only one piece of work. Beside the button you see what it will start, such as "CMO · Preparing a proposal for the CEO". Press it again while that is under way to start the next piece beside it |
+| **Slow** | One piece of work at a time, with a 20-second pause after each to read what it did. A countdown shows when the next one starts |
+| **Steady** | One piece of work at a time, each starting as soon as the last finishes |
+| **Full speed** | As much at once as **Model calls in flight at once** in Settings allows, as fast as the model provider answers. New organisations start here |
+
+A piece of work is one call: a lead's proposal, a plan, a review, a position on a decision, one agent's task. The pace decides when each starts, not how long it takes, and a task an agent is working through can take some minutes. Under **Step**, the status reads **Waiting for your next step** when nothing is under way. Hosted sessions run on the provider's side, so only their start is paced.
+
 ## See what it is doing
 
 The left side shows the hierarchy: you, the CEO, the signatory, and each lead with its plan and which agents are busy. Select a lead's plan to open it.

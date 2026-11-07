@@ -3,6 +3,7 @@ import { lazy, Suspense, useState } from 'react';
 import type { OrgView } from '../shared/types';
 import { api, useAction, useOrgStream, type Meta } from './api';
 import { Operations } from './Operations';
+import { PaceControl } from './Pace';
 const Access = lazy(() => import('./Access').then(module => ({ default: module.Access })));
 import { Approaches } from './Approaches';
 import { Privileges } from './Privileges';
@@ -84,7 +85,8 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const sessions = active.filter((a) => a.kind === 'execute').length;
   const calls = active.length - sessions;
   const winding = [calls ? `${calls} call${calls === 1 ? '' : 's'} finishing` : '', sessions ? `${sessions} session${sessions === 1 ? '' : 's'} being held` : ''].filter(Boolean).join(', ');
-  const statusLabel = org.status === 'running' ? org.business.waiting ? 'Waiting for scheduled work' : 'Running' : draining ? `Pausing: ${winding}` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
+  const awaitingStep = org.settings.pace === 'step' && calls === 0 && view.pace.next.length > 0;
+  const statusLabel = org.status === 'running' ? org.business.waiting ? 'Waiting for scheduled work' : awaitingStep ? 'Waiting for your next step' : 'Running' : draining ? `Pausing: ${winding}` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
 
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: 'board', label: 'Board' },
@@ -150,6 +152,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
             ))}
           </ol>
         </div>
+        <PaceControl view={view} onView={setView} />
         <div className="strip-item strip-spend">
           <span className="field-label">{meta.provider.simulated ? 'Simulated spend' : 'Estimated spend'}</span>
           <span className="meter-line">

@@ -62,6 +62,7 @@ export const api = {
   remove: (id: string) => request<void>('DELETE', `/api/orgs/${id}`),
   start: (id: string) => request<OrgView>('POST', `/api/orgs/${id}/start`),
   pause: (id: string) => request<OrgView>('POST', `/api/orgs/${id}/pause`),
+  step: (id: string) => request<OrgView>('POST', `/api/orgs/${id}/step`),
   stop: (id: string) => request<OrgView>('POST', `/api/orgs/${id}/stop`),
   steer: (id: string, text: string) => request<OrgView>('POST', `/api/orgs/${id}/steer`, { text }),
   settings: (id: string, patch: Partial<OrgSettings>) => request<OrgView>('PATCH', `/api/orgs/${id}/settings`, patch),

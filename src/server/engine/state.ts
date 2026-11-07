@@ -10,6 +10,7 @@ import type {
   Executive,
   Organisation,
   OrgSettings,
+  Pace,
   OrgSummary,
   Plan,
   PlanPhase,
@@ -33,6 +34,7 @@ export const DEFAULT_SETTINGS: OrgSettings = {
   executiveEffort: 'medium',
   workerEffort: 'medium',
   maxConcurrentCalls: 4,
+  pace: 'free',
   execution: 'local',
   workflowRuns: true,
   archiveSessions: false,
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: OrgSettings = {
 };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+const PACES: Pace[] = ['step', 'slow', 'steady', 'free'];
 /**
  * What a model reference may look like: "claude-opus-5-5", "openai:gpt-5", "openrouter:deepseek/deepseek-chat:free",
  * or whatever a server of the user's own calls its models, spaces and brackets included. Anything a listing can
@@ -98,6 +101,7 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
     executiveEffort: effort(p.executiveEffort, base.executiveEffort),
     workerEffort: effort(p.workerEffort, base.workerEffort),
     maxConcurrentCalls: Math.round(clamp(p.maxConcurrentCalls, 1, 16, base.maxConcurrentCalls)),
+    pace: PACES.includes(p.pace as Pace) ? (p.pace as Pace) : base.pace,
     execution: p.execution === 'managed' || p.execution === 'local' ? p.execution : base.execution,
     workflowRuns: typeof p.workflowRuns === 'boolean' ? p.workflowRuns : base.workflowRuns,
     archiveSessions: typeof p.archiveSessions === 'boolean' ? p.archiveSessions : base.archiveSessions,

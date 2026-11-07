@@ -54,9 +54,13 @@ export interface RunnerOptions {
   emitIntervalMs?: number;
   /** How a gate waits on a repository's checks. */
   checkTimes?: Partial<CheckTimes>;
+  /** At the slow pace, the pause after one piece of work before the next starts. */
+  paceGapMs?: number;
 }
 
 const MAX_ATTEMPTS = 3;
+/** Long enough to read what a call produced before the next one starts. */
+export const SLOW_PACE_GAP_MS = 20_000;
 const MAX_ACTIVITY = 300;
 const MAX_HISTORY = 60;
 /** Failures that say something about one task rather than about the provider. */
@@ -88,6 +92,13 @@ export class OrgRunner {
   private halting = false;
   private disposed = false;
   private wakeTimer: NodeJS.Timeout | null = null;
+  /** Under the slow pace: wakes the loop when the pause after the last piece of work is over. */
+  private paceTimer: NodeJS.Timeout | null = null;
+  /** When the last piece of work finished, which the slow pace counts its pause from. */
+  private lastFinished = 0;
+  /** Under the step pace: how many pieces of work a person has just released. Never banked past one pump. */
+  private released = 0;
+  private readonly paceGapMs: number;
   private emitTimer: NodeJS.Timeout | null = null;
   private saveTimer: NodeJS.Timeout | null = null;
   private saving: Promise<void> = Promise.resolve();
@@ -108,6 +119,7 @@ export class OrgRunner {
     this.retryDelayMs = options.retryDelayMs ?? 4000;
     this.checkTimes = { ...CHECK_TIMES, ...options.checkTimes };
     this.emitIntervalMs = options.emitIntervalMs ?? 150;
+    this.paceGapMs = options.paceGapMs ?? SLOW_PACE_GAP_MS;
   }
 
   view(): OrgView {
@@ -115,6 +127,10 @@ export class OrgRunner {
       org: toClientView(this.org),
       active: [...this.inFlight.values()],
       draining: this.org.status !== 'running' && this.inFlight.size > 0,
+      pace: {
+        next: this.org.status === 'running' ? this.ordered(this.startable()).slice(0, 3).map((item) => ({ kind: item.kind, execId: item.execId, label: describeWork(this.org, item) })) : [],
+        nextAt: this.paceTimer ? new Date(this.lastFinished + this.paceGapMs).toISOString() : null,
+      },
     };
   }
 
@@ -166,11 +182,28 @@ export class OrgRunner {
     this.pump();
   }
 
+  /** Under the step pace: start the next piece of work, the one the dashboard shows as next. */
+  step(): void {
+    const org = this.org;
+    if (org.settings.pace !== 'step') throw new ValidationError('Steps are taken one at a time only at the step pace.');
+    if (org.status !== 'running') throw new ValidationError('Start the organisation first, then take a step.');
+    if (!this.startable().length) {
+      throw new ValidationError(this.inFlight.size ? 'Nothing is ready to start yet: the work under way has to finish first.' : 'Nothing is ready to start.');
+    }
+    this.released = 1;
+    try {
+      this.pump();
+    } finally {
+      this.released = 0;
+    }
+  }
+
   /** Stop starting new work. Calls already in flight finish and their results are kept. */
   pause(reason: PauseReason = 'user', error: string | null = null): void {
     const org = this.org;
     if (org.status !== 'running') return;
     this.clearWake();
+    this.clearPace();
     org.status = 'paused';
     org.pauseReason = reason;
     org.lastError = error;
@@ -372,6 +405,34 @@ export class OrgRunner {
     this.pump();
   }
 
+  private clearPace(): void {
+    if (this.paceTimer) clearTimeout(this.paceTimer);
+    this.paceTimer = null;
+  }
+
+  /**
+   * How many more pieces of work the pace lets start now. At the slow pace a timer is set to come back when
+   * the pause is over. Hosted sessions run beside the model calls, so only their start is paced.
+   */
+  private paceAllowance(): number {
+    const pace = this.org.settings.pace;
+    this.clearPace();
+    if (pace === 'free') return Infinity;
+    if (pace === 'step') return this.released;
+    if (this.callsInFlight() > 0) return 0;
+    const wait = pace === 'slow' ? this.lastFinished + this.paceGapMs - Date.now() : 0;
+    if (wait <= 0) return 1;
+    this.paceTimer = setTimeout(() => { this.paceTimer = null; this.pump(); }, wait);
+    this.paceTimer.unref();
+    return 0;
+  }
+
+  /** Work in the order the loop starts it: hosted sessions, then the leads' own calls, then agents' tasks. */
+  private ordered(items: WorkItem[]): WorkItem[] {
+    const rank = (item: WorkItem) => (item.kind === 'execute' ? 0 : item.kind === 'task' ? 2 : 1);
+    return [...items].sort((a, b) => rank(a) - rank(b));
+  }
+
   private clearWake(): void {
     if (this.wakeTimer) clearTimeout(this.wakeTimer);
     this.wakeTimer = null;
@@ -462,12 +523,16 @@ export class OrgRunner {
       }
       // A hosted session runs on the provider's side for as long as its plan takes. It is not one
       // of this machine's model calls, and holding a call slot for it would stall the board.
-      for (const item of items) if (item.kind === 'execute') this.launch(item, null);
-      const room = () => this.callsInFlight() < org.settings.maxConcurrentCalls;
+      let allowance = this.paceAllowance();
+      for (const item of items) {
+        if (allowance <= 0) break;
+        if (item.kind === 'execute') { this.launch(item, null); allowance--; }
+      }
+      const room = () => allowance > 0 && this.callsInFlight() < org.settings.maxConcurrentCalls;
       // A lead's own calls are short and unblock everything after them, so they go first.
       for (const item of items) {
         if (!room()) break;
-        if (item.kind !== 'task' && item.kind !== 'execute') this.launch(item, null);
+        if (item.kind !== 'task' && item.kind !== 'execute') { this.launch(item, null); allowance--; }
       }
       // Agent slots are then shared out: the next task goes to the lead with the
       // fewest agents working, and among equals to the one served least so far.
@@ -491,6 +556,7 @@ export class OrgRunner {
         const [item] = tasks.splice(best, 1);
         this.served.set(item!.execId, (this.served.get(item!.execId) ?? 0) + 1);
         this.launch(item!, bestAgent);
+        allowance--;
       }
       this.changed();
     } catch (err) {
@@ -637,6 +703,7 @@ export class OrgRunner {
       error = this.fail(item, err);
     } finally {
       this.inFlight.delete(item.key);
+      this.lastFinished = Date.now();
       // A plan's session is archived once the plan is over, if the shareholders asked for that.
       if (item.kind === 'execute' && org.settings.archiveSessions) this.tidy();
       // A look at the checks costs nothing and says nothing new, however many it takes.
@@ -841,6 +908,7 @@ export class OrgRunner {
   dispose(): void {
     this.disposed = true;
     this.clearWake();
+    this.clearPace();
     for (const listener of this.listeners) listener({ type: 'closed' });
     for (const timer of this.backoff.values()) clearTimeout(timer);
     this.backoff.clear();
