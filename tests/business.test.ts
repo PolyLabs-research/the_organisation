@@ -170,9 +170,9 @@ describe('scheduled business operation', () => {
       override async structured<T>(request: StructuredRequest<T>): Promise<T> {
         const response = await super.structured(request);
         if (request.kind !== 'consult') return response;
-        return request.schema.parse({ ...response as object, operations: [{
+        return request.schema.parse({ ...response as object, operations: [JSON.stringify({
           kind: 'job', record: { ownerId: 'cto', title: 'A model-scheduled delivery', dueAt: new Date(Date.now() + 86400000).toISOString(), nextAction: 'Produce a checked draft.' },
-        }] });
+        })] });
       }
       override async agent(request: AgentRequest) {
         if (!this.updated) {

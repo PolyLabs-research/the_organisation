@@ -170,6 +170,15 @@ export function applyBusinessCommand(org: Organisation, raw: unknown, actor: Bus
   return save(org, actor, 'memory', b.memory, { ...value, ...metadata(org, actor, old) }, old);
 }
 
+/** A command as models write it in a reply: a JSON object in a string. */
+function decodeCommand(encoded: string): unknown {
+  try {
+    return JSON.parse(encoded);
+  } catch {
+    return fail(`An update is not a JSON object: ${encoded.slice(0, 200)}`);
+  }
+}
+
 /** Reject an invalid model batch atomically and make the correction visible to its next call. */
 export function applyBusinessUpdates(org: Organisation, updates: unknown[], actor: BusinessActor): void {
   if (!updates.length) return;
@@ -180,7 +189,7 @@ export function applyBusinessUpdates(org: Organisation, updates: unknown[], acto
   const before = structuredClone(org.business);
   const seq = org.seq;
   try {
-    for (const command of updates.slice(0, 12)) applyBusinessCommand(org, command, actor);
+    for (const command of updates.slice(0, 12)) applyBusinessCommand(org, typeof command === 'string' ? decodeCommand(command) : command, actor);
   } catch (error) {
     org.business = before;
     org.seq = seq;
