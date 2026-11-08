@@ -27,6 +27,13 @@
   --badge-line-l: 82%;
   --shadow: 0 12px 40px rgb(15 20 40 / 0.18);
   --radius: 6px;
+  /* Charts: the first three slots of the validated categorical palette, the status red, and recessive chrome. */
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-critical: #d03b3b;
+  --viz-warning: #b37a00;
+  --viz-grid: #e8eaef;
   --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -59,6 +66,12 @@
     --badge-ink-s: 75%;
     --badge-line-l: 32%;
     --shadow: 0 12px 40px rgb(0 0 0 / 0.6);
+    --viz-1: #3987e5;
+    --viz-2: #d95926;
+    --viz-3: #199e70;
+    --viz-critical: #d03b3b;
+    --viz-warning: #fab219;
+    --viz-grid: #262b35;
   }
 }
 
@@ -2748,3 +2761,422 @@ a.provider:hover {
 .pace-row .button { padding-block: 4px; font-size: 12px; }
 .pace-note { font-size: 12px; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pace-error { font-size: 12px; color: var(--bad); max-width: 46ch; }
+
+
+/* ---- Overseer ---- */
+
+.overseer {
+  display: grid;
+  gap: 14px;
+}
+
+.small {
+  font-size: 12.5px;
+}
+
+.segmented {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.segmented button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.segmented button + button {
+  border-left: 1px solid var(--line);
+}
+
+.segmented button.is-on {
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.viz {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.viz-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+
+.viz-filters .check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.viz-heading {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.viz-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.viz-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.cat-task, .slot-1 { --mark: var(--viz-1); }
+.cat-lead, .slot-2 { --mark: var(--viz-2); }
+.cat-board, .slot-3 { --mark: var(--viz-3); }
+
+.viz-swatch,
+.gantt-bar,
+.hbars-bar {
+  background: var(--mark);
+}
+
+/* Work not yet done: a faint hatch of its kind's colour, so it never reads as work that happened. */
+.viz-swatch.is-forecast,
+.gantt-bar.is-forecast {
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--mark) 55%, transparent) 0 3px, color-mix(in srgb, var(--mark) 18%, transparent) 3px 7px);
+}
+
+.viz-bad {
+  color: var(--viz-critical);
+}
+
+.viz-tip {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  gap: 2px;
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+
+.viz-tip strong {
+  color: var(--ink);
+}
+
+/* Timeline */
+
+.gantt {
+  position: relative;
+  overflow: hidden;
+  padding-bottom: 6px;
+}
+
+.gantt-axis {
+  position: relative;
+  height: 20px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.gantt-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.gantt-body {
+  position: relative;
+}
+
+.gantt-grid,
+.gantt-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--viz-grid);
+}
+
+.gantt-now {
+  width: 2px;
+  background: var(--ink-3);
+  z-index: 2;
+}
+
+.gantt-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--viz-grid);
+}
+
+.gantt-row.is-sub {
+  border-top-color: transparent;
+}
+
+.gantt-label {
+  flex: none;
+  padding-right: 8px;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gantt-row.is-sub .gantt-label {
+  padding-left: 14px;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+
+.gantt-track {
+  position: relative;
+  flex: 1;
+  height: 100%;
+}
+
+.gantt-bar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  border-radius: 4px;
+  /* The surface gap between bars that touch. */
+  box-shadow: 0 0 0 1px var(--surface);
+  cursor: default;
+}
+
+.gantt-bar.is-failed {
+  background: var(--viz-critical);
+}
+
+.gantt-bar.is-stopped,
+.viz-swatch.is-stopped {
+  background: var(--line-strong);
+}
+
+.gantt-now-label {
+  position: absolute;
+  top: -15px;
+  left: 4px;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.gantt-text {
+  overflow: hidden;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 1;
+  /* Near-black clears 4.5:1 on every bar colour, and on the failure red, in both themes. */
+  color: #0b0b0b;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gantt-bar.is-forecast .gantt-text {
+  color: var(--ink);
+}
+
+.gantt-fail {
+  flex: none;
+  margin-left: auto;
+  margin-right: 3px;
+  color: #0b0b0b;
+}
+
+/* Charts */
+
+.viz-chart {
+  position: relative;
+  min-width: 0;
+}
+
+.viz-chart svg {
+  display: block;
+}
+
+.viz-grid {
+  stroke: var(--viz-grid);
+  stroke-width: 1;
+}
+
+.viz-axis {
+  fill: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.viz-line,
+.viz-trend,
+.viz-range {
+  fill: none;
+  stroke: var(--mark);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.viz-trend {
+  opacity: 0.35;
+}
+
+.viz-dot {
+  fill: var(--mark);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.viz-hit {
+  fill: transparent;
+}
+
+.viz-budget {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+}
+
+.viz-cross {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.viz-hero {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 40px;
+}
+
+.viz-hero > div {
+  display: grid;
+}
+
+.viz-hero-n {
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--ink);
+}
+
+.viz-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px 32px;
+}
+
+.hbars {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.hbars li {
+  display: grid;
+  grid-template-columns: minmax(80px, 140px) 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.hbars-label {
+  overflow: hidden;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hbars-track {
+  height: 12px;
+}
+
+.hbars-bar {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 0 4px 4px 0;
+}
+
+.hbars-value {
+  color: var(--ink);
+}
+
+/* Bottlenecks */
+
+.findings {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.finding {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.finding p {
+  margin: 2px 0 0;
+  font-size: 13px;
+}
+
+.finding-icon {
+  flex: none;
+  padding-top: 2px;
+}
+
+.finding-tag {
+  margin-right: 4px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.sev-critical .finding-icon { color: var(--viz-critical); }
+.sev-warning .finding-icon { color: var(--viz-warning); }
+.sev-info .finding-icon { color: var(--ink-3); }
+.sev-good .finding-icon { color: var(--ok); }

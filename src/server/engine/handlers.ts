@@ -8,7 +8,8 @@ import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTo
 import { allows } from '../../shared/privileges';
 import { describeRequest, isOpen } from '../../shared/signatory';
 import { namedWaits } from '../../shared/waits';
-import type { BoardReport, Executive, Organisation, Plan, PlanOrigin, PlanPhase, SopPhase } from '../../shared/types';
+import { clampEffort } from '../../shared/effort';
+import type { BoardReport, Executive, Organisation, Plan, PlanOrigin, PlanPhase, SopPhase, Task } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
 import { Workspace, workspaceTools } from '../workspace';
 import { AGENT_BRANCHES } from '../access';
@@ -74,6 +75,7 @@ function planPhases(phases: SopPhase[]): PlanPhase[] {
     gate: p.gate ?? null,
     evidence: null,
     waitsFor: [],
+    effort: null,
   }));
 }
 
@@ -114,6 +116,7 @@ function newPlan(
     // The plan starts as the lead's standard operating profile applied to this objective. Drafting it may choose another.
     phases: planPhases(owner.phases),
     skipped: [],
+    effort: null,
     status: 'planning',
     amendments: [],
     escalations: [],
@@ -158,16 +161,23 @@ export function cancelPlan(org: Organisation, plan: Plan, reason: string, byId: 
 }
 
 /** What the lead says each phase will produce, and what it must wait for in other leads' plans. */
-function applyIntents(org: Organisation, plan: Plan, phases: Array<{ phase: string; intent: string; waitsFor?: Array<{ lead: string; phase: string }> }>): void {
+function applyIntents(org: Organisation, plan: Plan, phases: Array<{ phase: string; intent: string; effort?: number; waitsFor?: Array<{ lead: string; phase: string }> }>): void {
   for (const phase of plan.phases) {
     const entry = phases.find((p) => p.phase === phase.sopPhaseId);
     const given = entry?.intent.trim();
     if (given) phase.intent = clean(given, 800);
+    if (entry && phase.status === 'pending') phase.effort = clampEffort(entry.effort) ?? phase.effort;
     if (entry && phase.status === 'pending') phase.waitsFor = namedWaits(org, plan.ownerId, entry.waitsFor);
   }
 }
 
-type PhaseEntry = { phase: string; intent: string; skip?: boolean; waitsFor?: Array<{ lead: string; phase: string }> };
+type PhaseEntry = { phase: string; intent: string; skip?: boolean; effort?: number; waitsFor?: Array<{ lead: string; phase: string }> };
+
+/** A task with the effort the lead rated it at. */
+function rated(task: Task, effort: unknown): Task {
+  task.effort = clampEffort(effort);
+  return task;
+}
 
 /** Every phase of the way of working a plan follows, whether or not the plan runs it. */
 function approachPhases(owner: Executive, plan: Plan): SopPhase[] {
@@ -309,6 +319,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         plan.workApproachReason = chosen && workApproachReason ? clean(workApproachReason, 600) : null;
         applyBusinessUpdates(org, data.operations, { id: exec.id });
         plan.approach = clean(data.approach);
+        plan.effort = clampEffort(data.effort);
         shapePhases(org, exec, plan, data.phases);
         plan.escalations = data.escalations
           .filter((e) => e.issue.trim())
@@ -460,6 +471,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       return () => {
         if (plan.status !== 'revising') return;
         plan.approach = clean(data.approach);
+        plan.effort = clampEffort(data.effort) ?? plan.effort;
         shapePhases(org, exec, plan, data.phases);
         plan.status = 'approved';
         plan.updatedAt = now();
@@ -482,8 +494,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         if (plan.status !== 'executing' || phase.status !== 'pending') return;
         const specs = data.tasks.filter((t) => t.title.trim() && t.brief.trim()).slice(0, max);
         // A phase always has work: if the lead named none, the phase deliverable is the task.
-        if (!specs.length) specs.push({ title: `Produce the ${phase.name} deliverable`, brief: `${phase.intent}\n\nDeliverable: ${phase.deliverable}` });
-        phase.tasks = specs.map((t) => newTask(org, t.title, t.brief, false));
+        if (!specs.length) specs.push({ title: `Produce the ${phase.name} deliverable`, brief: `${phase.intent}\n\nDeliverable: ${phase.deliverable}`, effort: phase.effort ?? 0 });
+        phase.tasks = specs.map((t) => rated(newTask(org, t.title, t.brief, false), t.effort));
         phase.notes = clean(data.notes, 1500);
         phase.status = 'working';
         plan.updatedAt = now();
@@ -607,8 +619,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         if (held || (data.verdict === 'rework' && canRework && rework.length)) {
           phase.reworkRounds += 1;
           // Check names come from the repository, so they are left out of a brief an agent takes as its instructions.
-          if (held && !rework.length) rework.push({ title: `Clear the ${phase.name} gate`, brief: `The system did not pass this gate. Read the checks and the logs of any failed runs with read_repository, find out why, put it right and push the fix to the plan's branch.` });
-          phase.tasks.push(...rework.map((t) => newTask(org, t.title, t.brief, true)));
+          if (held && !rework.length) rework.push({ title: `Clear the ${phase.name} gate`, brief: `The system did not pass this gate. Read the checks and the logs of any failed runs with read_repository, find out why, put it right and push the fix to the plan's branch.`, effort: 0 });
+          phase.tasks.push(...rework.map((t) => rated(newTask(org, t.title, t.brief, true), t.effort)));
         } else {
           phase.status = 'done';
         }

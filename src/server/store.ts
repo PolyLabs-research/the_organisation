@@ -66,6 +66,27 @@ export class Store {
     await fs.appendFile(path.join(this.orgDir(id), 'activity.jsonl'), JSON.stringify(entry) + '\n', 'utf8');
   }
 
+  /** Every entry in an organisation's activity log, oldest first. A line that cannot be read is skipped. */
+  async readActivity(id: string): Promise<ActivityEntry[]> {
+    let text: string;
+    try {
+      text = await fs.readFile(path.join(this.orgDir(id), 'activity.jsonl'), 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    const entries: ActivityEntry[] = [];
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        entries.push(JSON.parse(line) as ActivityEntry);
+      } catch {
+        // A line cut short by a crash mid-write.
+      }
+    }
+    return entries;
+  }
+
   async archiveCycle(id: string, cycle: number, data: unknown): Promise<void> {
     const dir = path.join(this.orgDir(id), 'archive');
     await fs.mkdir(dir, { recursive: true });

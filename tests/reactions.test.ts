@@ -24,8 +24,8 @@ function donePlan(org: Organisation, ownerId: string, reportId: string, files: s
   const plan: Plan = {
     id: 'p9', cycle: 1, ownerId, origin: { type: 'directive' }, depth: 0, objective: 'Deliver the research brief and a name shortlist', successCriteria: 'c', priority: 'medium', rationale: 'r',
     approach: null, workApproachId: 'standard', workApproachReason: null,
-    phases: owner.phases.map((ph, i) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'done', tasks: i ? [] : [{ id: 't1', title: 'Shortlist', brief: 'b', status: 'done', result: 'ok', files, error: null, agent: 1, attempts: 1, rework: false, startedAt: at, finishedAt: at } as never], reworkRounds: 0, summary: 's', gate: null, evidence: null, waitsFor: [] })),
-    skipped: [], status: 'done', amendments: [], escalations: [], decisionId: null, reportId, cancelReason: null, createdAt: at, updatedAt: at, execution: 'local', managed: null, code: null,
+    phases: owner.phases.map((ph, i) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'done', tasks: i ? [] : [{ id: 't1', title: 'Shortlist', brief: 'b', status: 'done', result: 'ok', files, error: null, agent: 1, attempts: 1, rework: false, startedAt: at, finishedAt: at } as never], reworkRounds: 0, summary: 's', gate: null, evidence: null, waitsFor: [], effort: null })),
+    skipped: [], effort: null, status: 'done', amendments: [], escalations: [], decisionId: null, reportId, cancelReason: null, createdAt: at, updatedAt: at, execution: 'local', managed: null, code: null,
   };
   org.plans.push(plan);
   return plan;
@@ -59,7 +59,7 @@ describe('reading reports that may be out of date', () => {
     const plan: Plan = {
       id: 'p1', cycle: 1, ownerId: 'clo', origin: { type: 'follow_up', reportIds: [r.id] }, depth: 1, objective: 'Rule on the sentence', successCriteria: 'c', priority: 'medium',
       rationale: 'Asked of legal.\n\nAlready in place, and what is missing: disclosure.md v0.2 exists; the ruling is missing.', approach: null, workApproachId: 'standard', workApproachReason: null,
-      phases: [], skipped: [], status: 'planning', amendments: [], escalations: [], decisionId: null, reportId: null, cancelReason: null, createdAt: at, updatedAt: at, execution: null, managed: null, code: null,
+      phases: [], skipped: [], effort: null, status: 'planning', amendments: [], escalations: [], decisionId: null, reportId: null, cancelReason: null, createdAt: at, updatedAt: at, execution: null, managed: null, code: null,
     };
     org.plans.push(plan);
     const text = prompts.planPrompt(org, clo, plan, []);

@@ -5,6 +5,7 @@ import { api, useAction, useOrgStream, type Meta } from './api';
 import { Operations } from './Operations';
 import { PaceControl } from './Pace';
 const Access = lazy(() => import('./Access').then(module => ({ default: module.Access })));
+const Overseer = lazy(() => import('./Overseer').then((module) => ({ default: module.Overseer })));
 import { Approaches } from './Approaches';
 import { Privileges } from './Privileges';
 import { Hierarchy } from './Hierarchy';
@@ -16,7 +17,7 @@ import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
 
-type Tab = 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity';
+type Tab = 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity' | 'overseer';
 
 function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
   const { org } = view;
@@ -90,6 +91,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
 
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: 'board', label: 'Board' },
+    { id: 'overseer', label: 'Overseer' },
     { id: 'calendar', label: 'Calendar' },
     { id: 'access', label: 'Email & accounts' },
     { id: 'privileges', label: 'Privileges' },
@@ -218,6 +220,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
               <Signatory org={org} shown={tab === 'signatory'} onView={setView} onOpenPlan={openPlan} onOpenFile={openFile} onSettings={() => setSettingsOpen(true)} />
             </div>
             {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
+            {tab === 'overseer' ? <Suspense fallback={<p className="muted">Loading the overseer…</p>}><Overseer view={view} activity={activity} /></Suspense> : null}
             {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
           </div>
         </section>

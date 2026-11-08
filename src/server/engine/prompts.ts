@@ -4,6 +4,7 @@ import { describeRequest, isOpen, waitsOnAi } from '../../shared/signatory';
 import type { BoardReport, Decision, Executive, GateEvidence, Organisation, PhaseGate, Plan, PlanPhase, ReviewRound, SignatoryRequest, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, type SystemPrompt } from '../providers/types';
 import { describeWait, waitMet } from '../../shared/waits';
+import { effortScaleText } from '../../shared/effort';
 import { oneLine } from './records';
 import { CEO_QUESTION, arbiterOf, execById, leadsOf, teamDir } from './state';
 
@@ -114,6 +115,11 @@ You direct a team of agents. They do the work; you plan it, review it and answer
 # Your standard operating profile
 A plan you own runs these phases in order, unless it follows another work approach open to you. A phase is finished before the next begins.
 ${phases}
+
+# Effort scale
+Rate every plan, phase and task you set by how big it is, not how long it will take: nobody can say that, but the organisation learns what each level takes from the work it finishes and forecasts from it. Rate honestly, the same way every time, against these anchors:
+${effortScaleText()}
+A single agent task is usually 2 to 5, a phase 4 to 7, a plan 5 to 8.
 
 # How you work
 - Decide what is inside your remit yourself. Take to the board only what cuts across another lead's remit.
@@ -379,7 +385,7 @@ ${signatoryBlock(org)}
 ${filesBlock(files)}
 
 ${approachBlock(choices)}# Your task
-Draft your plan. Give your approach, then give one entry per phase of ${choices.length > 1 ? 'the work approach you chose' : 'your operating profile'}, in order, saying what it will produce for this objective. Run only the phases the objective needs. If it asks for part of what your profile covers (research only, say, or one answer to another lead), set skip on the phases it does not need and say in their intent why; a follow-up usually needs one or two phases. Phases the system checks for itself cannot be skipped. If a phase needs something another lead is producing this cycle, say which lead and which of their phases in its waitsFor: the system will not start your phase until theirs is finished, and will hand you what it produced. Wait only for what you truly need, since every wait slows the organisation; never give dates for the organisation's own work. Record the decisions you are taking inside your remit. If something cuts across another lead's remit, or competes with what another lead is doing, raise it as an escalation for the board; most plans have none.`;
+Draft your plan. Give your approach, then give one entry per phase of ${choices.length > 1 ? 'the work approach you chose' : 'your operating profile'}, in order, saying what it will produce for this objective. Rate the plan and each phase you keep on the effort scale. Run only the phases the objective needs. If it asks for part of what your profile covers (research only, say, or one answer to another lead), set skip on the phases it does not need and say in their intent why; a follow-up usually needs one or two phases. Phases the system checks for itself cannot be skipped. If a phase needs something another lead is producing this cycle, say which lead and which of their phases in its waitsFor: the system will not start your phase until theirs is finished, and will hand you what it produced. Wait only for what you truly need, since every wait slows the organisation; never give dates for the organisation's own work. Record the decisions you are taking inside your remit. If something cuts across another lead's remit, or competes with what another lead is doing, raise it as an escalation for the board; most plans have none.`;
 }
 
 export function reviewPrompt(org: Organisation, lead: Executive, round: ReviewRound): string {
@@ -499,7 +505,7 @@ What you said it would produce: ${phase.intent}${phase.gate ? `\nThis phase has 
 ${[phaseSummaries(plan, index), waitedBlock(org, phase), signatoryBlock(org), filesBlock(files)].filter(Boolean).join('\n\n')}
 
 # Your task
-Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Commission the deliverable itself, not paperwork about it: no task whose only output is a tracker, register, reconciliation log, cross-reference or a review of other files, unless the phase deliverable is exactly that. To improve an existing file, have the task edit it in place rather than write a new version beside it. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.`;
+Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Rate each task on the effort scale. Commission the deliverable itself, not paperwork about it: no task whose only output is a tracker, register, reconciliation log, cross-reference or a review of other files, unless the phase deliverable is exactly that. To improve an existing file, have the task edit it in place rather than write a new version beside it. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.`;
 }
 
 /** What the phase waited for in other leads' plans, so the lead builds on it rather than looking for it. */
