@@ -429,7 +429,7 @@ What drives spend, and where to change it (wizard or settings):
 - **Effort** for executives and agents (default medium).
 - **Agents per lead** and **tasks per phase** (default at most 4 tasks).
 - **Follow-up work per cycle** (default one round, and never more than two follow-up plans per lead).
-- **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; at most 8 searches per task).
+- **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; at most 8 searches per task). With it, agents can also read the pages a search finds (web fetch, up to 4 pages per model request, each cut to 20,000 tokens). Reading a page has no per-use fee; its text is billed as input tokens.
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
 If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. By default, an organisation that was running comes back paused after a server restart. The optional resume-on-restart setting restores a previously running or waiting organisation automatically, while retaining manual pauses and limits.
@@ -438,7 +438,7 @@ On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is wh
 
 ## What agents can and cannot do
 
-**On this machine** (the default), agents have three tools, all confined to their organisation's workspace folder: list files, read a file, write a file. With web search switched on, agents on Claude models can also search the web. Business records, email, service accounts and repositories are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach any other system, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
+**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts and repositories are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach any other system, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
 
 **In hosted sessions** (Claude models only), agents have a shell and file tools in a sandbox on Anthropic's side. They can install packages, build, run and test, and are told to report what actually happened.
 

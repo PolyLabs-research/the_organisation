@@ -6,7 +6,7 @@ import { hasCause, translate } from './errors';
 import { strictSchema, type JsonSchema } from './schema';
 import { ManagedResources } from './managed/resources';
 import { DEFAULT_TIMINGS, PlanSession, archiveSession, threadDetail, type SessionTimings } from './managed/session';
-import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webSearchToolFor } from './pricing';
+import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webFetchToolFor, webSearchToolFor } from './pricing';
 import {
   ProviderError,
   type AgentRequest,
@@ -205,7 +205,12 @@ export class ClaudeProvider implements Provider {
     });
     // `max_uses` limits one request, not the run, and the tool list cannot change
     // mid-run, so the allowance for the whole task is enforced below by counting.
-    if (req.webSearch) tools.push({ type: webSearchToolFor(req.model), name: 'web_search', max_uses: req.webSearch.perRequest });
+    if (req.webSearch) {
+      tools.push({ type: webSearchToolFor(req.model), name: 'web_search', max_uses: req.webSearch.perRequest });
+      // Reading a page a search found (or a file names) is what turns a search hit into a checked source.
+      // Each page is capped, since every page read is carried in every later turn of the run.
+      tools.push({ type: webFetchToolFor(req.model), name: 'web_fetch', max_uses: MAX_FETCHES_PER_REQUEST, max_content_tokens: MAX_FETCH_TOKENS });
+    }
 
     const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: req.prompt }];
     let turns = 0;
@@ -307,6 +312,10 @@ export class ClaudeProvider implements Provider {
     }
   }
 }
+
+/** Pages an agent may read in one model request, and how much of each page it gets. */
+const MAX_FETCHES_PER_REQUEST = 4;
+const MAX_FETCH_TOKENS = 20_000;
 
 const WRAP_UP =
   'You have to stop here. Do not call any more tools. Give your closing report now: what you produced and where, and exactly what is left unfinished.';

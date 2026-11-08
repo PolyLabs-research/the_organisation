@@ -536,7 +536,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         model: org.settings.workerModel,
         effort: org.settings.workerEffort,
         tools,
-        webSearch: canSearch ? { perRequest: 3, perTask: MAX_TASK_SEARCHES } : null,
+        // The whole allowance is open in any one request, so a search is only ever refused for the limit once the task has used it up.
+        webSearch: canSearch ? { perRequest: MAX_TASK_SEARCHES, perTask: MAX_TASK_SEARCHES } : null,
         maxTurns: MAX_TASK_TURNS,
         signal: ctx.signal,
         shouldStop: ctx.halting,
