@@ -700,6 +700,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
                   objective: `Check the ${first.from} deliverable against ${seat!.function.toLowerCase()} and resolve what does not fit.`,
                   successCriteria: 'A short note in the workspace listing each mismatch and how it was resolved.',
                   rationale: `The ${first.from} report asks other leads to check its files against their own plans.`,
+                  existing: `The ${first.from} files are in the workspace; nothing yet checks them against ${seat!.function.toLowerCase()}.`,
                   reportIds: [first.id],
                 },
               ]

@@ -107,7 +107,7 @@ function newPlan(
     objective: clean(fields.objective, 1200),
     successCriteria: clean(fields.successCriteria, 1200),
     priority: fields.priority,
-    rationale: clean(fields.rationale, 1200),
+    rationale: clean(fields.rationale, 2000),
     approach: null,
     workApproachId: STANDARD_APPROACH,
     workApproachReason: null,
@@ -624,7 +624,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       };
       if (!reports.length) return drop;
       const depthOf = (reportId: string) => planById(org, org.reports.find((r) => r.id === reportId)?.planId ?? '')?.depth ?? 0;
-      const data = await ask(system, prompts.reactPrompt(org, exec, reports, MAX_FOLLOW_UPS), schemas.reactionSchema(reports.map((r) => r.id)), {
+      const files = await workspace.list();
+      const data = await ask(system, prompts.reactPrompt(org, exec, reports, MAX_FOLLOW_UPS, files), schemas.reactionSchema(reports.map((r) => r.id)), {
         reports: reports.map((r) => ({ id: r.id, from: execById(org, r.fromId)?.short ?? r.fromId, headline: r.headline, asks: r.asks })),
         maxFollowUps: MAX_FOLLOW_UPS,
       });
@@ -638,7 +639,10 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           const from = sources.length ? sources : item.reportIds;
           const depth = Math.max(...from.map(depthOf)) + 1;
           if (depth > org.settings.maxFollowUpDepth || followUpsLeft(org, exec.id) === 0) continue;
-          const plan = newPlan(org, exec, { ...f, priority: 'medium' }, { type: 'follow_up', reportIds: from }, depth);
+          // What already exists goes with the plan, so that drafting it starts from there rather than from scratch.
+          const existing = (f.existing ?? '').trim();
+          const rationale = existing ? `${f.rationale.trim()}\n\nAlready in place, and what is missing: ${existing}` : f.rationale;
+          const plan = newPlan(org, exec, { ...f, rationale, priority: 'medium' }, { type: 'follow_up', reportIds: from }, depth);
           postToBoard(org, 'reaction', exec.id, `${exec.short} follows up`, `${plan.objective}\n\n**Because:** ${plan.rationale}`, { planId: plan.id });
         }
       };

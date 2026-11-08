@@ -204,6 +204,9 @@ export function reactionSchema(reportIds: string[]) {
         objective: z.string(),
         successCriteria: z.string(),
         rationale: z.string(),
+        existing: z
+          .string()
+          .describe('What the workspace and the work since already provide toward this, by file path, and exactly what is still missing. If nothing is missing, do not start the follow-up'),
         reportIds: z.array(idEnum(reportIds)).describe('The reports that prompted this'),
       }),
     ),

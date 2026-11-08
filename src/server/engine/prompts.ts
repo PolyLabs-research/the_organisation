@@ -354,10 +354,15 @@ export function planPrompt(org: Organisation, lead: Executive, plan: Plan, files
   const others = org.plans
     .filter((p) => p.cycle === org.cycle.number && p.id !== plan.id && p.status !== 'cancelled')
     .map((p) => `- ${who(org, p.ownerId)} [${p.ownerId}]: ${p.objective} Phases: ${p.phases.map((ph) => ph.name).join(' → ')}.`);
+  const sources = plan.origin.type === 'follow_up' ? plan.origin.reportIds.map((id) => org.reports.find((r) => r.id === id)).filter((r): r is BoardReport => !!r) : [];
   const origin =
     plan.origin.type === 'directive'
       ? 'The CEO has given you this directive.'
-      : 'You chose to follow up on reports to the board. This is the work you set yourself.';
+      : `You chose to follow up on reports to the board. This is the work you set yourself. Build on what already exists (see "Why" below and the workspace): read those files rather than recreating them, and plan only what is missing.${
+          sources.length
+            ? `\n\n# The reports you are following up\n${sources.map((r) => `- ${r.id} from ${who(org, r.fromId)}: ${r.headline}${r.asks.length ? `\n  Asks: ${r.asks.join(' | ')}` : ''}${r.files.length ? `\n  Files: ${r.files.join(', ')}` : ''}`).join('\n')}`
+            : ''
+        }`;
   return `${origin}
 
 ${planHeader(org, plan)}
@@ -611,26 +616,60 @@ ${signatoryBlock(org)}
 Report to the board. Give a headline, a short summary of what was delivered measured against the success criteria, the outcomes as a list, and anything you now need other leads or the board to do. Other leads will read this and may act on it, so say what they need to know and say it accurately: do not claim more than the phases delivered.`;
 }
 
-export function reactPrompt(org: Organisation, lead: Executive, reports: BoardReport[], maxFollowUps: number): string {
+/** How long ago something happened, in words a lead can weigh a report's age by. */
+function ago(at: string, now = Date.now()): string {
+  const minutes = Math.round((now - Date.parse(at)) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 120) return `${minutes} min ago`;
+  return `${Math.round(minutes / 60)} h ago`;
+}
+
+/** A lead's own plans this cycle, with what each finished one reported and produced. */
+function ownWork(org: Organisation, lead: Executive): string {
+  const mine = org.plans.filter((p) => p.ownerId === lead.id && p.cycle === org.cycle.number && p.status !== 'cancelled');
+  if (!mine.length) return 'None.';
+  return mine
+    .map((p) => {
+      const report = p.reportId ? org.reports.find((r) => r.id === p.reportId) : undefined;
+      const files = [...new Set(p.phases.flatMap((ph) => ph.tasks.flatMap((t) => t.files)))];
+      return `- [${p.status}] ${p.objective}${report ? `\n  Reported ${ago(report.at)}: ${report.headline}` : ''}${files.length ? `\n  Files: ${files.join(', ')}` : ''}`;
+    })
+    .join('\n');
+}
+
+export function reactPrompt(org: Organisation, lead: Executive, reports: BoardReport[], maxFollowUps: number, files: WorkspaceFile[] = []): string {
   const blocks = reports.map((r) => {
     const outcomes = r.outcomes.map((o) => `  - ${o}`).join('\n');
     const asks = r.asks.length ? `\nAsks:\n${r.asks.map((a) => `  - ${a}`).join('\n')}` : '';
-    return `## Report ${r.id} from ${who(org, r.fromId)}: ${r.headline}\n${r.summary}\nOutcomes:\n${outcomes}${asks}${r.files.length ? `\nFiles: ${r.files.join(', ')}` : ''}`;
+    return `## Report ${r.id} from ${who(org, r.fromId)}, filed ${ago(r.at)}: ${r.headline}\n${r.summary}\nOutcomes:\n${outcomes}${asks}${r.files.length ? `\nFiles: ${r.files.join(', ')}` : ''}`;
   });
-  const mine = org.plans.filter((p) => p.ownerId === lead.id && p.cycle === org.cycle.number && p.status !== 'cancelled');
-  return `Reports have come in to the board from other leads.
+  // What has been reported since the oldest of these, which may already answer what they ask.
+  const oldest = Math.min(...reports.map((r) => Date.parse(r.at)));
+  const since = org.reports.filter((r) => r.cycle === org.cycle.number && !reports.includes(r) && Date.parse(r.at) >= oldest);
+  const sinceBlock = since.length
+    ? `# Reported since\n${since.map((r) => `- ${r.id} from ${who(org, r.fromId)}, ${ago(r.at)}: ${r.headline}${r.files.length ? `\n  Files: ${r.files.join(', ')}` : ''}`).join('\n')}\n\n`
+    : '';
+  const team = files
+    .filter((f) => f.path.startsWith(`${teamDir(lead)}/`))
+    .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+    .slice(0, 40)
+    .map((f) => `- ${f.path} (written ${ago(f.modifiedAt)})`);
+  return `Reports have come in to the board from other leads. A report says how things stood when it was filed. Work may have moved on since: check what was reported since, your own work and your team's files before acting on anything it asks.
 
 ${blocks.join('\n\n')}
 
-# Your own work this cycle
-${mine.length ? mine.map((p) => `- [${p.status}] ${p.objective}`).join('\n') : 'None.'}
+${sinceBlock}# Your own work this cycle
+${ownWork(org, lead)}
+
+# Your team's files
+${team.length ? team.join('\n') : 'None yet.'}
 
 ${cycleBlock(org)}
 
 ${steerBlock(org)}
 
 # Your task
-Decide whether anything in these reports calls for action in your remit now. Start a follow-up only when a report creates work that is yours and that should not wait for the CEO's next cycle, such as an ask addressed to your function. Give at most ${maxFollowUps} follow-up${maxFollowUps === 1 ? '' : 's'}; none is a normal answer. Keep a follow-up to what the report asks: when you plan it you will run only the phases it needs. If the reports change something for your function that the board should know, say so in a sentence or two.`;
+Decide whether anything in these reports calls for action in your remit now. Start a follow-up only when a report creates work that is yours and that should not wait for the CEO's next cycle, such as an ask addressed to your function. Never start one for something that already exists: if an ask is already met by a file in the workspace, say so in your note and name the file. For each follow-up, say what already exists toward it and exactly what is missing, and make the objective only what is missing. Give at most ${maxFollowUps} follow-up${maxFollowUps === 1 ? '' : 's'}; none is a normal answer. Keep a follow-up to what the report asks: when you plan it you will run only the phases it needs. If the reports change something for your function that the board should know, say so in a sentence or two.`;
 }
 
 export function steerReviewPrompt(org: Organisation, steerIds: string[], plans: Plan[]): string {
