@@ -26,6 +26,7 @@ export function newTask(org: Organisation, title: string, brief: string, rework:
     attempts: 0,
     startedAt: null,
     finishedAt: null,
+    effort: null,
   };
 }
 

@@ -279,6 +279,10 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(runnerOf(req).activity);
   });
 
+  app.get('/api/orgs/:id/activity/history', async (req, res) => {
+    res.json(await runnerOf(req).history());
+  });
+
   app.get('/api/orgs/:id/tasks/:taskId', async (req, res) => {
     const detail = await runnerOf(req).taskDetail(String(req.params.taskId));
     if (!detail) throw new NotFound('No such task.');

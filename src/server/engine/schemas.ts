@@ -79,6 +79,10 @@ export function workApproachSchema(ids: string[]) {
   });
 }
 
+/** A rating on the effort scale in the lead's instructions. Limits are applied in code. */
+// A model that leaves it out (a provider not held to the schema) gives 0, which is recorded as not rated, rather than losing the call.
+const Effort = (what: string) => z.number().int().default(0).describe(`How big ${what} is, 1 to 10 on the effort scale`);
+
 /** Phases of other leads' plans that one of this plan's phases must not start before. */
 function waitsFor(leadIds: string[]) {
   return z
@@ -95,11 +99,13 @@ export function planDraftSchema(phaseIds: string[], leadIds: string[] = []) {
   return z.object({
     operations: BusinessUpdates,
     approach: z.string().describe('How you will meet the objective, in a short paragraph'),
+    effort: Effort('the whole plan'),
     phases: z.array(
       z.object({
         phase: idEnum(phaseIds),
         intent: z.string().describe('What this phase will produce for this objective; if you skip it, why the objective does not need it'),
         skip: z.boolean().describe('True to leave this phase out because the objective does not need it'),
+        effort: Effort('this phase'),
         waitsFor: waitsFor(leadIds),
       }),
     ),
@@ -148,7 +154,8 @@ export type SignOff = z.infer<typeof SignOff>;
 export function planRevisionSchema(phaseIds: string[], leadIds: string[] = []) {
   return z.object({
     approach: z.string(),
-    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string(), skip: z.boolean(), waitsFor: waitsFor(leadIds) })),
+    effort: Effort('the whole plan, as revised'),
+    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string(), skip: z.boolean(), effort: Effort('this phase'), waitsFor: waitsFor(leadIds) })),
     changes: z.string().describe('What you changed to comply with the ruling'),
   });
 }
@@ -157,6 +164,7 @@ export type PlanRevision = z.infer<ReturnType<typeof planRevisionSchema>>;
 const TaskSpec = z.object({
   title: z.string(),
   brief: z.string().describe('What to produce, which files to build on, and what done looks like'),
+  effort: Effort('this task'),
 });
 
 export const Kickoff = z.object({

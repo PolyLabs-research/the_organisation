@@ -14,6 +14,7 @@ import type {
   Task,
 } from '../../shared/types';
 import { MAX_AGENTS_PER_LEAD } from '../../shared/profiles';
+import { INTERRUPTED } from '../../shared/types';
 import { waitsOnAi } from '../../shared/signatory';
 import { ProviderError, type CallUsage, type Provider } from '../providers/types';
 import type { Store } from '../store';
@@ -65,6 +66,15 @@ const MAX_ACTIVITY = 300;
 const MAX_HISTORY = 60;
 /** Failures that say something about one task rather than about the provider. */
 const TASK_LEVEL_ERRORS = new Set(['refusal', 'truncated', 'invalid_output']);
+
+/** What a piece of work was part of, so the timeline can place it and the calibration can learn from it. */
+function placeOf(org: Organisation, item: WorkItem, agent: number | null): Pick<ActivityEntry, 'planId' | 'phaseIndex' | 'taskId' | 'agent' | 'effort'> {
+  const planId = 'planId' in item ? item.planId : null;
+  const phaseIndex = 'phaseIndex' in item ? item.phaseIndex : null;
+  const taskId = item.kind === 'task' ? item.taskId : null;
+  const task = taskId && planId !== null && phaseIndex !== null ? planById(org, planId)?.phases[phaseIndex]?.tasks.find((t) => t.id === taskId) : undefined;
+  return { planId, phaseIndex, taskId, agent: item.kind === 'task' ? agent : null, effort: task?.effort ?? null };
+}
 
 type Listener = (event: { type: 'view'; view: OrgView } | { type: 'activity'; entry: ActivityEntry } | { type: 'closed' }) => void;
 
@@ -132,6 +142,11 @@ export class OrgRunner {
         nextAt: this.paceTimer ? new Date(this.lastFinished + this.paceGapMs).toISOString() : null,
       },
     };
+  }
+
+  /** Every model call this organisation has made, from its log on disk: for views that span its whole life. */
+  history(): Promise<ActivityEntry[]> {
+    return this.store.readActivity(this.org.id);
   }
 
   subscribe(listener: Listener): () => void {
@@ -720,6 +735,7 @@ export class OrgRunner {
         inputTokens: spent.inputTokens,
         outputTokens: spent.outputTokens,
         costUsd: spent.costUsd,
+        ...placeOf(org, item, active.agent),
       });
       this.changed();
       this.pump();
@@ -755,7 +771,7 @@ export class OrgRunner {
     const message = err instanceof Error ? err.message : String(err);
     if (providerError?.code === 'aborted' || this.abort.signal.aborted) {
       requeue();
-      return 'Interrupted';
+      return INTERRUPTED;
     }
     const attempts = (this.attempts.get(item.key) ?? 0) + 1;
     this.attempts.set(item.key, attempts);

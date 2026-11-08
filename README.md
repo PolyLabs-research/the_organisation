@@ -282,6 +282,7 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
 - **Establish** takes the idea, recommends a team or lets you seat one, and sets governance and limits.
 - **The dashboard** shows the hierarchy on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what) and, on the right:
   - **Board**: the feed of everything said at board level, newest first, with completed cycles below it.
+  - **Overseer**: four views for keeping an eye on the whole organisation (see [Overseer](#overseer) below).
   - **Calendar**: persistent commitments in an agenda or month view, with owners, dependencies, dates and verification.
   - **Email & accounts**: connected mailboxes, saved service accounts, team access, drafts for a person to send, access requests and vault controls.
   - **Privileges**: what each role and its agents may do, and what no role can.
@@ -294,6 +295,32 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
   - **Activity**: each unit of work with its tokens, cost and duration.
 
 Start, pause, stop and settings are at the top of the dashboard. Pause lets calls in flight finish; stop cuts them off and puts the interrupted work back in the queue. Either one holds hosted sessions where they are.
+
+### Overseer
+
+Models cannot say how long work will take, but they can say how big it is. Every lead rates each plan, phase and task it sets on a 1 to 10 effort scale. The anchors are in [`src/shared/effort.ts`](src/shared/effort.ts):
+
+| | |
+| --- | --- |
+| 1 | Answered in the reply. No tools, or a single lookup. |
+| 2 | One small piece: a script, a query, a short document. A few tool calls, nothing to decide. |
+| 3 | One deliverable with some research or several files. Nothing to check back on. |
+| 4 | One deliverable that needs researching, building and checking. The first level where something can surprise. |
+| 5 | Several linked pieces, or one with real design decisions. Expect one review and a round of fixes. |
+| 6 | A small working system: several components, tests, and a round of fixing what did not work first time. |
+| 7 | A whole phase of work end to end: several tasks and reviews. Worth a short spec before starting. |
+| 8 | Several phases: a spec first, then a build in stages, reviewed between them. |
+| 9 | A spec, a plan for many agents, and a campaign to carry it out across several leads. |
+| 10 | A full programme: several parts, each a 7 or 8 in its own right, built over many cycles. |
+
+The organisation learns what each level takes, in minutes and dollars, from the rated work it finishes, separately for each model. That turns ratings into a forecast.
+
+- **Timeline**: a Gantt chart with a swim lane per seat, and a row for each of a lead's agents beneath it. Every call is a bar, coloured by kind of work: agent tasks, a lead's own planning and reviews, and board work. Unfinished rated work is drawn ahead as hatched forecast bars, respecting phases that wait on other leads. While the organisation is paused, the forecast runs from where the work stopped.
+- **Effort**: how long and how much each effort level has actually taken, by model, for tasks and for phases. It shows whether the ratings mean anything, and how the models differ.
+- **Spend**: spend over time against the budget, by seat and by kind of work, and what the forecast says the unfinished rated work will cost.
+- **Bottlenecks**: what is holding work up now. That covers phases waiting on other leads, open board decisions, requests waiting for the signatory, rework, failed tasks, busy call slots, and a forecast that runs past the budget.
+
+A level measured at least three times is forecast from its median. Otherwise the forecast reads the level off a curve fitted to the others, or, with too little for a curve, uses whatever was measured at that level. Work that is not rated, or that nothing has been measured against yet, is left out of the forecast rather than guessed.
 
 ## Signing and paying
 
