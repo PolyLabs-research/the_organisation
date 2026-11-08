@@ -124,6 +124,13 @@ export function planReviewSchema(planIds: string[]) {
 }
 export type PlanReview = z.infer<ReturnType<typeof planReviewSchema>>;
 
+export const AnswerOut = z.object({
+  verdict: z.enum(['accept', 'contest']).describe('accept: take the objections into your plan. contest: let the board decide'),
+  amendments: z.array(z.string()).describe('For "accept": the changes you will make, each an instruction you can act on. Otherwise empty'),
+  argument: z.string().describe('For "accept": why, in a sentence. For "contest": your position for the board, including anything you can accept'),
+});
+export type AnswerOut = z.infer<typeof AnswerOut>;
+
 export const PositionOut = z.object({
   stance: z.enum(['back_plan', 'back_objection', 'compromise']),
   argument: z.string().describe('Your position in a few sentences; for a compromise, say what it is'),

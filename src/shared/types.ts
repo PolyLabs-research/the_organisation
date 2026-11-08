@@ -417,7 +417,7 @@ export interface Position {
 
 export interface DecisionOutcome {
   /** lead: decided inside a remit. consensus: the board agreed and the arbiter ratified. ceo/judge: the arbiter ruled. */
-  method: 'lead' | 'consensus' | 'ceo' | 'judge';
+  method: 'lead' | 'owner' | 'consensus' | 'ceo' | 'judge';
   byId: string;
   ruling: string;
   rationale: string;
@@ -438,7 +438,8 @@ export interface Decision {
   issues: Array<{ byId: string; concern: string; proposal: string }>;
   participantIds: string[];
   positions: Record<string, Position>;
-  status: 'open' | 'deliberated' | 'resolved';
+  /** answering: only the plan's owner is asked first, and if it accepts the objections the board need not sit. */
+  status: 'answering' | 'open' | 'deliberated' | 'resolved';
   outcome: DecisionOutcome | null;
 }
 
@@ -591,6 +592,7 @@ export type WorkKind =
   | 'direct'
   | 'plan'
   | 'review'
+  | 'answer'
   | 'position'
   | 'signoff'
   | 'revise'

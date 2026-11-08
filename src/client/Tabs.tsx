@@ -535,7 +535,7 @@ function Contested({ org, decision, onOpenPlan }: { org: Organisation; decision:
       <header>
         <h3>{decision.title}</h3>
         <span className={`status ${outcome ? `status-method-${outcome.method}` : 'status-plan-live'}`}>
-          {outcome ? METHOD[outcome.method] : decision.status === 'deliberated' ? 'Awaiting sign-off' : 'The board is stating positions'}
+          {outcome ? METHOD[outcome.method] : decision.status === 'deliberated' ? 'Awaiting sign-off' : decision.status === 'answering' ? 'The plan’s owner is answering' : 'The board is stating positions'}
         </span>
       </header>
       <p className="muted">

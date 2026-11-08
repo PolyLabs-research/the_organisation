@@ -354,6 +354,37 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       };
     }
 
+    case 'answer': {
+      const decision = need(
+        org.decisions.find((d) => d.id === item.decisionId),
+        `decision ${item.decisionId}`,
+      );
+      const plan = need(decision.planId ? planById(org, decision.planId) : undefined, `plan of ${decision.id}`);
+      const data = await ask(system, prompts.answerPrompt(org, exec, decision, plan), schemas.AnswerOut, {
+        decisionId: decision.id,
+        objectors: decision.issues.map((i) => i.byId),
+      });
+      return () => {
+        if (decision.status !== 'answering' || plan.status !== 'contested') return;
+        const argument = clean(data.argument);
+        const amendments = data.amendments.map((a) => clean(a, 800)).filter(Boolean).slice(0, 6);
+        if (data.verdict === 'accept') {
+          // Each objection's own proposal stands in for any change the owner did not spell out.
+          if (!amendments.length) amendments.push(...decision.issues.map((i) => clean(i.proposal, 800)).filter(Boolean).slice(0, 6));
+          decision.status = 'resolved';
+          decision.outcome = { method: 'owner', byId: exec.id, ruling: `The ${exec.short} accepts the objections.`, rationale: argument, planAction: 'amend', amendments, at: now() };
+          plan.amendments.push(...amendments);
+          plan.status = 'revising';
+          plan.updatedAt = now();
+          postToBoard(org, 'decision', exec.id, `${exec.short} accepts the objections to its plan`, `${argument}\n\n**Binding on the plan**\n${bullets(amendments)}`, { decisionId: decision.id, planId: plan.id });
+          return;
+        }
+        decision.status = 'open';
+        decision.positions[exec.id] = { stance: amendments.length ? 'compromise' : 'back_plan', argument: amendments.length ? `${argument}\n\nCan accept: ${amendments.join('; ')}` : argument };
+        postToBoard(org, 'decision', exec.id, `Board decision opened: ${decision.title}`, `The ${exec.short} contests the objections: ${argument}\n\nThe board will state positions; the ${arbiterOf(org).short} signs off.`, { decisionId: decision.id, planId: plan.id });
+      };
+    }
+
     case 'position': {
       const decision = need(
         org.decisions.find((d) => d.id === item.decisionId),
@@ -766,6 +797,8 @@ export function describeWork(org: Organisation, item: WorkItem): string {
       return 'Drafting a plan';
     case 'review':
       return 'Reviewing other leads’ plans';
+    case 'answer':
+      return 'Answering objections to the plan';
     case 'position':
       return 'Stating a position to the board';
     case 'signoff':

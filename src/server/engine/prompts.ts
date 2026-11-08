@@ -410,6 +410,17 @@ ${plan ? planForBoard(org, plan) : decision.context}
 ${issues}`;
 }
 
+export function answerPrompt(org: Organisation, lead: Executive, decision: Decision, plan: Plan): string {
+  return `${decisionBlock(org, decision, plan)}
+
+${cycleBlock(org)}
+
+${steerBlock(org)}
+
+# Your task
+Other leads have objected to your plan. Answer before the board is asked. Accept if you can live with what they propose: list the changes you will make, and the plan will be revised to include them without the board sitting. Most objections are worth accepting, since the board usually agrees with them and settling them costs everyone time. Contest only where an objection would harm your objective or the shareholders' interest, and say why; then every lead states a position and the ${arbiterOf(org).title} rules.`;
+}
+
 export function positionPrompt(org: Organisation, lead: Executive, decision: Decision, plan: Plan | undefined): string {
   const role = plan?.ownerId === lead.id ? 'You own this plan.' : decision.issues.some((i) => i.byId === lead.id) ? 'You raised an issue.' : 'You are not a party; give the board your view from your remit.';
   return `${decisionBlock(org, decision, plan)}
@@ -443,7 +454,11 @@ Sign this decision off. If the board is agreed, ratify what it agreed unless tha
 }
 
 export function revisePrompt(org: Organisation, plan: Plan, decision: Decision | undefined, all: Array<{ id: string; name: string }> = plan.phases.map((p) => ({ id: p.sopPhaseId, name: p.name }))): string {
-  const ruling = decision?.outcome ? `The ruling: ${decision.outcome.ruling}\nReasons: ${decision.outcome.rationale}` : '';
+  const ruling = decision?.outcome
+    ? decision.outcome.method === 'owner'
+      ? `The objections:\n${decision.issues.map((i) => `- ${who(org, i.byId)}: ${i.concern} Proposes: ${i.proposal}`).join('\n')}\nYour answer: ${decision.outcome.rationale}`
+      : `The ruling: ${decision.outcome.ruling}\nReasons: ${decision.outcome.rationale}`
+    : '';
   const phases = all
     .map((a) => {
       const phase = plan.phases.find((p) => p.sopPhaseId === a.id);
@@ -454,7 +469,8 @@ export function revisePrompt(org: Organisation, plan: Plan, decision: Decision |
   const others = org.plans
     .filter((p) => p.cycle === org.cycle.number && p.id !== plan.id && p.ownerId !== plan.ownerId && p.status !== 'cancelled')
     .map((p) => `- ${who(org, p.ownerId)} [${p.ownerId}]: ${p.phases.map((ph) => ph.name).join(' → ')}`);
-  return `The board has ruled on your plan and it must change.
+  const accepted = decision?.outcome?.method === 'owner';
+  return `${accepted ? 'You accepted objections to your plan, so it must change to take them in.' : 'The board has ruled on your plan and it must change.'}
 
 ${planHeader(org, plan)}
 

@@ -136,7 +136,9 @@ flowchart TD
   D --> P["Each lead drafts a plan from its operating profile"]
   P --> R{"Board review: competing priorities?"}
   R -- no --> X["Execute: phase by phase. Agents do the tasks, the lead gates each phase"]
-  R -- yes --> B["Leads state positions; the CEO or judge signs off"]
+  R -- yes --> O{"The owner accepts the objections?"}
+  O -- yes --> X
+  O -- no --> B["Leads state positions; the CEO or judge signs off"]
   B --> X
   X --> Rep["The lead reports to the whole board"]
   Rep -- "may trigger another lead" --> P
@@ -180,7 +182,8 @@ Agents can work in one of two ways, chosen per organisation: **on this machine**
 **Decisions.**
 
 - A lead decides anything inside their own remit, and the decision is recorded.
-- When leads have competing priorities (another lead objects to a plan, or the plan's owner flags something that cuts across remits), the plan goes to the board. Every lead states a position. If they agree, the arbiter ratifies it; if not, the arbiter rules. The ruling can let the plan proceed, bind it with amendments or cancel it.
+- When another lead objects to a plan, the plan's owner answers first. If the owner accepts, the objections bind the plan as amendments and it is revised without the board sitting.
+- When the owner contests, or the owner itself flags something that cuts across remits, the plan goes to the board. Every lead states a position (a contesting owner's answer is its position). If they agree, the arbiter ratifies it; if not, the arbiter rules. The ruling can let the plan proceed, bind it with amendments or cancel it.
 - The arbiter is the CEO, who rules by what the shareholders want, or an independent judge seated on the board with no remit of their own. You choose which.
 
 **Steer.** Give steer at any time. Before work has begun, the CEO takes it into the cycle's direction and replies. While work is under way, the CEO reviews the plans in progress against it and amends or cancels them, then replies with what changed.

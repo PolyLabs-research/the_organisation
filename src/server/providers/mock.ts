@@ -31,6 +31,8 @@ export interface MockOptions {
   signatory?: 'authorise' | 'decline';
   /** Phases that wait on another lead's phase, by the lead that owns them: { cmo: { phase: 'research', lead: 'cto', on: 'Spec' } }. */
   waits?: Record<string, { phase: string; lead: string; on: string }>;
+  /** How a plan's owner answers objections. contest (the default) sends them to the board. */
+  answers?: 'accept' | 'contest';
   /** Phases a lead leaves out of its plans, by phase id: { cmo: ['position', 'create', 'launch'] }. */
   skips?: Record<string, string[]>;
   /** Called before each call is answered; throw from it to simulate a failure. */
@@ -588,6 +590,11 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
             : [],
         };
       }
+
+      case 'answer':
+        return this.options.answers === 'accept'
+          ? { verdict: 'accept', amendments: ['Start the dependent part only once the other function’s first deliverable is in the workspace.'], argument: 'The dependency is real and waiting costs little.' }
+          : { verdict: 'contest', amendments: [], argument: 'The plan is inside my remit and meets the directive as drafted. Re-sequencing would cost time the directive does not allow for.' };
 
       case 'position':
         if (c.isOwner) return { stance: 'back_plan', argument: 'The plan is inside my remit and meets the directive as drafted. Re-sequencing would cost time the directive does not allow for.' };

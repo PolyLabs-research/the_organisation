@@ -45,6 +45,7 @@ export const STANCE: Record<Stance, string> = {
 
 export const METHOD: Record<DecisionOutcome['method'], string> = {
   lead: 'Decided in remit',
+  owner: 'Accepted by the plan’s owner',
   consensus: 'Board consensus',
   ceo: 'CEO ruling',
   judge: 'Judge’s ruling',

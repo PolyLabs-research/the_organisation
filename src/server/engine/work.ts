@@ -15,6 +15,7 @@ export type WorkItem =
   | { kind: 'direct'; key: string; execId: string }
   | { kind: 'plan'; key: string; execId: string; planId: string }
   | { kind: 'review'; key: string; execId: string; roundId: string }
+  | { kind: 'answer'; key: string; execId: string; decisionId: string }
   | { kind: 'position'; key: string; execId: string; decisionId: string }
   | { kind: 'signoff'; key: string; execId: string; decisionId: string }
   | { kind: 'revise'; key: string; execId: string; planId: string }
@@ -81,6 +82,9 @@ function closeRound(org: Organisation, round: ReviewRound): void {
       status: 'open',
       outcome: null,
     };
+    // When only other leads object, the owner answers first: most objections are accepted, and then the board need not sit.
+    // What the owner raised itself is for the board to settle.
+    if (!plan.escalations.length) decision.status = 'answering';
     org.decisions.push(decision);
     plan.status = 'contested';
     plan.decisionId = decision.id;
@@ -92,8 +96,10 @@ function closeRound(org: Organisation, round: ReviewRound): void {
       org,
       'decision',
       decision.raisedById,
-      `Board decision opened: ${decision.title}`,
-      `Plan: ${plan.objective}\n\n${lines.join('\n')}\n\nThe board will state positions; the ${arbiterOf(org).short} signs off.`,
+      decision.status === 'answering' ? `Objections to the ${who} plan` : `Board decision opened: ${decision.title}`,
+      decision.status === 'answering'
+        ? `Plan: ${plan.objective}\n\n${lines.join('\n')}\n\nThe ${who} answers first. If the ${who} accepts, the plan is revised; if not, the board states positions and the ${arbiterOf(org).short} signs off.`
+        : `Plan: ${plan.objective}\n\n${lines.join('\n')}\n\nThe board will state positions; the ${arbiterOf(org).short} signs off.`,
       { planId: plan.id, decisionId: decision.id },
     );
   }
@@ -193,7 +199,10 @@ export function nextWork(org: Organisation): WorkItem[] {
   }
 
   for (const decision of org.decisions) {
-    if (decision.status === 'deliberated') {
+    const owner = decision.planId ? planById(org, decision.planId)?.ownerId : undefined;
+    if (decision.status === 'answering' && owner) {
+      items.push({ kind: 'answer', key: `answer:${decision.id}`, execId: owner, decisionId: decision.id });
+    } else if (decision.status === 'deliberated') {
       items.push({ kind: 'signoff', key: `signoff:${decision.id}`, execId: arbiterOf(org).id, decisionId: decision.id });
     } else if (decision.status === 'open') {
       for (const id of decision.participantIds) {

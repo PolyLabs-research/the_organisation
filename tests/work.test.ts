@@ -82,7 +82,7 @@ describe('what work is ready', () => {
     expect(kinds(org)).toEqual(['review:cto', 'review:cmo']);
   });
 
-  it('clears a plan nobody objects to and takes a contested one to the board', () => {
+  it('clears a plan nobody objects to, and has the owner of a contested one answer before the board', () => {
     const org = organisation();
     org.cycle.stage = 'work';
     const a = plan(org, 'cto', { status: 'drafted' });
@@ -96,11 +96,29 @@ describe('what work is ready', () => {
     expect(b.status).toBe('contested');
     const decision = org.decisions.find((d) => d.id === b.decisionId)!;
     expect(decision.participantIds).toEqual(['cto', 'cmo']);
-    expect(kinds(org)).toEqual(['position:cto', 'position:cmo', 'kickoff:cto']);
-    decision.positions.cto = { stance: 'back_objection', argument: 'x' };
+    expect(decision.status).toBe('answering');
+    expect(kinds(org)).toEqual(['answer:cmo', 'kickoff:cto']);
+    // The owner contests: its answer is its position, and the rest of the board states theirs.
+    decision.status = 'open';
     decision.positions.cmo = { stance: 'back_plan', argument: 'y' };
+    expect(kinds(org)).toEqual(['position:cto', 'kickoff:cto']);
+    decision.positions.cto = { stance: 'back_objection', argument: 'x' };
     settle(org);
     expect(kinds(org)).toEqual(['signoff:ceo', 'kickoff:cto']);
+  });
+
+  it('takes a plan straight to the board when its owner raised the issue', () => {
+    const org = organisation();
+    org.cycle.stage = 'work';
+    plan(org, 'cto', { status: 'drafted' });
+    const b = plan(org, 'cmo', { status: 'drafted', escalations: [{ issue: 'It needs engineering time.', proposal: 'Share an agent.' }] });
+    settle(org);
+    const round = org.reviewRounds[0]!;
+    round.reviews.cto = [];
+    round.reviews.cmo = [];
+    settle(org);
+    expect(org.decisions.find((d) => d.id === b.decisionId)!.status).toBe('open');
+    expect(kinds(org)).toEqual(['position:cto', 'position:cmo', 'kickoff:cto']);
   });
 
   it('lets a lead read board reports only once their own plan is off their desk', () => {
