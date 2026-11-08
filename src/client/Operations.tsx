@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Organisation, OrgView } from '../shared/types';
-import { dependenciesMet, financeTotals, jobOpen, operatingDigest, type BusinessJob } from '../shared/business';
+import { dependenciesMet, financeTotals, jobOpen, nextBusinessWake, operatingDigest, type BusinessJob } from '../shared/business';
 import { api, useAction } from './api';
 import { Empty, ErrorNote, Field } from './ui';
 import { HelpLink } from './Guide';
@@ -93,7 +93,7 @@ function Editor({ org, kind, record, onView, onClose }: { org: Organisation; kin
     <div className="grid-2">
       <Field label="Owner"><select value={values.ownerId} onChange={(e) => set('ownerId', e.target.value)}>{people.map((e) => <option key={e.id} value={e.id}>{e.short} — {e.title}</option>)}</select></Field>
       {FIELDS[kind].map((field) => <Field key={field.key} label={field.label}>
-        {field.options ? <select value={values[field.key]} onChange={(e) => set(field.key, e.target.value)}>{field.options.map((option) => <option key={option} value={option}>{option.replaceAll('_', ' ')}</option>)}</select> :
+        {field.options ? <select value={values[field.key]} onChange={(e) => set(field.key, e.target.value)}>{field.options.filter((option) => option !== 'in_progress' || record?.status === 'in_progress').map((option) => <option key={option} value={option}>{option.replaceAll('_', ' ')}</option>)}</select> :
           field.type === 'textarea' ? <textarea rows={3} value={values[field.key]} required={field.required} onChange={(e) => set(field.key, e.target.value)} /> :
           <input type={field.type ?? 'text'} value={values[field.key]} required={field.required} step={field.key === 'amount' ? '0.01' : field.key === 'recurrenceDays' ? '1' : field.type === 'number' ? 'any' : undefined} min={field.key === 'amount' ? 0 : field.key === 'recurrenceDays' ? 1 : undefined} onChange={(e) => set(field.key, e.target.value)} />}
       </Field>)}
@@ -137,19 +137,35 @@ function JobCard({ org, job, onEdit, onView, onOpenPlan }: { org: Organisation; 
   </article>;
 }
 
+const monthOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+
 function Calendar({ jobs, onSelect }: { jobs: BusinessJob[]; onSelect: (id: string) => void }) {
-  const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [month, setMonth] = useState(() => monthOf(new Date()));
   const start = new Date(month.getFullYear(), month.getMonth(), 1 - ((month.getDay() + 6) % 7));
   const days = Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
   const key = (d: Date) => [d.getFullYear(), d.getMonth(), d.getDate()].join('-');
+  const end = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+  const dates = jobs.flatMap((j) => [j.notBefore, j.dueAt]).filter((d): d is string => !!d).map((d) => new Date(d)).sort((a, b) => a.getTime() - b.getTime());
+  const earlier = dates.filter((d) => d < month);
+  const later = dates.filter((d) => d >= end);
+  const label = (job: BusinessJob, day: Date) => {
+    const due = !!job.dueAt && key(new Date(job.dueAt)) === key(day);
+    const flag = due && jobOpen(job) && Date.parse(job.dueAt!) < Date.now() ? 'Overdue' : job.status === 'blocked' ? 'Blocked' : job.status === 'review' ? 'To verify' : null;
+    return { text: (flag ? flag + ' · ' : '') + (due ? 'Due: ' : 'Start: ') + job.title, flag };
+  };
   return <div className="ops-calendar">
     <div className="row"><button type="button" className="button" aria-label="Previous month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}>←</button>
       <strong>{month.toLocaleString(undefined, { month: 'long', year: 'numeric' })}</strong>
-      <button type="button" className="button" aria-label="Next month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>→</button></div>
+      <button type="button" className="button" aria-label="Next month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>→</button>
+      {key(month) !== key(monthOf(new Date())) ? <button type="button" className="button" onClick={() => setMonth(monthOf(new Date()))}>This month</button> : null}
+      {earlier.length ? <button type="button" className="button" onClick={() => setMonth(monthOf(earlier.at(-1)!))}>{earlier.length} earlier</button> : null}
+      {later.length ? <button type="button" className="button" onClick={() => setMonth(monthOf(later[0]!))}>{later.length} later</button> : null}</div>
     <div className="calendar-grid">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div className="calendar-heading" key={d}>{d}</div>)}
       {days.map((day) => <div key={key(day)} className={'calendar-day' + (day.getMonth() === month.getMonth() ? '' : ' calendar-other') + (key(day) === key(new Date()) ? ' calendar-today' : '')}>
-        <span>{day.getDate()}</span>{jobs.filter((j) => (j.dueAt && key(new Date(j.dueAt)) === key(day)) || (j.notBefore && key(new Date(j.notBefore)) === key(day))).map((job) =>
-          <button key={job.id} type="button" className="calendar-job" title={job.title} onClick={() => onSelect(job.id)}>{job.dueAt && key(new Date(job.dueAt)) === key(day) ? 'Due: ' : 'Start: '}{job.title}</button>)}
+        <span>{day.getDate()}</span>{jobs.filter((j) => (j.dueAt && key(new Date(j.dueAt)) === key(day)) || (j.notBefore && key(new Date(j.notBefore)) === key(day))).map((job) => {
+          const { text, flag } = label(job, day);
+          return <button key={job.id} type="button" className={'calendar-job' + (flag === 'Overdue' || flag === 'Blocked' ? ' calendar-job-warn' : flag ? ' calendar-job-review' : '')} title={text} onClick={() => onSelect(job.id)}>{text}</button>;
+        })}
       </div>)}
     </div>
   </div>;
@@ -180,8 +196,8 @@ export function Operations({ org, calendar = false, onView, onOpenPlan }: { org:
         <button type="button" className="button" onClick={() => setMonthView(!monthView)}>{monthView ? 'Show agenda' : 'Show month'}</button></div>
       <p className="muted">Each date belongs to a persistent job. Undated work stays in the agenda. Times use {Intl.DateTimeFormat().resolvedOptions().timeZone}.</p>
       <div className="ops-filters"><input aria-label="Search commitments" placeholder="Find a commitment…" value={query} onChange={(e) => { setQuery(e.target.value); setSelected(null); }} />
-        <select aria-label="Filter by owner" value={owner} onChange={(e) => setOwner(e.target.value)}><option value="">All owners</option>{org.executives.filter((e) => e.kind === 'lead' || e.kind === 'ceo').map((e) => <option key={e.id} value={e.id}>{e.short}</option>)}</select>
-        <label><input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} /> Include completed and cancelled</label></div>
+        <select aria-label="Filter by owner" value={owner} onChange={(e) => { setOwner(e.target.value); setSelected(null); }}><option value="">All owners</option>{org.executives.filter((e) => e.kind === 'lead' || e.kind === 'ceo').map((e) => <option key={e.id} value={e.id}>{e.short}</option>)}</select>
+        <label><input type="checkbox" checked={showClosed} onChange={(e) => { setShowClosed(e.target.checked); setSelected(null); }} /> Include completed and cancelled</label></div>
       {monthView ? <Calendar jobs={jobs} onSelect={setSelected} /> : null}
       {selected ? <div className="row"><span>Selected commitment</span><button type="button" className="button" onClick={() => setSelected(null)}>Show all</button></div> : null}
       <div className="ops-list">{renderJobs(selected ? jobs.filter((j) => j.id === selected) : jobs)}</div>
@@ -193,6 +209,10 @@ export function Operations({ org, calendar = false, onView, onOpenPlan }: { org:
         <p className="ops-pre">{operatingDigest(org)}</p>
         <p className="muted">{org.status === 'running' && b.waiting ? 'Waiting for the next scheduled review, event or calendar date. No model calls while waiting.' : org.status === 'paused' ? 'Paused. New events are saved and will be considered when resumed.' : 'Operating records are shared with the executive team and agents.'}</p>
         {b.nextReviewAt ? <p>Next standing review: {dateText(b.nextReviewAt)}</p> : null}
+        {(() => {
+          const wake = nextBusinessWake(org);
+          return org.status === 'running' && b.waiting && b.nextReviewAt && wake < Date.parse(b.nextReviewAt) ? <p>Wakes sooner for a commitment date: {dateText(new Date(wake).toISOString())}</p> : null;
+        })()}
         <h3>Awaiting verification</h3><div className="ops-list">{renderJobs(b.jobs.filter((j) => j.status === 'review'))}</div>
         {!b.jobs.some((j) => j.status === 'review') ? <p className="muted">No deliveries awaiting verification.</p> : null}
         {b.lastDigest ? <details><summary>Digest at the last cycle close</summary><p className="ops-pre">{b.lastDigest}</p></details> : null}

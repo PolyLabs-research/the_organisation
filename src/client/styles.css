@@ -2675,6 +2675,8 @@ a.provider:hover {
 .calendar-today { box-shadow: inset 0 0 0 2px var(--accent); }
 .calendar-job { display: block; width: 100%; border: 0; text-align: left; margin-top: .3rem; padding: .3rem; border-radius: 4px; background: var(--ok-soft); color: var(--ok); font-size: .72rem; line-height: 1.3; overflow-wrap: anywhere; cursor: pointer; }
 .calendar-job:focus-visible { outline: 2px solid var(--ok); }
+.calendar-job-warn { background: var(--bad-soft); color: var(--bad); }
+.calendar-job-review { background: var(--warn-soft); color: var(--warn); }
 .tabs { flex-wrap: wrap; }
 @media (max-width: 650px) { .ops-editor .grid-2 { grid-template-columns: 1fr; } .ops-card { padding: .8rem; } }
 

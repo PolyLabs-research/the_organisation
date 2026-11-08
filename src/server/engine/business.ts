@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BusinessCommand, JobInput } from '../../shared/business-schema';
 import { jobOpen, jobReady, operatingDigest, type BusinessJob, type BusinessRecord } from '../../shared/business';
+export { nextBusinessWake } from '../../shared/business';
 import { allows } from '../../shared/privileges';
 import type { Organisation, Plan } from '../../shared/types';
 import type { AgentTool } from '../providers/types';
@@ -44,6 +45,13 @@ function metadata(org: Organisation, actor: BusinessActor, old?: BusinessRecord)
 function relation(org: Organisation, kind: 'customers' | 'metrics', id: string | null) {
   if (id && !org.business[kind].some((r) => r.id === id)) fail('No such ' + kind + ' record: ' + id);
 }
+/** The same local time of day, a number of calendar days on, so a repeat keeps its hour across clock changes. */
+function addLocalDays(iso: string, days: number): string {
+  const date = new Date(iso);
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
 function validateJob(org: Organisation, input: z.infer<typeof JobInput>, old?: BusinessJob) {
   if (old && !jobOpen(old)) fail('Completed and cancelled commitments are retained as history. Create a new job.');
   if (input.notBefore && input.dueAt && Date.parse(input.notBefore) > Date.parse(input.dueAt)) fail('The deadline cannot be before the earliest start.');
@@ -97,12 +105,15 @@ export function applyBusinessCommand(org: Organisation, raw: unknown, actor: Bus
     const done: BusinessJob = { ...old, ...metadata(org, actor, old), status: 'done', verification: { by: actor.id, at: at(), note: command.evidence } };
     save(org, actor, 'verify', b.jobs, done, old);
     if (old.recurrenceDays && !old.nextJobId) {
-      const step = old.recurrenceDays * 86_400_000;
-      const due = Date.parse(old.dueAt!);
+      const days = old.recurrenceDays;
       // Coalesce missed occurrences into one future job; never launch a catch-up storm.
-      const advance = Math.max(1, Math.floor((Date.now() - due) / step) + 1) * step;
+      let periods = Math.max(1, Math.floor((Date.now() - Date.parse(old.dueAt!)) / (days * 86_400_000)) + 1);
+      while (Date.parse(addLocalDays(old.dueAt!, periods * days)) <= Date.now()) periods++;
+      const dueAt = addLocalDays(old.dueAt!, periods * days);
+      // Without a start of its own, the next occurrence may start once the one before it was due.
+      const notBefore = old.notBefore ? addLocalDays(old.notBefore, periods * days) : addLocalDays(dueAt, -days);
       const next: BusinessJob = { ...old, ...metadata(org, actor), status: 'open', plan: null, evidence: '', verification: null,
-        dueAt: new Date(due + advance).toISOString(), notBefore: new Date((old.notBefore ? Date.parse(old.notBefore) : due) + advance).toISOString(),
+        dueAt, notBefore,
         previousJobId: old.id, nextJobId: null, notifiedAt: null, blockedReason: '' };
       done.nextJobId = next.id;
       save(org, actor, 'recurrence', b.jobs, next);
@@ -231,17 +242,6 @@ export function linkBusinessJob(org: Organisation, jobId: string, plan: Plan) {
   audit(org, { id: plan.ownerId }, 'execution', job.id, old);
 }
 
-export function nextBusinessWake(org: Organisation, now = Date.now()): number {
-  const b = org.business;
-  if (b.reviewRequested) return now;
-  const times = [b.nextReviewAt ? Date.parse(b.nextReviewAt) : now];
-  for (const job of b.jobs.filter(jobOpen)) {
-    for (const boundary of [job.notBefore, job.dueAt]) {
-      if (boundary && (!job.notifiedAt || Date.parse(boundary) > Date.parse(job.notifiedAt))) times.push(Date.parse(boundary));
-    }
-  }
-  return Math.max(now, Math.min(...times));
-}
 export function consumeBusinessWake(org: Organisation, now = Date.now()) {
   org.business.reviewRequested = false;
   for (const job of org.business.jobs.filter(jobOpen)) {

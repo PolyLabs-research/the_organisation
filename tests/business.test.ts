@@ -164,6 +164,38 @@ describe('persistent business records', () => {
 });
 
 describe('scheduled business operation', () => {
+  it('gives a repeat with only a due date the time from the previous due date to its own', async () => {
+    const h = await harness();
+    try {
+      const dueAt = new Date(Date.now() + 3_600_000).toISOString();
+      const job = applyBusinessCommand(h.org, { kind: 'job', record: jobInput({ dueAt, recurrenceDays: 7, status: 'review', evidence: 'Reviewed stock records.' }) }, person) as BusinessJob;
+      applyBusinessCommand(h.org, { kind: 'verify', id: job.id, revision: job.revision, evidence: 'Matched the stock report.' }, person);
+      const next = h.org.business.jobs[1]!;
+      expect(next.notBefore).toBe(dueAt);
+      expect(Date.parse(next.dueAt!) - Date.parse(dueAt)).toBe(7 * 86_400_000);
+    } finally { await h.cleanup(); }
+  });
+
+  it('keeps a repeat at the same local time across a clock change', async () => {
+    const zone = process.env.TZ;
+    process.env.TZ = 'Europe/London';
+    const h = await harness();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // British Summer Time ends on 25 October 2026: 09:00 is 08:00Z before it and 09:00Z after.
+      vi.setSystemTime(new Date('2026-10-20T12:00:00Z'));
+      const job = applyBusinessCommand(h.org, { kind: 'job', record: jobInput({ notBefore: '2026-10-22T08:00:00Z', dueAt: '2026-10-23T08:00:00Z', recurrenceDays: 7, status: 'review', evidence: 'Reviewed stock records.' }) }, person) as BusinessJob;
+      applyBusinessCommand(h.org, { kind: 'verify', id: job.id, revision: job.revision, evidence: 'Matched the stock report.' }, person);
+      const next = h.org.business.jobs[1]!;
+      expect(next.notBefore).toBe('2026-10-29T09:00:00.000Z');
+      expect(next.dueAt).toBe('2026-10-30T09:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+      if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone;
+      await h.cleanup();
+    }
+  });
+
   it('lets executives schedule a commitment and agents update that same job through their tools', async () => {
     class OperatingProvider extends MockProvider {
       updated = false;
