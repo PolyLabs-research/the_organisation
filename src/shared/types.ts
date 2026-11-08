@@ -228,6 +228,8 @@ export interface Task {
   attempts: number;
   startedAt: string | null;
   finishedAt: string | null;
+  /** How big the lead rated the task, 1 to 10 on the effort scale; null when it was not rated. */
+  effort: number | null;
   /** For work done in a hosted session: the session thread of the agent that did it. */
   threadId?: string | null;
 }
@@ -253,6 +255,8 @@ export interface PlanPhase {
   evidence: GateEvidence | null;
   /** Work in other leads' plans this phase must not start before. */
   waitsFor: PhaseWait[];
+  /** How big the lead rated the phase, 1 to 10 on the effort scale; null when it was not rated. */
+  effort: number | null;
 }
 
 /**
@@ -375,6 +379,8 @@ export interface Plan {
   phases: PlanPhase[];
   /** Phases of the work approach the lead left out because the objective does not need them, with why. */
   skipped: SkippedPhase[];
+  /** How big the lead rated the whole plan, 1 to 10 on the effort scale; null when it was not rated. */
+  effort: number | null;
   status: PlanStatus;
   /** Binding instructions added by board rulings or the CEO enforcing steer. */
   amendments: string[];
@@ -605,6 +611,9 @@ export type WorkKind =
   | 'authorise'
   | 'execute';
 
+/** The error an activity entry carries when the call was cut off by a pause or stop, not by a fault. It is started again. */
+export const INTERRUPTED = 'Interrupted';
+
 /** A record of one model call, for the activity log. */
 export interface ActivityEntry {
   id: string;
@@ -619,6 +628,14 @@ export interface ActivityEntry {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** What the call was part of, for placing it on a timeline. Absent on entries from before this was recorded. */
+  planId?: string | null;
+  phaseIndex?: number | null;
+  taskId?: string | null;
+  /** The agent slot (1-based) that did a task. */
+  agent?: number | null;
+  /** The effort the task was rated at, for learning what each level takes. */
+  effort?: number | null;
 }
 
 export interface OrgSummary {

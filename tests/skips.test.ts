@@ -17,14 +17,14 @@ function draft(org: Organisation, ownerId: string, approach = 'standard'): Plan 
   const plan: Plan = {
     id: 'p1', cycle: 1, ownerId, origin: { type: 'directive' }, depth: 0, objective: 'An objective', successCriteria: 'Criteria', priority: 'medium', rationale: 'Because',
     approach: null, workApproachId: approach, workApproachReason: null,
-    phases: phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null, gate: ph.gate ?? null, evidence: null, waitsFor: [] })),
-    skipped: [], status: 'planning', amendments: [], escalations: [], decisionId: null, reportId: null, cancelReason: null, createdAt: at, updatedAt: at, execution: null, managed: null, code: null,
+    phases: phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null, gate: ph.gate ?? null, evidence: null, waitsFor: [], effort: null })),
+    skipped: [], effort: null, status: 'planning', amendments: [], escalations: [], decisionId: null, reportId: null, cancelReason: null, createdAt: at, updatedAt: at, execution: null, managed: null, code: null,
   };
   org.plans.push(plan);
   return plan;
 }
 
-const entry = (phase: string, skip: boolean, intent = skip ? `No ${phase} needed.` : `Do ${phase}.`) => ({ phase, intent, skip, waitsFor: [] });
+const entry = (phase: string, skip: boolean, intent = skip ? `No ${phase} needed.` : `Do ${phase}.`) => ({ phase, intent, skip, effort: 3, waitsFor: [] });
 const cmo = (org: Organisation) => org.executives.find((e) => e.id === 'cmo')!;
 
 describe('running only the phases a plan needs', () => {

@@ -23,8 +23,8 @@ function plan(org: Organisation, ownerId: string, fields: Partial<Plan> = {}): P
     approach: 'An approach',
     workApproachId: 'standard',
     workApproachReason: null,
-    phases: owner.phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null, gate: null, evidence: null, waitsFor: [] })),
-    skipped: [],
+    phases: owner.phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null, gate: null, evidence: null, waitsFor: [], effort: null })),
+    skipped: [], effort: null,
     status: 'planning',
     amendments: [],
     escalations: [],
@@ -126,7 +126,7 @@ describe('what work is ready', () => {
     org.cycle.stage = 'work';
     const mine = plan(org, 'cmo', { status: 'executing' });
     mine.phases[0]!.status = 'working';
-    mine.phases[0]!.tasks = [{ id: 't1', title: 'T', brief: 'B', status: 'running', agent: 1, rework: false, result: null, files: [], error: null, attempts: 1, startedAt: null, finishedAt: null }];
+    mine.phases[0]!.tasks = [{ id: 't1', title: 'T', brief: 'B', status: 'running', agent: 1, rework: false, result: null, files: [], error: null, attempts: 1, startedAt: null, finishedAt: null, effort: null }];
     org.inbox.cmo = ['rep1'];
     expect(kinds(org)).toEqual([]);
     expect(cycleComplete(org)).toBe(false);

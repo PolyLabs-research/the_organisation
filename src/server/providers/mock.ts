@@ -546,6 +546,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
       case 'plan':
         return {
           workApproach: 'standard',
+          effort: 6,
           workApproachReason: 'The standard operating profile fits this objective.',
           approach: `Work through ${sopText} in order with ${seat!.agentCount} agent${seat!.agentCount === 1 ? '' : 's'}. ${firstPhase?.name ?? 'The first phase'} settles scope before agent time is spent on later phases.`,
           phases: phaseList.map((p) => {
@@ -555,6 +556,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
               phase: p.id,
               intent: skip ? 'Not needed for this objective.' : `${noStop(p.deliverable)}, for: ${brief(plan!.objective, 90)}`,
               skip,
+              effort: 5,
               waitsFor: wait && wait.phase === p.id ? [{ lead: wait.lead, phase: wait.on }] : [],
             };
           }),
@@ -618,7 +620,8 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
       case 'revise':
         return {
           approach: `Work through ${sopText} in order, starting with the parts that depend on nobody else. Dependent work begins only once the other function’s first deliverable is in the workspace.`,
-          phases: (c.phases as Array<{ id: string; name: string; skipped?: boolean }>).map((p) => ({ phase: p.id, intent: `${p.name}, for: ${brief(plan!.objective, 90)}`, skip: p.skipped ?? false, waitsFor: [] })),
+          effort: 6,
+          phases: (c.phases as Array<{ id: string; name: string; skipped?: boolean }>).map((p) => ({ phase: p.id, intent: `${p.name}, for: ${brief(plan!.objective, 90)}`, skip: p.skipped ?? false, effort: 5, waitsFor: [] })),
           changes: 'Re-sequenced the plan so nothing in it waits on another function’s unfinished work, as the ruling requires.',
         };
 
@@ -630,6 +633,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
           tasks: Array.from({ length: count }, (_, i) => ({
             title: `${phase.name}: ${parts[i]}`,
             brief: `Produce ${parts[i]} for the ${phase.name} phase of the plan "${brief(plan!.objective, 120)}". The phase must end with: ${lowerFirst(phase.deliverable)} Read what is already in the workspace first and build on it. Done means a file under ${c.dir as string}/ that the lead can review without asking questions.`,
+            effort: [4, 3, 2][i]!,
           })),
           notes: 'Keep each file short enough to review in one sitting.',
           decisions: [],
@@ -651,6 +655,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
               {
                 title: `${phase.name}: reconcile with the previous phase`,
                 brief: `Read the files from the previous phase and the ${phase.name} files, and write one reconciled version that removes the contradictions between them.`,
+                effort: 3,
               },
             ],
             decisions: [],
