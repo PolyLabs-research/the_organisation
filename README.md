@@ -1,16 +1,23 @@
-# the_organisation
+# the_organisation: an open-source agentic AI platform that runs a company of AI agents
+
+[![Licence: Apache 2.0](https://img.shields.io/badge/licence-Apache%202.0-blue.svg)](LICENSE)
+[![Node 22+](https://img.shields.io/badge/node-%3E%3D22-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg?logo=typescript&logoColor=white)](tsconfig.json)
+[![Models: Claude, GPT, Gemini, local LLMs](https://img.shields.io/badge/models-Claude%20%C2%B7%20GPT%20%C2%B7%20Gemini%20%C2%B7%20local-8A2BE2.svg)](#models-and-keys)
 
 **One prompt in. A company of AI agents out.**
 
-Describe an idea and get a working organisation: a CEO that answers to you, an executive team in which every lead runs a standard operating procedure, and agents under each lead doing the work in parallel. They plan, disagree, take it to the board, build, check their own work and report. Then the CEO asks *"What would the shareholders want now?"* and the next cycle begins. It keeps going until you pause it or the budget runs out.
+the_organisation is a self-hosted, open-source **multi-agent AI platform** for running a business with **autonomous AI agents**. Describe an idea and it establishes a working organisation: a CEO that answers to you, an executive team in which every lead runs a standard operating procedure, and agents under each lead doing the work in parallel. They plan, disagree, take it to the board, build, check their own work and report. Then the CEO asks *"What would the shareholders want now?"* and the next cycle begins. It keeps going until you pause it or the budget runs out.
 
-You are the shareholders. You steer; the CEO enforces it. Spending money and signing go through one seat, the Authorised Signatory, which is you unless you decide otherwise.
+You are the shareholders. You steer; the CEO enforces it. Spending money and signing go through one seat, the Authorised Signatory, which is you unless you decide otherwise. It is **human-in-the-loop by design**: agents act inside the privileges you grant, under a hard budget, with every decision on the record.
 
-![Only Paperclips operating dashboard](docs/only-paperclips-business.png)
+It runs on **Claude, GPT, Gemini, DeepSeek, Qwen, Kimi and anything on OpenRouter**, on **local LLMs** through Ollama, llama.cpp, LM Studio or vLLM, on your **Claude Code** login with no API key, or in a free simulation with no model at all.
+
+![the_organisation dashboard: an AI agent organisation's operating digest, shared commitments and deliveries awaiting human verification](docs/only-paperclips-business.png)
 
 *Only Paperclips in simulation: its operating digest, shared commitments and deliveries awaiting verification.*
 
-## Why you might want it
+## Features
 
 - **It is an organisation, not a swarm.** A CEO, up to eight executive leads from a library of fifteen (CTO, CPO, CMO, CFO, COO, General Counsel and the rest, or seats you define yourself), and one to eight agents under each. Every lead works to an operating profile, such as Spec → Build → Test → Release, and a phase has to pass the lead's gate before the next begins. Work that fails the gate is sent back.
 - **It remembers the business.** A shared calendar and persistent commitments survive cycles. Every job has an owner, next action, dependencies and optional dates. Customer records, a scorecard, financial records, organisational knowledge and incoming events are shared with the agents. Deliveries need evidence and verification.
@@ -22,7 +29,30 @@ You are the shareholders. You steer; the CEO enforces it. Spending money and sig
 - **It can work on real code.** Connect a GitHub repository and agents get a branch of their own for each plan. They commit, start builds on GitHub's machines, read the results and open a pull request. A gate reads the checks itself and will not pass on an agent's say-so. A person merges.
 - **Use the models you have, or none.** Claude, GPT, Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, and anything on OpenRouter, with executives on one model and agents on another if you like. Any OpenAI-compatible endpoint works too, so a model on your own machine (llama.cpp, Ollama, LM Studio, vLLM) can do the work. And with no API key at all it can run on the Claude Code you already have, on your own subscription login.
 - **Try it in a minute, for nothing.** With nothing connected it runs in simulation: every seat gives a scripted answer, the whole loop turns, and every control works.
+- **Go at your own pace.** Run it at full speed, one call at a time, with a pause after each to read what happened, or one step at a time on a **Next step** button, and change pace while it runs.
 - **See everything.** A web interface shows the hierarchy and who is busy with what, the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
+
+## What you can use it for
+
+- **Validate a business idea.** Hand it a one-line idea and watch an executive team turn it into a plan, a product spec, a go-to-market and a financial forecast, with the disagreements and rulings on the record.
+- **Run a small online business with AI agents.** Shared calendar, customer records, a scorecard, incoming events, a business mailbox and service accounts, all behind per-role privileges and a human signatory.
+- **Build software with an AI engineering team.** Connect a GitHub repository: a CTO's agents work on their own branch, run GitHub Actions, read the checks and open a pull request for you to merge.
+- **Research multi-agent systems.** Compare models seat by seat, see how often gates send work back, measure what each effort level really costs, and read every decision back from plain JSON.
+- **Learn how agentic AI behaves under governance.** Hierarchy, standard operating procedures, board arbitration, budgets and least-privilege tools, in one place you can run for free in simulation.
+
+## How it differs from agent frameworks
+
+Agent frameworks such as LangGraph, CrewAI and AutoGen give you building blocks to write an agent pipeline in code. the_organisation is an **application**: you describe a goal, not a graph, and the structure comes ready-made.
+
+| | Typical agent framework | the_organisation |
+| --- | --- | --- |
+| What you write | Code: agents, tools and the flow between them | One prompt, then steer in plain language |
+| Structure | Whatever you build | A CEO, up to eight executive leads, and agents under each |
+| Quality control | Up to you | Operating profiles with phase gates that send failed work back |
+| Disagreements | Up to you | Positions on the record, ruled on by the CEO or an independent judge |
+| Money and signatures | Up to you | Only through a human Authorised Signatory |
+| Long-running work | A run ends | Cycles continue, sleep between scheduled reviews, and survive restarts |
+| Interface | Bring your own | A web dashboard with a Gantt timeline, spend, bottlenecks and an audit trail |
 
 ## Start in a minute
 
@@ -111,6 +141,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 ## Contents
 
 - [User guide](docs/user-guide.md): how to use it, step by step
+- [Features](#features), [what you can use it for](#what-you-can-use-it-for) and [how it differs from agent frameworks](#how-it-differs-from-agent-frameworks)
 - [How an organisation works](#how-an-organisation-works)
 - [Shared calendar and business operations](#shared-calendar-and-business-operations)
 - [Business email and service accounts](#business-email-and-service-accounts), and [what each role may do](#what-each-role-may-do)
@@ -124,6 +155,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 - [Data](#data) and [Configuration](#configuration)
 - [Development](#development)
 - [Limits of this version](#limits-of-this-version)
+- [Frequently asked questions](#frequently-asked-questions)
 - [Contributing](#contributing) and [Licence](#licence)
 
 ## How an organisation works
@@ -606,6 +638,35 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - A board decision is one round of positions and a ruling; there is no further debate.
 - Steer given mid-cycle changes plans, not tasks already running: an agent finishes the task it is on.
 - Seats are fixed once an organisation is established. Agent allocation, the arbiter and every limit can be changed afterwards.
+
+## Frequently asked questions
+
+**What is the_organisation?**
+An open-source, self-hosted agentic AI platform. From one prompt it establishes a hierarchical organisation of AI agents (a CEO, executive leads and their agents) that plans, builds, reviews and reports in continuous cycles, with a person holding the budget, the purse and the signature.
+
+**Is it free?**
+The software is free and open source under the Apache 2.0 licence. Simulation costs nothing. With real models you pay your provider for the calls, under a hard budget you set, or use your Claude Code subscription or a model on your own machine.
+
+**Which LLMs does it support?**
+Anthropic Claude, OpenAI GPT, Google Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, anything on OpenRouter, and any OpenAI-compatible endpoint, which covers local models on Ollama, llama.cpp, LM Studio and vLLM. Executives and agents can use different models. See [Models and keys](#models-and-keys).
+
+**Do I need an API key?**
+No. It runs in simulation with no key, or on the Claude Code you already have, signed in with your own subscription. See [Claude Code in place of a key](#claude-code-in-place-of-a-key).
+
+**Can the AI agents spend money or sign contracts?**
+Not by themselves. Paying and signing go through the Authorised Signatory, a person by default, and the program has no way of its own to move money. See [Signing and paying](#signing-and-paying).
+
+**How do I stop it running away?**
+A hard budget and a cycle limit both pause it, and you can pause, stop, steer or slow it down at any moment. Each role can only use the tools you grant it, enforced in code. See [Spend and limits](#spend-and-limits) and [What each role may do](#what-each-role-may-do).
+
+**Can it write and ship code?**
+It can work on a connected GitHub repository: commit to its own branch, run GitHub Actions, read the results and open a pull request. A person merges. See [GitHub repositories](#github-repositories).
+
+**Is it production-ready?**
+It is early software. The [Status](#status) table says plainly what has been run for real and what has only been tested against stand-ins. Start small, with one lead and a small budget.
+
+**Where is my data kept?**
+On your machine, as plain JSON under `data/`, with service passwords in an encrypted per-organisation vault. See [Data](#data).
 
 ## Contributing
 
