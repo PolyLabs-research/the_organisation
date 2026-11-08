@@ -53,6 +53,18 @@ export function dependenciesMet(org: Organisation, job: BusinessJob): boolean {
 export function jobReady(org: Organisation, job: BusinessJob, at = Date.now()): boolean {
   return job.status === 'open' && (!job.notBefore || Date.parse(job.notBefore) <= at) && dependenciesMet(org, job);
 }
+export function nextBusinessWake(org: Organisation, now = Date.now()): number {
+  const b = org.business;
+  if (b.reviewRequested) return now;
+  const times = [b.nextReviewAt ? Date.parse(b.nextReviewAt) : now];
+  for (const job of b.jobs.filter(jobOpen)) {
+    for (const boundary of [job.notBefore, job.dueAt]) {
+      if (boundary && (!job.notifiedAt || Date.parse(boundary) > Date.parse(job.notifiedAt))) times.push(Date.parse(boundary));
+    }
+  }
+  return Math.max(now, Math.min(...times));
+}
+
 export function financeTotals(entries: FinanceEntry[]) {
   const totals = new Map<string, { currency: string; income: number; expense: number; outstandingIncome: number; outstandingExpense: number }>();
   for (const entry of entries) {
