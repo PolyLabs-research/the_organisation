@@ -81,6 +81,21 @@ export class Workspace {
     return { path: rel, bytes };
   }
 
+  /**
+   * Replace one passage of a text file with another. The passage must appear exactly once, so that an
+   * edit never lands somewhere the agent did not mean. Works on the whole file, however long, so a file
+   * too long to read in one go can still be changed without losing its end.
+   */
+  async edit(input: string, find: string, replace: string): Promise<{ path: string; bytes: number }> {
+    if (!find) throw new WorkspaceError('the text to find is empty');
+    const rel = this.normalise(input);
+    const content = await this.readWhole(rel, MAX_WRITE_BYTES);
+    const first = content.indexOf(find);
+    if (first < 0) throw new WorkspaceError(`the text to find is not in ${rel}; read the file and copy the passage exactly`);
+    if (content.indexOf(find, first + 1) >= 0) throw new WorkspaceError(`the text to find appears more than once in ${rel}; include more of the surrounding text so it names one place`);
+    return this.write(rel, content.slice(0, first) + replace + content.slice(first + find.length));
+  }
+
   /** Write a file as bytes: for work products brought home from a hosted session, which need not be text. */
   async writeBytes(input: string, bytes: Uint8Array): Promise<{ path: string; bytes: number }> {
     const rel = this.normalise(input);
@@ -165,6 +180,11 @@ const WriteInput = z.object({
   path: z.string().describe('Path relative to the workspace root, e.g. "engineering/spec.md"'),
   content: z.string().describe('The complete contents of the file'),
 });
+const EditInput = z.object({
+  path: z.string().describe('Path relative to the workspace root, e.g. "engineering/spec.md"'),
+  find: z.string().describe('The exact passage to replace, copied from the file. It must appear in the file exactly once: include enough surrounding text to make it unique'),
+  replace: z.string().describe('The text to put in its place; empty to delete the passage'),
+});
 const ListInput = z.object({
   directory: z.string().describe('Directory to list, relative to the workspace root. Use "" for the whole workspace.'),
 });
@@ -201,19 +221,31 @@ export function workspaceTools(workspace: Workspace, onWrite: (path: string) => 
       async run(input) {
         const { path: p } = PathInput.parse(input);
         const file = await workspace.read(p);
-        return file.truncated ? `${file.content}\n\n[file truncated at ${MAX_READ_CHARS} characters]` : file.content;
+        return file.truncated ? `${file.content}\n\n[file truncated at ${MAX_READ_CHARS} characters. Do not rewrite this file with write_file, which would lose the rest: change it with edit_file.]` : file.content;
       },
     },
     {
       name: 'write_file',
       description:
-        'Create a file in the shared workspace, or replace one, with the complete contents given. Call this for every work product of your task: documents, source code, data. To change an existing file, read it first and write the whole new version.',
+        'Create a file in the shared workspace, or replace one, with the complete contents given. Use it for new work products: documents, source code, data. To change part of an existing file, use edit_file instead of writing the whole file again.',
       schema: WriteInput,
       async run(input) {
         const { path: p, content } = WriteInput.parse(input);
         const written = await workspace.write(p, content);
         onWrite(written.path);
         return `Wrote ${written.path} (${written.bytes} bytes).`;
+      },
+    },
+    {
+      name: 'edit_file',
+      description:
+        'Change part of an existing file in the shared workspace by replacing one exact passage with new text. Read the file first. Use it for every change to an existing file, however many: call it once per passage. It is far cheaper than writing the whole file again, and keeps the rest of the file as it was.',
+      schema: EditInput,
+      async run(input) {
+        const { path: p, find, replace } = EditInput.parse(input);
+        const written = await workspace.edit(p, find, replace);
+        onWrite(written.path);
+        return `Edited ${written.path} (now ${written.bytes} bytes).`;
       },
     },
   ];

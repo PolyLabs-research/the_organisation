@@ -29,6 +29,12 @@ export interface MockOptions {
   requests?: 'second_phase' | 'never';
   /** What an AI in the signatory's seat decides. */
   signatory?: 'authorise' | 'decline';
+  /** Phases that wait on another lead's phase, by the lead that owns them: { cmo: { phase: 'research', lead: 'cto', on: 'Spec' } }. */
+  waits?: Record<string, { phase: string; lead: string; on: string }>;
+  /** How a plan's owner answers objections. contest (the default) sends them to the board. */
+  answers?: 'accept' | 'contest';
+  /** Phases a lead leaves out of its plans, by phase id: { cmo: ['position', 'create', 'launch'] }. */
+  skips?: Record<string, string[]>;
   /** Called before each call is answered; throw from it to simulate a failure. */
   onCall?: (kind: string, context: Record<string, unknown>) => void | Promise<void>;
 }
@@ -542,7 +548,16 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
           workApproach: 'standard',
           workApproachReason: 'The standard operating profile fits this objective.',
           approach: `Work through ${sopText} in order with ${seat!.agentCount} agent${seat!.agentCount === 1 ? '' : 's'}. ${firstPhase?.name ?? 'The first phase'} settles scope before agent time is spent on later phases.`,
-          phases: phaseList.map((p) => ({ phase: p.id, intent: `${noStop(p.deliverable)}, for: ${brief(plan!.objective, 90)}` })),
+          phases: phaseList.map((p) => {
+            const wait = this.options.waits?.[seat!.id];
+            const skip = this.options.skips?.[seat!.id]?.includes(p.id) ?? false;
+            return {
+              phase: p.id,
+              intent: skip ? 'Not needed for this objective.' : `${noStop(p.deliverable)}, for: ${brief(plan!.objective, 90)}`,
+              skip,
+              waitsFor: wait && wait.phase === p.id ? [{ lead: wait.lead, phase: wait.on }] : [],
+            };
+          }),
           decisions: [
             {
               title: `Scope of the ${seat!.function.toLowerCase()} work this cycle`,
@@ -576,6 +591,11 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
         };
       }
 
+      case 'answer':
+        return this.options.answers === 'accept'
+          ? { verdict: 'accept', amendments: ['Start the dependent part only once the other function’s first deliverable is in the workspace.'], argument: 'The dependency is real and waiting costs little.' }
+          : { verdict: 'contest', amendments: [], argument: 'The plan is inside my remit and meets the directive as drafted. Re-sequencing would cost time the directive does not allow for.' };
+
       case 'position':
         if (c.isOwner) return { stance: 'back_plan', argument: 'The plan is inside my remit and meets the directive as drafted. Re-sequencing would cost time the directive does not allow for.' };
         if (c.isObjector) return { stance: 'back_objection', argument: 'The dependency is real. If the plan runs as drafted, my team is pulled off its own directive to feed it.' };
@@ -598,7 +618,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
       case 'revise':
         return {
           approach: `Work through ${sopText} in order, starting with the parts that depend on nobody else. Dependent work begins only once the other function’s first deliverable is in the workspace.`,
-          phases: (c.phases as Array<{ id: string; name: string }>).map((p) => ({ phase: p.id, intent: `${p.name}, for: ${brief(plan!.objective, 90)}` })),
+          phases: (c.phases as Array<{ id: string; name: string; skipped?: boolean }>).map((p) => ({ phase: p.id, intent: `${p.name}, for: ${brief(plan!.objective, 90)}`, skip: p.skipped ?? false, waitsFor: [] })),
           changes: 'Re-sequenced the plan so nothing in it waits on another function’s unfinished work, as the ruling requires.',
         };
 
@@ -687,6 +707,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
                   objective: `Check the ${first.from} deliverable against ${seat!.function.toLowerCase()} and resolve what does not fit.`,
                   successCriteria: 'A short note in the workspace listing each mismatch and how it was resolved.',
                   rationale: `The ${first.from} report asks other leads to check its files against their own plans.`,
+                  existing: `The ${first.from} files are in the workspace; nothing yet checks them against ${seat!.function.toLowerCase()}.`,
                   reportIds: [first.id],
                 },
               ]

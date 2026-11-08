@@ -136,7 +136,9 @@ flowchart TD
   D --> P["Each lead drafts a plan from its operating profile"]
   P --> R{"Board review: competing priorities?"}
   R -- no --> X["Execute: phase by phase. Agents do the tasks, the lead gates each phase"]
-  R -- yes --> B["Leads state positions; the CEO or judge signs off"]
+  R -- yes --> O{"The owner accepts the objections?"}
+  O -- yes --> X
+  O -- no --> B["Leads state positions; the CEO or judge signs off"]
   B --> X
   X --> Rep["The lead reports to the whole board"]
   Rep -- "may trigger another lead" --> P
@@ -145,7 +147,7 @@ flowchart TD
 
 **Seats.** Every organisation has a CEO and an [Authorised Signatory](#signing-and-paying). You seat up to eight executive leads beside them, either from a recommendation (describe the idea and a team is proposed, with reasons) or by hand from the profile library. A seat that is not in the library can be added with its own title, remit and phases.
 
-**Standard operating profiles.** Each profile type always works the same way. Every plan a lead owns runs its phases in order, and a phase must pass the lead's gate review before the next begins.
+**Standard operating profiles.** Each profile type always works the same way. Every plan a lead owns runs its phases in order, and a phase must pass the lead's gate review before the next begins. A plan runs only the phases its objective needs: a lead asked for research alone skips the rest, and a follow-up answering another lead often needs one or two. Skipped phases and the reasons are shown to the board, which can ask for them back. Phases the system checks for itself, such as repository checks, are never skipped.
 
 | Seat | Leads | Operating profile |
 | --- | --- | --- |
@@ -169,6 +171,10 @@ The library lives in [`src/shared/profiles.ts`](src/shared/profiles.ts); add or 
 
 **Agents.** Each lead is allocated a number of agents (1 to 8, adjustable while the organisation runs). For each phase the lead hands out tasks; its agents work them in parallel, never more at once than the lead has agents, and report back to the lead. Agents put their work products in a shared workspace as files, which every seat and agent can read.
 
+**Ordering between plans.** Work here takes minutes, not days, so plans are not scheduled by calendar dates. Instead, when a lead drafts a plan it can say that one of its phases needs a phase of another lead's plan first (the CMO's Position phase waits for the CTO's Spec, say). The phase does not start until that phase has passed, and the lead is handed what it produced. If the plan waited on is cancelled or fails, the wait lets go. Plans that end up waiting on each other in a ring are freed automatically, with a note on the board. Board rulings that put one piece of work before another become waits in the same way. Dates are kept for what the outside world fixes, such as a filing deadline or a date the shareholders set.
+
+**Changing files.** Agents change an existing file with `edit_file`, replacing one exact passage at a time, instead of writing the whole file again. They are asked to keep each work product as short as its purpose allows, and not to write logs, trackers or notes about their own process beside it.
+
 Agents can work in one of two ways, chosen per organisation: **on this machine**, where they read and write files and run nothing, or **in hosted sessions**, where each plan gets a sandbox in which the lead and its agents can run and test what they build. See [Hosted sessions](#hosted-sessions-claude-managed-agents).
 
 **Reports as triggers.** When a plan has run every phase, the lead reports to the whole board. Each other lead reads the report once their own plan is off their desk and may start follow-up work in their own remit. How many rounds of follow-up one cycle allows is a setting, and no lead starts more than two follow-ups in a cycle; anything further waits for the CEO.
@@ -176,7 +182,8 @@ Agents can work in one of two ways, chosen per organisation: **on this machine**
 **Decisions.**
 
 - A lead decides anything inside their own remit, and the decision is recorded.
-- When leads have competing priorities (another lead objects to a plan, or the plan's owner flags something that cuts across remits), the plan goes to the board. Every lead states a position. If they agree, the arbiter ratifies it; if not, the arbiter rules. The ruling can let the plan proceed, bind it with amendments or cancel it.
+- When another lead objects to a plan, the plan's owner answers first. If the owner accepts, the objections bind the plan as amendments and it is revised without the board sitting.
+- When the owner contests, or the owner itself flags something that cuts across remits, the plan goes to the board. Every lead states a position (a contesting owner's answer is its position). If they agree, the arbiter ratifies it; if not, the arbiter rules. The ruling can let the plan proceed, bind it with amendments or cancel it.
 - The arbiter is the CEO, who rules by what the shareholders want, or an independent judge seated on the board with no remit of their own. You choose which.
 
 **Steer.** Give steer at any time. Before work has begun, the CEO takes it into the cycle's direction and replies. While work is under way, the CEO reviews the plans in progress against it and amends or cancels them, then replies with what changed.
@@ -422,7 +429,7 @@ What drives spend, and where to change it (wizard or settings):
 - **Effort** for executives and agents (default medium).
 - **Agents per lead** and **tasks per phase** (default at most 4 tasks).
 - **Follow-up work per cycle** (default one round, and never more than two follow-up plans per lead).
-- **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; at most 8 searches per task).
+- **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; at most 8 searches per task). With it, agents can also read the pages a search finds (web fetch, up to 4 pages per model request, each cut to 20,000 tokens). Reading a page has no per-use fee; its text is billed as input tokens.
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
 If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. By default, an organisation that was running comes back paused after a server restart. The optional resume-on-restart setting restores a previously running or waiting organisation automatically, while retaining manual pauses and limits.
@@ -431,7 +438,7 @@ On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is wh
 
 ## What agents can and cannot do
 
-**On this machine** (the default), agents have three tools, all confined to their organisation's workspace folder: list files, read a file, write a file. With web search switched on, agents on Claude models can also search the web. Business records, email, service accounts and repositories are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach any other system, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
+**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts and repositories are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach any other system, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
 
 **In hosted sessions** (Claude models only), agents have a shell and file tools in a sandbox on Anthropic's side. They can install packages, build, run and test, and are told to report what actually happened.
 

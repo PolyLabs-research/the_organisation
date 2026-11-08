@@ -251,6 +251,30 @@ export interface PlanPhase {
   /** What the system itself must find before this phase can pass, if anything. */
   gate: PhaseGate | null;
   evidence: GateEvidence | null;
+  /** Work in other leads' plans this phase must not start before. */
+  waitsFor: PhaseWait[];
+}
+
+/**
+ * A phase of another lead's plan that must be finished before a phase can start. The lead names the
+ * other lead and the phase; when the plan starts, the wait is pinned to that lead's plan, so a plan
+ * the other lead takes on later cannot hold it up.
+ */
+export interface PhaseWait {
+  leadId: string;
+  /** The phase as the lead named it. */
+  phase: string;
+  /** The plan waited on, once pinned. Null before the plan starts, or when the lead had no plan to wait on. */
+  planId: string | null;
+  /** The phase of that plan waited on; null to wait for the whole plan. */
+  phaseIndex: number | null;
+  /** Why the wait was let go before it was met, if it was. */
+  released: string | null;
+}
+
+export interface SkippedPhase {
+  phase: string;
+  reason: string;
 }
 
 export type PlanStatus =
@@ -349,6 +373,8 @@ export interface Plan {
   workApproachId: string;
   workApproachReason: string | null;
   phases: PlanPhase[];
+  /** Phases of the work approach the lead left out because the objective does not need them, with why. */
+  skipped: SkippedPhase[];
   status: PlanStatus;
   /** Binding instructions added by board rulings or the CEO enforcing steer. */
   amendments: string[];
@@ -391,7 +417,7 @@ export interface Position {
 
 export interface DecisionOutcome {
   /** lead: decided inside a remit. consensus: the board agreed and the arbiter ratified. ceo/judge: the arbiter ruled. */
-  method: 'lead' | 'consensus' | 'ceo' | 'judge';
+  method: 'lead' | 'owner' | 'consensus' | 'ceo' | 'judge';
   byId: string;
   ruling: string;
   rationale: string;
@@ -412,7 +438,8 @@ export interface Decision {
   issues: Array<{ byId: string; concern: string; proposal: string }>;
   participantIds: string[];
   positions: Record<string, Position>;
-  status: 'open' | 'deliberated' | 'resolved';
+  /** answering: only the plan's owner is asked first, and if it accepts the objections the board need not sit. */
+  status: 'answering' | 'open' | 'deliberated' | 'resolved';
   outcome: DecisionOutcome | null;
 }
 
@@ -565,6 +592,7 @@ export type WorkKind =
   | 'direct'
   | 'plan'
   | 'review'
+  | 'answer'
   | 'position'
   | 'signoff'
   | 'revise'

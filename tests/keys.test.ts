@@ -407,7 +407,10 @@ describe('an organisation on models that are not Claude’s', () => {
     const provider = new Searching();
     h = await harness({ provider, executives: [{ profileId: 'engineering', agentCount: 1 }], settings: { webResearch: true } });
     await runToRest(h.runner);
-    expect(provider.agents[0]!.webSearch).toEqual({ perRequest: 3, perTask: expect.any(Number) });
-    expect(provider.agents[0]!.system.role).toContain('You can search the web');
+    // The whole task's allowance is open in each request, so the per-request cap never reads as a refusal before it is spent.
+    const allowance = provider.agents[0]!.webSearch!;
+    expect(allowance.perRequest).toBe(allowance.perTask);
+    expect(provider.agents[0]!.system.role).toContain('You can search the web and read pages');
+    expect(provider.agents[0]!.system.role).toContain('it is not a ban on research');
   });
 });

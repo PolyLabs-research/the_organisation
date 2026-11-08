@@ -1,5 +1,6 @@
 import { waitsOnAi } from '../../shared/signatory';
 import type { Decision, Organisation, Plan, ReviewRound } from '../../shared/types';
+import { breakWaitRing, describeWait, heldBy, pinWaits } from '../../shared/waits';
 import { signatoryOf } from './signatory';
 import { ceoOf, arbiterOf, currentPhase, execById, followUpsLeft, isPlanActive, leadsOf, nextId, planById, postToBoard } from './state';
 
@@ -14,6 +15,7 @@ export type WorkItem =
   | { kind: 'direct'; key: string; execId: string }
   | { kind: 'plan'; key: string; execId: string; planId: string }
   | { kind: 'review'; key: string; execId: string; roundId: string }
+  | { kind: 'answer'; key: string; execId: string; decisionId: string }
   | { kind: 'position'; key: string; execId: string; decisionId: string }
   | { kind: 'signoff'; key: string; execId: string; decisionId: string }
   | { kind: 'revise'; key: string; execId: string; planId: string }
@@ -80,6 +82,9 @@ function closeRound(org: Organisation, round: ReviewRound): void {
       status: 'open',
       outcome: null,
     };
+    // When only other leads object, the owner answers first: most objections are accepted, and then the board need not sit.
+    // What the owner raised itself is for the board to settle.
+    if (!plan.escalations.length) decision.status = 'answering';
     org.decisions.push(decision);
     plan.status = 'contested';
     plan.decisionId = decision.id;
@@ -91,8 +96,10 @@ function closeRound(org: Organisation, round: ReviewRound): void {
       org,
       'decision',
       decision.raisedById,
-      `Board decision opened: ${decision.title}`,
-      `Plan: ${plan.objective}\n\n${lines.join('\n')}\n\nThe board will state positions; the ${arbiterOf(org).short} signs off.`,
+      decision.status === 'answering' ? `Objections to the ${who} plan` : `Board decision opened: ${decision.title}`,
+      decision.status === 'answering'
+        ? `Plan: ${plan.objective}\n\n${lines.join('\n')}\n\nThe ${who} answers first. If the ${who} accepts, the plan is revised; if not, the board states positions and the ${arbiterOf(org).short} signs off.`
+        : `Plan: ${plan.objective}\n\n${lines.join('\n')}\n\nThe board will state positions; the ${arbiterOf(org).short} signs off.`,
       { planId: plan.id, decisionId: decision.id },
     );
   }
@@ -148,12 +155,29 @@ export function settle(org: Organisation): boolean {
         // How a plan is carried out is settled when it starts and does not change under it.
         // A plan with gates to check stays here: a hosted session cannot reach the repository to be checked.
         plan.execution ??= plan.phases.some((phase) => phase.gate) ? 'local' : org.settings.execution;
+        // What the plan waits on in other leads' plans is fixed now, so later plans of theirs cannot hold it up.
+        pinWaits(org, plan);
         stepped = true;
       } else if (plan.status === 'executing' && plan.execution !== 'managed' && plan.phases.every((phase) => phase.status === 'done')) {
         // A plan in a hosted session reports from inside the session; this is for plans run here.
         plan.status = 'reporting';
         stepped = true;
       }
+    }
+
+    const ring = breakWaitRing(org);
+    if (ring) {
+      const owner = execById(org, ring.ownerId)?.short ?? ring.ownerId;
+      const released = ring.phases.flatMap((p) => p.waitsFor).filter((w) => w.released?.startsWith('Plans were waiting'));
+      postToBoard(
+        org,
+        'system',
+        'system',
+        `${owner} plan no longer waits`,
+        `The ${owner} plan and the plans it was waiting on were each waiting on the other, so none could start. The ${owner} plan carries on without waiting for ${released.map((w) => describeWait(org, w)).join(', ')}.`,
+        { planId: ring.id },
+      );
+      stepped = true;
     }
 
     if (!stepped) break;
@@ -175,7 +199,10 @@ export function nextWork(org: Organisation): WorkItem[] {
   }
 
   for (const decision of org.decisions) {
-    if (decision.status === 'deliberated') {
+    const owner = decision.planId ? planById(org, decision.planId)?.ownerId : undefined;
+    if (decision.status === 'answering' && owner) {
+      items.push({ kind: 'answer', key: `answer:${decision.id}`, execId: owner, decisionId: decision.id });
+    } else if (decision.status === 'deliberated') {
       items.push({ kind: 'signoff', key: `signoff:${decision.id}`, execId: arbiterOf(org).id, decisionId: decision.id });
     } else if (decision.status === 'open') {
       for (const id of decision.participantIds) {
@@ -212,6 +239,8 @@ export function nextWork(org: Organisation): WorkItem[] {
     if (plan.status === 'planning') items.push({ kind: 'plan', key: `plan:${plan.id}`, ...base });
     else if (plan.status === 'revising') items.push({ kind: 'revise', key: `revise:${plan.id}`, ...base });
     else if (plan.status === 'reporting') items.push({ kind: 'report', key: `report:${plan.id}`, ...base });
+    // A plan waiting on another lead's work starts nothing new until that work is finished.
+    else if (plan.status === 'executing' && heldBy(org, plan).length) continue;
     else if (plan.status === 'executing' && plan.execution === 'managed') {
       items.push({ kind: 'execute', key: `execute:${plan.id}`, ...base });
     } else if (plan.status === 'executing') {

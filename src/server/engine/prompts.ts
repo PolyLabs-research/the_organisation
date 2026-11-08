@@ -3,6 +3,7 @@ import { PRIVILEGES, allows, applies } from '../../shared/privileges';
 import { describeRequest, isOpen, waitsOnAi } from '../../shared/signatory';
 import type { BoardReport, Decision, Executive, GateEvidence, Organisation, PhaseGate, Plan, PlanPhase, ReviewRound, SignatoryRequest, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, type SystemPrompt } from '../providers/types';
+import { describeWait, waitMet } from '../../shared/waits';
 import { oneLine } from './records';
 import { CEO_QUESTION, arbiterOf, execById, leadsOf, teamDir } from './state';
 
@@ -60,9 +61,18 @@ ${founding(org)}
 - The organisation cannot sign a document or pay for anything itself. A lead whose plan needs either puts a request to the Authorised Signatory. ${signatory} Until a request is marked done, the payment or signature has not happened, and nothing may be planned, written or reported as though it had.
 - When all work is done, the CEO asks "${CEO_QUESTION}" and the cycle begins again.
 
+# Time
+- Work here runs far faster than a human calendar. A phase takes minutes and a whole cycle an hour or two, not days or weeks.
+- Do not schedule the organisation's own work by calendar dates, set internal deadlines, or argue over review windows. Order it by what it needs: a phase of a plan can wait for a phase of another lead's plan, and the system holds it until that phase is finished.
+- Use dates only for what the outside world fixes: a filing or legal deadline, an event, a contract term, an expiry, or a date the shareholders set.
+
 # The board
 ${board.join('\n')}`;
 }
+
+/** How long a work product should be. Every file is read by other agents, often many times, so length costs over and over. */
+const WRITING = `- Make each file as short as its purpose allows. Most deliverables fit in a few pages, under about 3,000 words. Go longer only when the content itself must be long (source code, a text the task asks for in full), never with restated context, process notes or padding.
+- Write the deliverable your task names and nothing beside it: no separate logs, trackers, registers, cross-reference files or notes about how you worked. Put what your lead needs to know in your closing report.`;
 
 const HOUSE_STYLE = `- Be concrete and brief. Write as you would in board minutes: no preamble, no filler, no restating the question.
 - Say plainly what is known, what is assumed and what is unverified. Never invent facts, figures or sources.`;
@@ -128,7 +138,7 @@ export function systemFor(org: Organisation, exec: Executive, where: 'local' | '
 
 export function systemForAgent(org: Organisation, lead: Executive, canSearch = org.settings.webResearch): SystemPrompt {
   const web = canSearch
-    ? 'You can search the web. Use it for facts you would otherwise have to assume, and cite the source next to anything you take from it. You cannot run code. Outside systems are available only through explicitly granted business email and account tools.'
+    ? 'You can search the web and read pages: web_fetch reads a page whose address came from a search result, your task or a file. Use them for facts you would otherwise have to assume: search to find a source, then read the page itself before relying on what it says, and cite the address next to anything you take from it. A task has a limited number of searches. A search or fetch that comes back with an error has hit that limit or a page that could not be read: it is not a ban on research. Try another source or carry on with what you have, and say in your report exactly what you could not check. You cannot run code. Outside systems are available only through explicitly granted business email and account tools.'
     : 'You cannot run code or browse arbitrary websites. You can use explicitly granted business email and account tools.';
   const limits = limitsOf(org, lead, 'local');
   return {
@@ -140,6 +150,8 @@ You are an agent on the ${lead.function} team. You report to the ${lead.title} (
 - Do the task you were given, in full. If part of it cannot be done, do the rest and say exactly what is missing.
 - Use read_business to find current or older commitments, customer requirements and knowledge. Use update_business to record evidence or changes within your lead's remit. You cannot verify completion or confirm payments. Keep the shared calendar current when dates or blockers change.
 - Put every work product in a file in the shared workspace using your tools. Keep your files under \`${teamDir(lead)}/\` unless the task says otherwise. Read other teams' files when your task depends on them.
+${WRITING}
+- To change an existing file, use edit_file, once per passage. Write a whole file only when it is new or almost all of it changes.
 - ${web} Do not claim to have run, tested or measured anything you have not. Mark assumptions as assumptions.
 ${limits ? `${limits}\n` : ''}- When you finish, reply with a short report for your lead: what you produced and where, the main findings or decisions, and anything left unresolved.`,
   };
@@ -190,9 +202,25 @@ function planHeader(org: Organisation, plan: Plan): string {
   return lines.join('\n');
 }
 
+/** A phase's intent, with what it waits for in other leads' plans. */
+export function phaseIntent(org: Organisation, phase: PlanPhase): string {
+  const waits = (phase.waitsFor ?? []).filter((w) => !w.released);
+  return `${phase.intent}${waits.length ? ` (waits for ${waits.map((w) => describeWait(org, w)).join('; ')})` : ''}`;
+}
+
+/** The phases a plan leaves out, for the board: empty when it runs them all. */
+export function skippedLine(plan: Plan): string {
+  if (!plan.skipped?.length) return '';
+  return `\nSkips: ${plan.skipped.map((s) => `${s.phase} (${s.reason})`).join('; ')}`;
+}
+
+function phaseLine(org: Organisation, phase: PlanPhase): string {
+  return `${phase.name}: ${phaseIntent(org, phase)}`;
+}
+
 function planForBoard(org: Organisation, plan: Plan): string {
-  const phases = plan.phases.map((p) => `  - ${p.name}: ${p.intent}`).join('\n');
-  return `## Plan ${plan.id}, owned by ${who(org, plan.ownerId)}\nObjective: ${plan.objective}\nSuccess criteria: ${plan.successCriteria}\nApproach: ${plan.approach ?? '(not yet drafted)'}\nPhases:\n${phases}`;
+  const phases = plan.phases.map((p) => `  - ${phaseLine(org, p)}`).join('\n');
+  return `## Plan ${plan.id}, owned by ${who(org, plan.ownerId)}\nObjective: ${plan.objective}\nSuccess criteria: ${plan.successCriteria}\nApproach: ${plan.approach ?? '(not yet drafted)'}\nPhases:\n${phases}${skippedLine(plan)}`;
 }
 
 function filesBlock(files: WorkspaceFile[]): string {
@@ -325,11 +353,16 @@ function approachBlock(choices: Array<Pick<WorkApproach, 'id' | 'label' | 'when'
 export function planPrompt(org: Organisation, lead: Executive, plan: Plan, files: WorkspaceFile[], choices: Array<Pick<WorkApproach, 'id' | 'label' | 'when' | 'phases'>> = []): string {
   const others = org.plans
     .filter((p) => p.cycle === org.cycle.number && p.id !== plan.id && p.status !== 'cancelled')
-    .map((p) => `- ${who(org, p.ownerId)}: ${p.objective}`);
+    .map((p) => `- ${who(org, p.ownerId)} [${p.ownerId}]: ${p.objective} Phases: ${p.phases.map((ph) => ph.name).join(' → ')}.`);
+  const sources = plan.origin.type === 'follow_up' ? plan.origin.reportIds.map((id) => org.reports.find((r) => r.id === id)).filter((r): r is BoardReport => !!r) : [];
   const origin =
     plan.origin.type === 'directive'
       ? 'The CEO has given you this directive.'
-      : 'You chose to follow up on reports to the board. This is the work you set yourself.';
+      : `You chose to follow up on reports to the board. This is the work you set yourself. Build on what already exists (see "Why" below and the workspace): read those files rather than recreating them, and plan only what is missing.${
+          sources.length
+            ? `\n\n# The reports you are following up\n${sources.map((r) => `- ${r.id} from ${who(org, r.fromId)}: ${r.headline}${r.asks.length ? `\n  Asks: ${r.asks.join(' | ')}` : ''}${r.files.length ? `\n  Files: ${r.files.join(', ')}` : ''}`).join('\n')}`
+            : ''
+        }`;
   return `${origin}
 
 ${planHeader(org, plan)}
@@ -346,7 +379,7 @@ ${signatoryBlock(org)}
 ${filesBlock(files)}
 
 ${approachBlock(choices)}# Your task
-Draft your plan. Give your approach, then say what each phase of ${choices.length > 1 ? 'the work approach you chose' : 'your operating profile'} will produce for this objective, one entry per phase and in order. Record the decisions you are taking inside your remit. If something cuts across another lead's remit, or competes with what another lead is doing, raise it as an escalation for the board; most plans have none.`;
+Draft your plan. Give your approach, then give one entry per phase of ${choices.length > 1 ? 'the work approach you chose' : 'your operating profile'}, in order, saying what it will produce for this objective. Run only the phases the objective needs. If it asks for part of what your profile covers (research only, say, or one answer to another lead), set skip on the phases it does not need and say in their intent why; a follow-up usually needs one or two phases. Phases the system checks for itself cannot be skipped. If a phase needs something another lead is producing this cycle, say which lead and which of their phases in its waitsFor: the system will not start your phase until theirs is finished, and will hand you what it produced. Wait only for what you truly need, since every wait slows the organisation; never give dates for the organisation's own work. Record the decisions you are taking inside your remit. If something cuts across another lead's remit, or competes with what another lead is doing, raise it as an escalation for the board; most plans have none.`;
 }
 
 export function reviewPrompt(org: Organisation, lead: Executive, round: ReviewRound): string {
@@ -365,7 +398,7 @@ ${cycleBlock(org)}
 ${steerBlock(org)}
 
 # Your task
-Check each plan against your own remit and priorities. Object only where a plan conflicts with your remit, duplicates or undermines your own work, or commits something you are responsible for. How another lead does their own work is theirs to decide. Having no objection is the normal case: return an empty list.`;
+Check each plan against your own remit and priorities. Object only where a plan conflicts with your remit, duplicates or undermines your own work, or commits something you are responsible for. How another lead does their own work is theirs to decide. If one plan needs another's work first, the fix is a wait (a phase that waits for another lead's phase), never a date or a review window. Having no objection is the normal case: return an empty list.`;
 }
 
 function decisionBlock(org: Organisation, decision: Decision, plan: Plan | undefined): string {
@@ -375,6 +408,17 @@ ${plan ? planForBoard(org, plan) : decision.context}
 
 # Issues raised
 ${issues}`;
+}
+
+export function answerPrompt(org: Organisation, lead: Executive, decision: Decision, plan: Plan): string {
+  return `${decisionBlock(org, decision, plan)}
+
+${cycleBlock(org)}
+
+${steerBlock(org)}
+
+# Your task
+Other leads have objected to your plan. Answer before the board is asked. Accept if you can live with what they propose: list the changes you will make, and the plan will be revised to include them without the board sitting. Most objections are worth accepting, since the board usually agrees with them and settling them costs everyone time. Contest only where an objection would harm your objective or the shareholders' interest, and say why; then every lead states a position and the ${arbiterOf(org).title} rules.`;
 }
 
 export function positionPrompt(org: Organisation, lead: Executive, decision: Decision, plan: Plan | undefined): string {
@@ -409,10 +453,24 @@ ${steerBlock(org)}
 Sign this decision off. If the board is agreed, ratify what it agreed unless that conflicts with the mission or the shareholder steer. If it is not, rule. Choose one: the plan proceeds as drafted, the plan proceeds with amendments (list them; each must be an instruction the plan owner can act on), or the plan is cancelled.`;
 }
 
-export function revisePrompt(org: Organisation, plan: Plan, decision: Decision | undefined): string {
-  const ruling = decision?.outcome ? `The ruling: ${decision.outcome.ruling}\nReasons: ${decision.outcome.rationale}` : '';
-  const phases = plan.phases.map((p) => `- ${p.name}: ${p.intent}`).join('\n');
-  return `The board has ruled on your plan and it must change.
+export function revisePrompt(org: Organisation, plan: Plan, decision: Decision | undefined, all: Array<{ id: string; name: string }> = plan.phases.map((p) => ({ id: p.sopPhaseId, name: p.name }))): string {
+  const ruling = decision?.outcome
+    ? decision.outcome.method === 'owner'
+      ? `The objections:\n${decision.issues.map((i) => `- ${who(org, i.byId)}: ${i.concern} Proposes: ${i.proposal}`).join('\n')}\nYour answer: ${decision.outcome.rationale}`
+      : `The ruling: ${decision.outcome.ruling}\nReasons: ${decision.outcome.rationale}`
+    : '';
+  const phases = all
+    .map((a) => {
+      const phase = plan.phases.find((p) => p.sopPhaseId === a.id);
+      const skipped = plan.skipped?.find((s) => s.phase === a.name);
+      return phase ? `- ${phaseLine(org, phase)}` : `- ${a.name}: skipped${skipped ? ` (${skipped.reason})` : ''}`;
+    })
+    .join('\n');
+  const others = org.plans
+    .filter((p) => p.cycle === org.cycle.number && p.id !== plan.id && p.ownerId !== plan.ownerId && p.status !== 'cancelled')
+    .map((p) => `- ${who(org, p.ownerId)} [${p.ownerId}]: ${p.phases.map((ph) => ph.name).join(' → ')}`);
+  const accepted = decision?.outcome?.method === 'owner';
+  return `${accepted ? 'You accepted objections to your plan, so it must change to take them in.' : 'The board has ruled on your plan and it must change.'}
 
 ${planHeader(org, plan)}
 
@@ -421,8 +479,8 @@ ${phases}
 
 ${ruling}
 
-# Your task
-Revise the approach and the phase intents so the plan complies with every binding instruction. Keep what the ruling does not touch. Say briefly what you changed.`;
+${others.length ? `# Other leads' plans this cycle\n${others.join('\n')}\n\n` : ''}# Your task
+Revise the approach and the phase intents so the plan complies with every binding instruction. Keep what the ruling does not touch. Where the ruling says one piece of work must come before another, express it as a wait on that lead's phase (waitsFor), not as a date. Give each phase's full list of waits, including any it already had. Give an entry for every phase, skipped ones too: set skip on each phase the plan still does not need, and clear it to bring a skipped phase back if the ruling needs it. Say briefly what you changed.`;
 }
 
 export function kickoffPrompt(org: Organisation, lead: Executive, plan: Plan, index: number, files: WorkspaceFile[]): string {
@@ -438,10 +496,32 @@ Purpose: ${phase.purpose}
 Deliverable: ${phase.deliverable}
 What you said it would produce: ${phase.intent}${phase.gate ? `\nThis phase has a gate the system checks for itself: ${GATE_NEEDS[phase.gate]} Plan the work so that it can.` : ''}
 
-${[phaseSummaries(plan, index), signatoryBlock(org), filesBlock(files)].filter(Boolean).join('\n\n')}
+${[phaseSummaries(plan, index), waitedBlock(org, phase), signatoryBlock(org), filesBlock(files)].filter(Boolean).join('\n\n')}
 
 # Your task
-Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.`;
+Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Commission the deliverable itself, not paperwork about it: no task whose only output is a tracker, register, reconciliation log, cross-reference or a review of other files, unless the phase deliverable is exactly that. To improve an existing file, have the task edit it in place rather than write a new version beside it. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.`;
+}
+
+/** What the phase waited for in other leads' plans, so the lead builds on it rather than looking for it. */
+function waitedBlock(org: Organisation, phase: PlanPhase): string {
+  const lines = (phase.waitsFor ?? [])
+    .filter((w) => w.planId)
+    .map((w) => {
+      const target = org.plans.find((p) => p.id === w.planId);
+      const label = describeWait(org, w);
+      if (!target) return `## ${label}\nThat plan is no longer on record.`;
+      if (w.released) return `## ${label}\nNot waited for: ${w.released}`;
+      const phases = w.phaseIndex === null ? target.phases : target.phases.slice(0, w.phaseIndex + 1);
+      const ended = target.status === 'cancelled' || target.status === 'failed' ? `\nTheir plan ${target.status === 'cancelled' ? 'was cancelled' : 'failed'} before finishing${target.cancelReason ? `: ${target.cancelReason}` : ''}. Do not count on what it did not produce.` : '';
+      const done = phases
+        .filter((p) => p.status === 'done')
+        .map((p) => {
+          const files = [...new Set(p.tasks.flatMap((t) => t.files))];
+          return `${p.name}: ${p.summary ?? '(no summary)'}${files.length ? `\nFiles: ${files.join(', ')}` : ''}`;
+        });
+      return `## ${label}${waitMet(org, w) ? '' : ' (not finished)'}${ended}\n${done.join('\n\n') || 'Nothing finished.'}`;
+    });
+  return lines.length ? `# What this phase waited for\n${lines.join('\n\n')}` : '';
 }
 
 /** Where a plan's code lives, for the agents working on it. */
@@ -552,26 +632,60 @@ ${signatoryBlock(org)}
 Report to the board. Give a headline, a short summary of what was delivered measured against the success criteria, the outcomes as a list, and anything you now need other leads or the board to do. Other leads will read this and may act on it, so say what they need to know and say it accurately: do not claim more than the phases delivered.`;
 }
 
-export function reactPrompt(org: Organisation, lead: Executive, reports: BoardReport[], maxFollowUps: number): string {
+/** How long ago something happened, in words a lead can weigh a report's age by. */
+function ago(at: string, now = Date.now()): string {
+  const minutes = Math.round((now - Date.parse(at)) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 120) return `${minutes} min ago`;
+  return `${Math.round(minutes / 60)} h ago`;
+}
+
+/** A lead's own plans this cycle, with what each finished one reported and produced. */
+function ownWork(org: Organisation, lead: Executive): string {
+  const mine = org.plans.filter((p) => p.ownerId === lead.id && p.cycle === org.cycle.number && p.status !== 'cancelled');
+  if (!mine.length) return 'None.';
+  return mine
+    .map((p) => {
+      const report = p.reportId ? org.reports.find((r) => r.id === p.reportId) : undefined;
+      const files = [...new Set(p.phases.flatMap((ph) => ph.tasks.flatMap((t) => t.files)))];
+      return `- [${p.status}] ${p.objective}${report ? `\n  Reported ${ago(report.at)}: ${report.headline}` : ''}${files.length ? `\n  Files: ${files.join(', ')}` : ''}`;
+    })
+    .join('\n');
+}
+
+export function reactPrompt(org: Organisation, lead: Executive, reports: BoardReport[], maxFollowUps: number, files: WorkspaceFile[] = []): string {
   const blocks = reports.map((r) => {
     const outcomes = r.outcomes.map((o) => `  - ${o}`).join('\n');
     const asks = r.asks.length ? `\nAsks:\n${r.asks.map((a) => `  - ${a}`).join('\n')}` : '';
-    return `## Report ${r.id} from ${who(org, r.fromId)}: ${r.headline}\n${r.summary}\nOutcomes:\n${outcomes}${asks}${r.files.length ? `\nFiles: ${r.files.join(', ')}` : ''}`;
+    return `## Report ${r.id} from ${who(org, r.fromId)}, filed ${ago(r.at)}: ${r.headline}\n${r.summary}\nOutcomes:\n${outcomes}${asks}${r.files.length ? `\nFiles: ${r.files.join(', ')}` : ''}`;
   });
-  const mine = org.plans.filter((p) => p.ownerId === lead.id && p.cycle === org.cycle.number && p.status !== 'cancelled');
-  return `Reports have come in to the board from other leads.
+  // What has been reported since the oldest of these, which may already answer what they ask.
+  const oldest = Math.min(...reports.map((r) => Date.parse(r.at)));
+  const since = org.reports.filter((r) => r.cycle === org.cycle.number && !reports.includes(r) && Date.parse(r.at) >= oldest);
+  const sinceBlock = since.length
+    ? `# Reported since\n${since.map((r) => `- ${r.id} from ${who(org, r.fromId)}, ${ago(r.at)}: ${r.headline}${r.files.length ? `\n  Files: ${r.files.join(', ')}` : ''}`).join('\n')}\n\n`
+    : '';
+  const team = files
+    .filter((f) => f.path.startsWith(`${teamDir(lead)}/`))
+    .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+    .slice(0, 40)
+    .map((f) => `- ${f.path} (written ${ago(f.modifiedAt)})`);
+  return `Reports have come in to the board from other leads. A report says how things stood when it was filed. Work may have moved on since: check what was reported since, your own work and your team's files before acting on anything it asks.
 
 ${blocks.join('\n\n')}
 
-# Your own work this cycle
-${mine.length ? mine.map((p) => `- [${p.status}] ${p.objective}`).join('\n') : 'None.'}
+${sinceBlock}# Your own work this cycle
+${ownWork(org, lead)}
+
+# Your team's files
+${team.length ? team.join('\n') : 'None yet.'}
 
 ${cycleBlock(org)}
 
 ${steerBlock(org)}
 
 # Your task
-Decide whether anything in these reports calls for action in your remit now. Start a follow-up only when a report creates work that is yours and that should not wait for the CEO's next cycle, such as an ask addressed to your function. Give at most ${maxFollowUps} follow-up${maxFollowUps === 1 ? '' : 's'}; none is a normal answer. If the reports change something for your function that the board should know, say so in a sentence or two.`;
+Decide whether anything in these reports calls for action in your remit now. Start a follow-up only when a report creates work that is yours and that should not wait for the CEO's next cycle, such as an ask addressed to your function. Never start one for something that already exists: if an ask is already met by a file in the workspace, say so in your note and name the file. For each follow-up, say what already exists toward it and exactly what is missing, and make the objective only what is missing. Give at most ${maxFollowUps} follow-up${maxFollowUps === 1 ? '' : 's'}; none is a normal answer. Keep a follow-up to what the report asks: when you plan it you will run only the phases it needs. If the reports change something for your function that the board should know, say so in a sentence or two.`;
 }
 
 export function steerReviewPrompt(org: Organisation, steerIds: string[], plans: Plan[]): string {
@@ -689,10 +803,11 @@ export function teamAgentSystem(web: boolean): string {
 - You can run code in the sandbox. Run what can be run, and report what actually happened. Do not claim to have run, tested or measured anything you have not. Mark assumptions as assumptions.
 - ${
     web
-      ? 'You can search the web and fetch pages. Use that for facts you would otherwise have to assume, and cite the source next to anything you take from it.'
+      ? 'You can search the web and fetch pages. Use that for facts you would otherwise have to assume, and cite the source next to anything you take from it. A search or fetch that comes back with an error has hit a limit or a page that could not be read, not a ban on research: try another source or carry on, and say what you could not check.'
       : 'You cannot browse the web. Work from the files you were given and from what you can run.'
   }
 - Be concrete and brief. Never invent facts, figures or sources.
+${WRITING}
 - When you finish, reply with a short report for your lead: what you produced and where, the main findings or decisions, and anything left unresolved.`;
 }
 

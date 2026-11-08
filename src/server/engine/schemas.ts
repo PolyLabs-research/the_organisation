@@ -79,14 +79,28 @@ export function workApproachSchema(ids: string[]) {
   });
 }
 
-export function planDraftSchema(phaseIds: string[]) {
+/** Phases of other leads' plans that one of this plan's phases must not start before. */
+function waitsFor(leadIds: string[]) {
+  return z
+    .array(
+      z.object({
+        lead: idEnum(leadIds).describe('The other lead whose plan this cycle produces what this phase needs'),
+        phase: z.string().describe('The name of the phase of their plan that must be finished first, as their operating profile names it'),
+      }),
+    )
+    .describe('Only when this phase needs something another lead is producing this cycle; usually empty. The system holds the phase until that phase is finished.');
+}
+
+export function planDraftSchema(phaseIds: string[], leadIds: string[] = []) {
   return z.object({
     operations: BusinessUpdates,
     approach: z.string().describe('How you will meet the objective, in a short paragraph'),
     phases: z.array(
       z.object({
         phase: idEnum(phaseIds),
-        intent: z.string().describe('What this phase will produce for this objective'),
+        intent: z.string().describe('What this phase will produce for this objective; if you skip it, why the objective does not need it'),
+        skip: z.boolean().describe('True to leave this phase out because the objective does not need it'),
+        waitsFor: waitsFor(leadIds),
       }),
     ),
     decisions: z.array(RemitDecision).describe('Decisions you are taking inside your own remit'),
@@ -110,6 +124,13 @@ export function planReviewSchema(planIds: string[]) {
 }
 export type PlanReview = z.infer<ReturnType<typeof planReviewSchema>>;
 
+export const AnswerOut = z.object({
+  verdict: z.enum(['accept', 'contest']).describe('accept: take the objections into your plan. contest: let the board decide'),
+  amendments: z.array(z.string()).describe('For "accept": the changes you will make, each an instruction you can act on. Otherwise empty'),
+  argument: z.string().describe('For "accept": why, in a sentence. For "contest": your position for the board, including anything you can accept'),
+});
+export type AnswerOut = z.infer<typeof AnswerOut>;
+
 export const PositionOut = z.object({
   stance: z.enum(['back_plan', 'back_objection', 'compromise']),
   argument: z.string().describe('Your position in a few sentences; for a compromise, say what it is'),
@@ -124,10 +145,10 @@ export const SignOff = z.object({
 });
 export type SignOff = z.infer<typeof SignOff>;
 
-export function planRevisionSchema(phaseIds: string[]) {
+export function planRevisionSchema(phaseIds: string[], leadIds: string[] = []) {
   return z.object({
     approach: z.string(),
-    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string() })),
+    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string(), skip: z.boolean(), waitsFor: waitsFor(leadIds) })),
     changes: z.string().describe('What you changed to comply with the ruling'),
   });
 }
@@ -190,6 +211,9 @@ export function reactionSchema(reportIds: string[]) {
         objective: z.string(),
         successCriteria: z.string(),
         rationale: z.string(),
+        existing: z
+          .string()
+          .describe('What the workspace and the work since already provide toward this, by file path, and exactly what is still missing. If nothing is missing, do not start the follow-up'),
         reportIds: z.array(idEnum(reportIds)).describe('The reports that prompted this'),
       }),
     ),

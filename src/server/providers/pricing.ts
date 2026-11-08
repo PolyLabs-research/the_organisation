@@ -68,6 +68,11 @@ export function isKnownModel(id: string): boolean {
   return BY_ID.has(id);
 }
 
+/** The fetch tool comes in the same two generations as search: a model takes the one that matches its search tool. */
+export function webFetchToolFor(model: string): 'web_fetch_20260209' | 'web_fetch_20250910' {
+  return webSearchToolFor(model) === 'web_search_20260209' ? 'web_fetch_20260209' : 'web_fetch_20250910';
+}
+
 /** The newer search tool filters its own results; models it does not run on take the basic one. */
 export function webSearchToolFor(model: string): ModelPrice['webSearch'] {
   return BY_ID.get(model)?.webSearch ?? 'web_search_20260209';

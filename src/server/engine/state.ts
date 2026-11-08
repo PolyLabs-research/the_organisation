@@ -391,9 +391,11 @@ export function normaliseLoaded(org: Organisation): Organisation {
     plan.workApproachId ??= STANDARD_APPROACH;
     plan.workApproachReason ??= null;
     plan.code ??= null;
+    plan.skipped ??= [];
     for (const phase of plan.phases) {
       phase.gate ??= null;
       phase.evidence ??= null;
+      phase.waitsFor ??= [];
       for (const task of phase.tasks) {
         // Local work that was in flight is lost with the process and goes back in the queue. An agent
         // in a hosted session carries on there, and is caught up with when the session is picked up.

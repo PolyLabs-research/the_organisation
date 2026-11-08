@@ -2,11 +2,12 @@ import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
 import { accessTools } from '../access-tools';
 import { codeTools } from '../access-code-tools';
-import { STANDARD_APPROACH, approachChoices, approachLabel } from '../../shared/approaches';
+import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
 import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
 import { allows } from '../../shared/privileges';
 import { describeRequest, isOpen } from '../../shared/signatory';
+import { namedWaits } from '../../shared/waits';
 import type { BoardReport, Executive, Organisation, Plan, PlanOrigin, PlanPhase, SopPhase } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
 import { Workspace, workspaceTools } from '../workspace';
@@ -72,6 +73,7 @@ function planPhases(phases: SopPhase[]): PlanPhase[] {
     summary: null,
     gate: p.gate ?? null,
     evidence: null,
+    waitsFor: [],
   }));
 }
 
@@ -105,12 +107,13 @@ function newPlan(
     objective: clean(fields.objective, 1200),
     successCriteria: clean(fields.successCriteria, 1200),
     priority: fields.priority,
-    rationale: clean(fields.rationale, 1200),
+    rationale: clean(fields.rationale, 2000),
     approach: null,
     workApproachId: STANDARD_APPROACH,
     workApproachReason: null,
     // The plan starts as the lead's standard operating profile applied to this objective. Drafting it may choose another.
     phases: planPhases(owner.phases),
+    skipped: [],
     status: 'planning',
     amendments: [],
     escalations: [],
@@ -154,12 +157,43 @@ export function cancelPlan(org: Organisation, plan: Plan, reason: string, byId: 
   }
 }
 
-function applyIntents(plan: Plan, phases: Array<{ phase: string; intent: string }>): void {
+/** What the lead says each phase will produce, and what it must wait for in other leads' plans. */
+function applyIntents(org: Organisation, plan: Plan, phases: Array<{ phase: string; intent: string; waitsFor?: Array<{ lead: string; phase: string }> }>): void {
   for (const phase of plan.phases) {
-    const given = phases.find((p) => p.phase === phase.sopPhaseId)?.intent.trim();
+    const entry = phases.find((p) => p.phase === phase.sopPhaseId);
+    const given = entry?.intent.trim();
     if (given) phase.intent = clean(given, 800);
+    if (entry && phase.status === 'pending') phase.waitsFor = namedWaits(org, plan.ownerId, entry.waitsFor);
   }
 }
+
+type PhaseEntry = { phase: string; intent: string; skip?: boolean; waitsFor?: Array<{ lead: string; phase: string }> };
+
+/** Every phase of the way of working a plan follows, whether or not the plan runs it. */
+function approachPhases(owner: Executive, plan: Plan): SopPhase[] {
+  if (plan.workApproachId === STANDARD_APPROACH) return owner.phases;
+  return WORK_APPROACHES.find((a) => a.id === plan.workApproachId)?.phases ?? owner.phases;
+}
+
+/**
+ * Settle which phases a plan runs, before any has started: every phase of its way of working except those the
+ * lead skipped. A phase the system checks for itself is never skipped, and a plan that would skip everything
+ * runs everything. A phase skipped earlier can be brought back.
+ */
+export function shapePhases(org: Organisation, owner: Executive, plan: Plan, entries: PhaseEntry[]): void {
+  if (plan.phases.some((p) => p.status !== 'pending')) return applyIntents(org, plan, entries);
+  const all = approachPhases(owner, plan);
+  const entryFor = (id: string) => entries.find((e) => e.phase === id);
+  let skip = new Set(all.filter((p) => !p.gate && entryFor(p.id)?.skip).map((p) => p.id));
+  if (skip.size >= all.length) skip = new Set();
+  plan.phases = all.filter((p) => !skip.has(p.id)).map((p) => plan.phases.find((x) => x.sopPhaseId === p.id) ?? planPhases([p])[0]!);
+  plan.skipped = all.filter((p) => skip.has(p.id)).map((p) => ({ phase: p.name, reason: clean(entryFor(p.id)?.intent.trim() || 'Not needed for this objective.', 400) }));
+  // What a lead wrote for a phase it asked to skip is why it is skipped, not what the phase will do.
+  applyIntents(org, plan, entries.filter((e) => !e.skip));
+}
+
+/** The other leads a lead's plan could wait on. */
+const otherLeads = (org: Organisation, exec: Executive) => leadsOf(org).filter((l) => l.id !== exec.id).map((l) => l.id);
 
 /**
  * Do one unit of work: build the prompt from the organisation's current
@@ -258,7 +292,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const files = await workspace.list();
       // Repository work is local: a hosted session cannot reach the vault, so nothing could check its gates.
       const choices = approachChoices(org, exec, org.settings.execution === 'local' && ctx.access.canCode(exec.id));
-      const draft = schemas.planDraftSchema([...new Set(choices.flatMap((c) => c.phases.map((p) => p.id)))]);
+      const draft = schemas.planDraftSchema([...new Set(choices.flatMap((c) => c.phases.map((p) => p.id)))], otherLeads(org, exec));
       const schema = choices.length > 1 ? draft.extend(schemas.workApproachSchema(choices.map((c) => c.id)).shape) : draft;
       const data = await ask(system, prompts.planPrompt(org, exec, plan, files, choices), schema as typeof draft, {
         plan: planContext(org, plan),
@@ -275,7 +309,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         plan.workApproachReason = chosen && workApproachReason ? clean(workApproachReason, 600) : null;
         applyBusinessUpdates(org, data.operations, { id: exec.id });
         plan.approach = clean(data.approach);
-        applyIntents(plan, data.phases);
+        shapePhases(org, exec, plan, data.phases);
         plan.escalations = data.escalations
           .filter((e) => e.issue.trim())
           .slice(0, 3)
@@ -288,7 +322,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           'plan',
           exec.id,
           `${exec.short} plan: ${plan.objective.slice(0, 120)}`,
-          `${plan.workApproachId === STANDARD_APPROACH ? '' : `**${approachLabel(plan.workApproachId)}.** ${plan.workApproachReason ?? ''}\n\n`}${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${p.intent}`).join('\n')}`,
+          `${plan.workApproachId === STANDARD_APPROACH ? '' : `**${approachLabel(plan.workApproachId)}.** ${plan.workApproachReason ?? ''}\n\n`}${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${prompts.phaseIntent(org, p)}`).join('\n')}${prompts.skippedLine(plan)}`,
           { planId: plan.id },
         );
       };
@@ -317,6 +351,37 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
             planId: o.planId,
           });
         }
+      };
+    }
+
+    case 'answer': {
+      const decision = need(
+        org.decisions.find((d) => d.id === item.decisionId),
+        `decision ${item.decisionId}`,
+      );
+      const plan = need(decision.planId ? planById(org, decision.planId) : undefined, `plan of ${decision.id}`);
+      const data = await ask(system, prompts.answerPrompt(org, exec, decision, plan), schemas.AnswerOut, {
+        decisionId: decision.id,
+        objectors: decision.issues.map((i) => i.byId),
+      });
+      return () => {
+        if (decision.status !== 'answering' || plan.status !== 'contested') return;
+        const argument = clean(data.argument);
+        const amendments = data.amendments.map((a) => clean(a, 800)).filter(Boolean).slice(0, 6);
+        if (data.verdict === 'accept') {
+          // Each objection's own proposal stands in for any change the owner did not spell out.
+          if (!amendments.length) amendments.push(...decision.issues.map((i) => clean(i.proposal, 800)).filter(Boolean).slice(0, 6));
+          decision.status = 'resolved';
+          decision.outcome = { method: 'owner', byId: exec.id, ruling: `The ${exec.short} accepts the objections.`, rationale: argument, planAction: 'amend', amendments, at: now() };
+          plan.amendments.push(...amendments);
+          plan.status = 'revising';
+          plan.updatedAt = now();
+          postToBoard(org, 'decision', exec.id, `${exec.short} accepts the objections to its plan`, `${argument}\n\n**Binding on the plan**\n${bullets(amendments)}`, { decisionId: decision.id, planId: plan.id });
+          return;
+        }
+        decision.status = 'open';
+        decision.positions[exec.id] = { stance: amendments.length ? 'compromise' : 'back_plan', argument: amendments.length ? `${argument}\n\nCan accept: ${amendments.join('; ')}` : argument };
+        postToBoard(org, 'decision', exec.id, `Board decision opened: ${decision.title}`, `The ${exec.short} contests the objections: ${argument}\n\nThe board will state positions; the ${arbiterOf(org).short} signs off.`, { decisionId: decision.id, planId: plan.id });
       };
     }
 
@@ -386,15 +451,16 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'revise': {
       const plan = need(planById(org, item.planId), `plan ${item.planId}`);
       const decision = org.decisions.find((d) => d.id === plan.decisionId);
-      const data = await ask(system, prompts.revisePrompt(org, plan, decision), schemas.planRevisionSchema(plan.phases.map((p) => p.sopPhaseId)), {
+      const all = approachPhases(exec, plan);
+      const data = await ask(system, prompts.revisePrompt(org, plan, decision, all), schemas.planRevisionSchema(all.map((p) => p.id), otherLeads(org, exec)), {
         plan: planContext(org, plan),
-        phases: plan.phases.map((p) => ({ id: p.sopPhaseId, name: p.name })),
+        phases: all.map((p) => ({ id: p.id, name: p.name, skipped: !plan.phases.some((x) => x.sopPhaseId === p.id) })),
         amendments: plan.amendments,
       });
       return () => {
         if (plan.status !== 'revising') return;
         plan.approach = clean(data.approach);
-        applyIntents(plan, data.phases);
+        shapePhases(org, exec, plan, data.phases);
         plan.status = 'approved';
         plan.updatedAt = now();
         postToBoard(org, 'plan', exec.id, `${exec.short} plan revised to comply`, clean(data.changes), { planId: plan.id });
@@ -470,7 +536,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         model: org.settings.workerModel,
         effort: org.settings.workerEffort,
         tools,
-        webSearch: canSearch ? { perRequest: 3, perTask: MAX_TASK_SEARCHES } : null,
+        // The whole allowance is open in any one request, so a search is only ever refused for the limit once the task has used it up.
+        webSearch: canSearch ? { perRequest: MAX_TASK_SEARCHES, perTask: MAX_TASK_SEARCHES } : null,
         maxTurns: MAX_TASK_TURNS,
         signal: ctx.signal,
         shouldStop: ctx.halting,
@@ -589,7 +656,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       };
       if (!reports.length) return drop;
       const depthOf = (reportId: string) => planById(org, org.reports.find((r) => r.id === reportId)?.planId ?? '')?.depth ?? 0;
-      const data = await ask(system, prompts.reactPrompt(org, exec, reports, MAX_FOLLOW_UPS), schemas.reactionSchema(reports.map((r) => r.id)), {
+      const files = await workspace.list();
+      const data = await ask(system, prompts.reactPrompt(org, exec, reports, MAX_FOLLOW_UPS, files), schemas.reactionSchema(reports.map((r) => r.id)), {
         reports: reports.map((r) => ({ id: r.id, from: execById(org, r.fromId)?.short ?? r.fromId, headline: r.headline, asks: r.asks })),
         maxFollowUps: MAX_FOLLOW_UPS,
       });
@@ -603,7 +671,10 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           const from = sources.length ? sources : item.reportIds;
           const depth = Math.max(...from.map(depthOf)) + 1;
           if (depth > org.settings.maxFollowUpDepth || followUpsLeft(org, exec.id) === 0) continue;
-          const plan = newPlan(org, exec, { ...f, priority: 'medium' }, { type: 'follow_up', reportIds: from }, depth);
+          // What already exists goes with the plan, so that drafting it starts from there rather than from scratch.
+          const existing = (f.existing ?? '').trim();
+          const rationale = existing ? `${f.rationale.trim()}\n\nAlready in place, and what is missing: ${existing}` : f.rationale;
+          const plan = newPlan(org, exec, { ...f, rationale, priority: 'medium' }, { type: 'follow_up', reportIds: from }, depth);
           postToBoard(org, 'reaction', exec.id, `${exec.short} follows up`, `${plan.objective}\n\n**Because:** ${plan.rationale}`, { planId: plan.id });
         }
       };
@@ -727,6 +798,8 @@ export function describeWork(org: Organisation, item: WorkItem): string {
       return 'Drafting a plan';
     case 'review':
       return 'Reviewing other leads’ plans';
+    case 'answer':
+      return 'Answering objections to the plan';
     case 'position':
       return 'Stating a position to the board';
     case 'signoff':

@@ -330,17 +330,23 @@ describe('agent runs', () => {
     expect(second.system).toEqual(first.system);
   });
 
-  it('offers web search only when the organisation allows it', async () => {
+  it('offers web search and page reading only when the organisation allows it', async () => {
     replies.push({ content: [{ type: 'text', text: 'Done.' }] });
     await provider().agent(agentRequest({ webSearch: { perRequest: 3, perTask: 8 } }));
-    expect(seen[0]!.body.tools.at(-1)).toEqual({ type: 'web_search_20260209', name: 'web_search', max_uses: 3 });
+    expect(seen[0]!.body.tools.slice(-2)).toEqual([
+      { type: 'web_search_20260209', name: 'web_search', max_uses: 3 },
+      { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 4, max_content_tokens: 20_000 },
+    ]);
     // Haiku does not run the self-filtering search tool, so it is given the basic one.
     replies.push({ content: [{ type: 'text', text: 'Done.' }] });
     await provider().agent(agentRequest({ webSearch: { perRequest: 2, perTask: 8 }, model: 'claude-haiku-5-5' }));
-    expect(seen[1]!.body.tools.at(-1)).toEqual({ type: 'web_search_20250305', name: 'web_search', max_uses: 2 });
+    expect(seen[1]!.body.tools.slice(-2)).toEqual([
+      { type: 'web_search_20250305', name: 'web_search', max_uses: 2 },
+      { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 4, max_content_tokens: 20_000 },
+    ]);
     replies.push({ content: [{ type: 'text', text: 'Done.' }] });
     await provider().agent(agentRequest());
-    expect(seen[2]!.body.tools.some((t: { name: string }) => t.name === 'web_search')).toBe(false);
+    expect(seen[2]!.body.tools.some((t: { name: string }) => t.name === 'web_search' || t.name === 'web_fetch')).toBe(false);
   });
 
   it('hands a tool error back to the model instead of failing the run', async () => {
