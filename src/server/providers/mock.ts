@@ -29,6 +29,8 @@ export interface MockOptions {
   requests?: 'second_phase' | 'never';
   /** What an AI in the signatory's seat decides. */
   signatory?: 'authorise' | 'decline';
+  /** Phases that wait on another lead's phase, by the lead that owns them: { cmo: { phase: 'research', lead: 'cto', on: 'Spec' } }. */
+  waits?: Record<string, { phase: string; lead: string; on: string }>;
   /** Called before each call is answered; throw from it to simulate a failure. */
   onCall?: (kind: string, context: Record<string, unknown>) => void | Promise<void>;
 }
@@ -542,7 +544,10 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
           workApproach: 'standard',
           workApproachReason: 'The standard operating profile fits this objective.',
           approach: `Work through ${sopText} in order with ${seat!.agentCount} agent${seat!.agentCount === 1 ? '' : 's'}. ${firstPhase?.name ?? 'The first phase'} settles scope before agent time is spent on later phases.`,
-          phases: phaseList.map((p) => ({ phase: p.id, intent: `${noStop(p.deliverable)}, for: ${brief(plan!.objective, 90)}` })),
+          phases: phaseList.map((p) => {
+            const wait = this.options.waits?.[seat!.id];
+            return { phase: p.id, intent: `${noStop(p.deliverable)}, for: ${brief(plan!.objective, 90)}`, waitsFor: wait && wait.phase === p.id ? [{ lead: wait.lead, phase: wait.on }] : [] };
+          }),
           decisions: [
             {
               title: `Scope of the ${seat!.function.toLowerCase()} work this cycle`,
@@ -598,7 +603,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
       case 'revise':
         return {
           approach: `Work through ${sopText} in order, starting with the parts that depend on nobody else. Dependent work begins only once the other function’s first deliverable is in the workspace.`,
-          phases: (c.phases as Array<{ id: string; name: string }>).map((p) => ({ phase: p.id, intent: `${p.name}, for: ${brief(plan!.objective, 90)}` })),
+          phases: (c.phases as Array<{ id: string; name: string }>).map((p) => ({ phase: p.id, intent: `${p.name}, for: ${brief(plan!.objective, 90)}`, waitsFor: [] })),
           changes: 'Re-sequenced the plan so nothing in it waits on another function’s unfinished work, as the ruling requires.',
         };
 

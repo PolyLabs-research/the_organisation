@@ -169,6 +169,10 @@ The library lives in [`src/shared/profiles.ts`](src/shared/profiles.ts); add or 
 
 **Agents.** Each lead is allocated a number of agents (1 to 8, adjustable while the organisation runs). For each phase the lead hands out tasks; its agents work them in parallel, never more at once than the lead has agents, and report back to the lead. Agents put their work products in a shared workspace as files, which every seat and agent can read.
 
+**Ordering between plans.** Work here takes minutes, not days, so plans are not scheduled by calendar dates. Instead, when a lead drafts a plan it can say that one of its phases needs a phase of another lead's plan first (the CMO's Position phase waits for the CTO's Spec, say). The phase does not start until that phase has passed, and the lead is handed what it produced. If the plan waited on is cancelled or fails, the wait lets go. Plans that end up waiting on each other in a ring are freed automatically, with a note on the board. Board rulings that put one piece of work before another become waits in the same way. Dates are kept for what the outside world fixes, such as a filing deadline or a date the shareholders set.
+
+**Changing files.** Agents change an existing file with `edit_file`, replacing one exact passage at a time, instead of writing the whole file again. They are asked to keep each work product as short as its purpose allows, and not to write logs, trackers or notes about their own process beside it.
+
 Agents can work in one of two ways, chosen per organisation: **on this machine**, where they read and write files and run nothing, or **in hosted sessions**, where each plan gets a sandbox in which the lead and its agents can run and test what they build. See [Hosted sessions](#hosted-sessions-claude-managed-agents).
 
 **Reports as triggers.** When a plan has run every phase, the lead reports to the whole board. Each other lead reads the report once their own plan is off their desk and may start follow-up work in their own remit. How many rounds of follow-up one cycle allows is a setting, and no lead starts more than two follow-ups in a cycle; anything further waits for the CEO.

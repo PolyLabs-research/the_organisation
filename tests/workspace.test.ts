@@ -54,6 +54,30 @@ describe('the workspace', () => {
   it('refuses files over the size limit', async () => {
     await expect(workspace.write('big.txt', 'x'.repeat(1_000_001))).rejects.toThrow('limit');
   });
+
+  it('edits one exact passage of a file and leaves the rest as it was', async () => {
+    await workspace.write('legal/terms.md', '# Terms\n\nClause one.\n\nClause two.\n');
+    expect(await workspace.edit('legal/terms.md', 'Clause two.', 'Clause 2, revised.')).toEqual({ path: 'legal/terms.md', bytes: 41 });
+    expect((await workspace.read('legal/terms.md')).content).toBe('# Terms\n\nClause one.\n\nClause 2, revised.\n');
+  });
+
+  it('refuses an edit that names no passage, or more than one', async () => {
+    await workspace.write('a.md', 'same\nsame\n');
+    await expect(workspace.edit('a.md', 'other', 'x')).rejects.toThrow('not in a.md');
+    await expect(workspace.edit('a.md', 'same', 'x')).rejects.toThrow('more than once');
+    await expect(workspace.edit('a.md', '', 'x')).rejects.toThrow('empty');
+    await expect(workspace.edit('missing.md', 'same', 'x')).rejects.toThrow('no such file');
+    expect((await workspace.read('a.md')).content).toBe('same\nsame\n');
+  });
+
+  it('edits the end of a file too long to read in one go, without losing any of it', async () => {
+    const long = 'x'.repeat(130_000) + 'THE END';
+    await workspace.write('long.md', long);
+    expect((await workspace.read('long.md')).truncated).toBe(true);
+    await workspace.edit('long.md', 'THE END', 'FIN');
+    const whole = await workspace.readWhole('long.md', 1_000_000);
+    expect(whole).toBe('x'.repeat(130_000) + 'FIN');
+  });
 });
 
 describe('the agent tools', () => {
@@ -69,6 +93,8 @@ describe('the agent tools', () => {
     expect(await tool('list_files').run({ directory: '' })).toBe('product/prd.md (5 bytes)');
     await expect(tool('write_file').run({ path: '../x', content: 'x' })).rejects.toThrow('escapes');
     await expect(tool('read_file').run({ path: 'missing.md' })).rejects.toThrow('no such file');
+    expect(await tool('edit_file').run({ path: 'product/prd.md', find: 'hello', replace: 'hello, world' })).toBe('Edited product/prd.md (now 12 bytes).');
+    expect(await tool('read_file').run({ path: 'product/prd.md' })).toBe('hello, world');
   });
 
   it('have descriptions and schemas the model can use', () => {

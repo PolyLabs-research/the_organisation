@@ -1,5 +1,6 @@
 import { waitsOnAi } from '../../shared/signatory';
 import type { Decision, Organisation, Plan, ReviewRound } from '../../shared/types';
+import { breakWaitRing, describeWait, heldBy, pinWaits } from '../../shared/waits';
 import { signatoryOf } from './signatory';
 import { ceoOf, arbiterOf, currentPhase, execById, followUpsLeft, isPlanActive, leadsOf, nextId, planById, postToBoard } from './state';
 
@@ -148,12 +149,29 @@ export function settle(org: Organisation): boolean {
         // How a plan is carried out is settled when it starts and does not change under it.
         // A plan with gates to check stays here: a hosted session cannot reach the repository to be checked.
         plan.execution ??= plan.phases.some((phase) => phase.gate) ? 'local' : org.settings.execution;
+        // What the plan waits on in other leads' plans is fixed now, so later plans of theirs cannot hold it up.
+        pinWaits(org, plan);
         stepped = true;
       } else if (plan.status === 'executing' && plan.execution !== 'managed' && plan.phases.every((phase) => phase.status === 'done')) {
         // A plan in a hosted session reports from inside the session; this is for plans run here.
         plan.status = 'reporting';
         stepped = true;
       }
+    }
+
+    const ring = breakWaitRing(org);
+    if (ring) {
+      const owner = execById(org, ring.ownerId)?.short ?? ring.ownerId;
+      const released = ring.phases.flatMap((p) => p.waitsFor).filter((w) => w.released?.startsWith('Plans were waiting'));
+      postToBoard(
+        org,
+        'system',
+        'system',
+        `${owner} plan no longer waits`,
+        `The ${owner} plan and the plans it was waiting on were each waiting on the other, so none could start. The ${owner} plan carries on without waiting for ${released.map((w) => describeWait(org, w)).join(', ')}.`,
+        { planId: ring.id },
+      );
+      stepped = true;
     }
 
     if (!stepped) break;
@@ -212,6 +230,8 @@ export function nextWork(org: Organisation): WorkItem[] {
     if (plan.status === 'planning') items.push({ kind: 'plan', key: `plan:${plan.id}`, ...base });
     else if (plan.status === 'revising') items.push({ kind: 'revise', key: `revise:${plan.id}`, ...base });
     else if (plan.status === 'reporting') items.push({ kind: 'report', key: `report:${plan.id}`, ...base });
+    // A plan waiting on another lead's work starts nothing new until that work is finished.
+    else if (plan.status === 'executing' && heldBy(org, plan).length) continue;
     else if (plan.status === 'executing' && plan.execution === 'managed') {
       items.push({ kind: 'execute', key: `execute:${plan.id}`, ...base });
     } else if (plan.status === 'executing') {

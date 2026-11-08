@@ -1,6 +1,7 @@
 import { CircleCheck, CircleDashed, CirclePause, CircleX, ExternalLink, FileText, LoaderCircle } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { STANDARD_APPROACH, approachLabel } from '../shared/approaches';
+import { describeWait, waitMet } from '../shared/waits';
 import type {
   GateEvidence,
   ActivityEntry,
@@ -351,9 +352,20 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
   );
 }
 
-function PhaseBlock({ orgId, phase, index, held, onOpenFile }: { orgId: string; phase: PlanPhase; index: number; held: boolean; onOpenFile: (path: string) => void }) {
+function PhaseBlock({ orgId, phase, index, held, waitsFor, onOpenFile }: { orgId: string; phase: PlanPhase; index: number; held: boolean; waitsFor: string[]; onOpenFile: (path: string) => void }) {
   const waiting = phase.status === 'working' && phase.evidence?.state === 'waiting';
-  const state = phase.status === 'done' ? 'Passed' : waiting ? 'Waiting for checks' : phase.status === 'working' ? (phase.reworkRounds ? 'Rework under way' : 'Under way') : 'Not started';
+  const state =
+    phase.status === 'done'
+      ? 'Passed'
+      : waiting
+        ? 'Waiting for checks'
+        : phase.status === 'working'
+          ? phase.reworkRounds
+            ? 'Rework under way'
+            : 'Under way'
+          : waitsFor.length
+            ? `Waits for ${waitsFor.join('; ')}`
+            : 'Not started';
   return (
     <li className={`phase phase-${phase.status}`}>
       <header>
@@ -464,7 +476,15 @@ function PlanCard({ org, plan, open, simulated, onOpenFile }: { org: Organisatio
         <SessionBlock orgId={org.id} plan={plan} simulated={simulated} onOpenFile={onOpenFile} />
         <ol className="phases">
           {plan.phases.map((phase, i) => (
-            <PhaseBlock key={phase.sopPhaseId} orgId={org.id} phase={phase} index={i} held={held} onOpenFile={onOpenFile} />
+            <PhaseBlock
+              key={phase.sopPhaseId}
+              orgId={org.id}
+              phase={phase}
+              index={i}
+              held={held}
+              waitsFor={phase.status === 'pending' ? (phase.waitsFor ?? []).filter((w) => !waitMet(org, w)).map((w) => describeWait(org, w)) : []}
+              onOpenFile={onOpenFile}
+            />
           ))}
         </ol>
         {report ? (

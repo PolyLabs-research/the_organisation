@@ -79,7 +79,19 @@ export function workApproachSchema(ids: string[]) {
   });
 }
 
-export function planDraftSchema(phaseIds: string[]) {
+/** Phases of other leads' plans that one of this plan's phases must not start before. */
+function waitsFor(leadIds: string[]) {
+  return z
+    .array(
+      z.object({
+        lead: idEnum(leadIds).describe('The other lead whose plan this cycle produces what this phase needs'),
+        phase: z.string().describe('The name of the phase of their plan that must be finished first, as their operating profile names it'),
+      }),
+    )
+    .describe('Only when this phase needs something another lead is producing this cycle; usually empty. The system holds the phase until that phase is finished.');
+}
+
+export function planDraftSchema(phaseIds: string[], leadIds: string[] = []) {
   return z.object({
     operations: BusinessUpdates,
     approach: z.string().describe('How you will meet the objective, in a short paragraph'),
@@ -87,6 +99,7 @@ export function planDraftSchema(phaseIds: string[]) {
       z.object({
         phase: idEnum(phaseIds),
         intent: z.string().describe('What this phase will produce for this objective'),
+        waitsFor: waitsFor(leadIds),
       }),
     ),
     decisions: z.array(RemitDecision).describe('Decisions you are taking inside your own remit'),
@@ -124,10 +137,10 @@ export const SignOff = z.object({
 });
 export type SignOff = z.infer<typeof SignOff>;
 
-export function planRevisionSchema(phaseIds: string[]) {
+export function planRevisionSchema(phaseIds: string[], leadIds: string[] = []) {
   return z.object({
     approach: z.string(),
-    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string() })),
+    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string(), waitsFor: waitsFor(leadIds) })),
     changes: z.string().describe('What you changed to comply with the ruling'),
   });
 }

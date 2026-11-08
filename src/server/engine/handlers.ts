@@ -7,6 +7,7 @@ import { jobReady } from '../../shared/business';
 import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
 import { allows } from '../../shared/privileges';
 import { describeRequest, isOpen } from '../../shared/signatory';
+import { namedWaits } from '../../shared/waits';
 import type { BoardReport, Executive, Organisation, Plan, PlanOrigin, PlanPhase, SopPhase } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
 import { Workspace, workspaceTools } from '../workspace';
@@ -72,6 +73,7 @@ function planPhases(phases: SopPhase[]): PlanPhase[] {
     summary: null,
     gate: p.gate ?? null,
     evidence: null,
+    waitsFor: [],
   }));
 }
 
@@ -154,12 +156,18 @@ export function cancelPlan(org: Organisation, plan: Plan, reason: string, byId: 
   }
 }
 
-function applyIntents(plan: Plan, phases: Array<{ phase: string; intent: string }>): void {
+/** What the lead says each phase will produce, and what it must wait for in other leads' plans. */
+function applyIntents(org: Organisation, plan: Plan, phases: Array<{ phase: string; intent: string; waitsFor?: Array<{ lead: string; phase: string }> }>): void {
   for (const phase of plan.phases) {
-    const given = phases.find((p) => p.phase === phase.sopPhaseId)?.intent.trim();
+    const entry = phases.find((p) => p.phase === phase.sopPhaseId);
+    const given = entry?.intent.trim();
     if (given) phase.intent = clean(given, 800);
+    if (entry && phase.status === 'pending') phase.waitsFor = namedWaits(org, plan.ownerId, entry.waitsFor);
   }
 }
+
+/** The other leads a lead's plan could wait on. */
+const otherLeads = (org: Organisation, exec: Executive) => leadsOf(org).filter((l) => l.id !== exec.id).map((l) => l.id);
 
 /**
  * Do one unit of work: build the prompt from the organisation's current
@@ -258,7 +266,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const files = await workspace.list();
       // Repository work is local: a hosted session cannot reach the vault, so nothing could check its gates.
       const choices = approachChoices(org, exec, org.settings.execution === 'local' && ctx.access.canCode(exec.id));
-      const draft = schemas.planDraftSchema([...new Set(choices.flatMap((c) => c.phases.map((p) => p.id)))]);
+      const draft = schemas.planDraftSchema([...new Set(choices.flatMap((c) => c.phases.map((p) => p.id)))], otherLeads(org, exec));
       const schema = choices.length > 1 ? draft.extend(schemas.workApproachSchema(choices.map((c) => c.id)).shape) : draft;
       const data = await ask(system, prompts.planPrompt(org, exec, plan, files, choices), schema as typeof draft, {
         plan: planContext(org, plan),
@@ -275,7 +283,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         plan.workApproachReason = chosen && workApproachReason ? clean(workApproachReason, 600) : null;
         applyBusinessUpdates(org, data.operations, { id: exec.id });
         plan.approach = clean(data.approach);
-        applyIntents(plan, data.phases);
+        applyIntents(org, plan, data.phases);
         plan.escalations = data.escalations
           .filter((e) => e.issue.trim())
           .slice(0, 3)
@@ -288,7 +296,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           'plan',
           exec.id,
           `${exec.short} plan: ${plan.objective.slice(0, 120)}`,
-          `${plan.workApproachId === STANDARD_APPROACH ? '' : `**${approachLabel(plan.workApproachId)}.** ${plan.workApproachReason ?? ''}\n\n`}${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${p.intent}`).join('\n')}`,
+          `${plan.workApproachId === STANDARD_APPROACH ? '' : `**${approachLabel(plan.workApproachId)}.** ${plan.workApproachReason ?? ''}\n\n`}${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${prompts.phaseIntent(org, p)}`).join('\n')}`,
           { planId: plan.id },
         );
       };
@@ -386,7 +394,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'revise': {
       const plan = need(planById(org, item.planId), `plan ${item.planId}`);
       const decision = org.decisions.find((d) => d.id === plan.decisionId);
-      const data = await ask(system, prompts.revisePrompt(org, plan, decision), schemas.planRevisionSchema(plan.phases.map((p) => p.sopPhaseId)), {
+      const data = await ask(system, prompts.revisePrompt(org, plan, decision), schemas.planRevisionSchema(plan.phases.map((p) => p.sopPhaseId), otherLeads(org, exec)), {
         plan: planContext(org, plan),
         phases: plan.phases.map((p) => ({ id: p.sopPhaseId, name: p.name })),
         amendments: plan.amendments,
@@ -394,7 +402,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       return () => {
         if (plan.status !== 'revising') return;
         plan.approach = clean(data.approach);
-        applyIntents(plan, data.phases);
+        applyIntents(org, plan, data.phases);
         plan.status = 'approved';
         plan.updatedAt = now();
         postToBoard(org, 'plan', exec.id, `${exec.short} plan revised to comply`, clean(data.changes), { planId: plan.id });

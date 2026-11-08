@@ -23,7 +23,7 @@ function plan(org: Organisation, ownerId: string, fields: Partial<Plan> = {}): P
     approach: 'An approach',
     workApproachId: 'standard',
     workApproachReason: null,
-    phases: owner.phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null, gate: null, evidence: null })),
+    phases: owner.phases.map((ph) => ({ sopPhaseId: ph.id, name: ph.name, purpose: ph.purpose, deliverable: ph.deliverable, intent: ph.purpose, notes: '', status: 'pending', tasks: [], reworkRounds: 0, summary: null, gate: null, evidence: null, waitsFor: [] })),
     status: 'planning',
     amendments: [],
     escalations: [],
