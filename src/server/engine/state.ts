@@ -391,6 +391,7 @@ export function normaliseLoaded(org: Organisation): Organisation {
     plan.workApproachId ??= STANDARD_APPROACH;
     plan.workApproachReason ??= null;
     plan.code ??= null;
+    plan.skipped ??= [];
     for (const phase of plan.phases) {
       phase.gate ??= null;
       phase.evidence ??= null;

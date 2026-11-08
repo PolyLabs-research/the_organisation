@@ -487,6 +487,11 @@ function PlanCard({ org, plan, open, simulated, onOpenFile }: { org: Organisatio
             />
           ))}
         </ol>
+        {plan.skipped?.length ? (
+          <p className="muted">
+            <strong>Skipped:</strong> {plan.skipped.map((s) => `${s.phase} (${s.reason})`).join('; ')}
+          </p>
+        ) : null}
         {report ? (
           <div className="report">
             <span className="field-label">Report to the board</span>

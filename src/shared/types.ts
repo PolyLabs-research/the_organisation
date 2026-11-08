@@ -272,6 +272,11 @@ export interface PhaseWait {
   released: string | null;
 }
 
+export interface SkippedPhase {
+  phase: string;
+  reason: string;
+}
+
 export type PlanStatus =
   | 'planning' // lead is drafting
   | 'drafted' // waiting for the board to look at it
@@ -368,6 +373,8 @@ export interface Plan {
   workApproachId: string;
   workApproachReason: string | null;
   phases: PlanPhase[];
+  /** Phases of the work approach the lead left out because the objective does not need them, with why. */
+  skipped: SkippedPhase[];
   status: PlanStatus;
   /** Binding instructions added by board rulings or the CEO enforcing steer. */
   amendments: string[];

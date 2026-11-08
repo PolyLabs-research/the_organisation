@@ -208,13 +208,19 @@ export function phaseIntent(org: Organisation, phase: PlanPhase): string {
   return `${phase.intent}${waits.length ? ` (waits for ${waits.map((w) => describeWait(org, w)).join('; ')})` : ''}`;
 }
 
+/** The phases a plan leaves out, for the board: empty when it runs them all. */
+export function skippedLine(plan: Plan): string {
+  if (!plan.skipped?.length) return '';
+  return `\nSkips: ${plan.skipped.map((s) => `${s.phase} (${s.reason})`).join('; ')}`;
+}
+
 function phaseLine(org: Organisation, phase: PlanPhase): string {
   return `${phase.name}: ${phaseIntent(org, phase)}`;
 }
 
 function planForBoard(org: Organisation, plan: Plan): string {
   const phases = plan.phases.map((p) => `  - ${phaseLine(org, p)}`).join('\n');
-  return `## Plan ${plan.id}, owned by ${who(org, plan.ownerId)}\nObjective: ${plan.objective}\nSuccess criteria: ${plan.successCriteria}\nApproach: ${plan.approach ?? '(not yet drafted)'}\nPhases:\n${phases}`;
+  return `## Plan ${plan.id}, owned by ${who(org, plan.ownerId)}\nObjective: ${plan.objective}\nSuccess criteria: ${plan.successCriteria}\nApproach: ${plan.approach ?? '(not yet drafted)'}\nPhases:\n${phases}${skippedLine(plan)}`;
 }
 
 function filesBlock(files: WorkspaceFile[]): string {
@@ -368,7 +374,7 @@ ${signatoryBlock(org)}
 ${filesBlock(files)}
 
 ${approachBlock(choices)}# Your task
-Draft your plan. Give your approach, then say what each phase of ${choices.length > 1 ? 'the work approach you chose' : 'your operating profile'} will produce for this objective, one entry per phase and in order. If a phase needs something another lead is producing this cycle, say which lead and which of their phases in its waitsFor: the system will not start your phase until theirs is finished, and will hand you what it produced. Wait only for what you truly need, since every wait slows the organisation; never give dates for the organisation's own work. Record the decisions you are taking inside your remit. If something cuts across another lead's remit, or competes with what another lead is doing, raise it as an escalation for the board; most plans have none.`;
+Draft your plan. Give your approach, then give one entry per phase of ${choices.length > 1 ? 'the work approach you chose' : 'your operating profile'}, in order, saying what it will produce for this objective. Run only the phases the objective needs. If it asks for part of what your profile covers (research only, say, or one answer to another lead), set skip on the phases it does not need and say in their intent why; a follow-up usually needs one or two phases. Phases the system checks for itself cannot be skipped. If a phase needs something another lead is producing this cycle, say which lead and which of their phases in its waitsFor: the system will not start your phase until theirs is finished, and will hand you what it produced. Wait only for what you truly need, since every wait slows the organisation; never give dates for the organisation's own work. Record the decisions you are taking inside your remit. If something cuts across another lead's remit, or competes with what another lead is doing, raise it as an escalation for the board; most plans have none.`;
 }
 
 export function reviewPrompt(org: Organisation, lead: Executive, round: ReviewRound): string {
@@ -431,9 +437,15 @@ ${steerBlock(org)}
 Sign this decision off. If the board is agreed, ratify what it agreed unless that conflicts with the mission or the shareholder steer. If it is not, rule. Choose one: the plan proceeds as drafted, the plan proceeds with amendments (list them; each must be an instruction the plan owner can act on), or the plan is cancelled.`;
 }
 
-export function revisePrompt(org: Organisation, plan: Plan, decision: Decision | undefined): string {
+export function revisePrompt(org: Organisation, plan: Plan, decision: Decision | undefined, all: Array<{ id: string; name: string }> = plan.phases.map((p) => ({ id: p.sopPhaseId, name: p.name }))): string {
   const ruling = decision?.outcome ? `The ruling: ${decision.outcome.ruling}\nReasons: ${decision.outcome.rationale}` : '';
-  const phases = plan.phases.map((p) => `- ${phaseLine(org, p)}`).join('\n');
+  const phases = all
+    .map((a) => {
+      const phase = plan.phases.find((p) => p.sopPhaseId === a.id);
+      const skipped = plan.skipped?.find((s) => s.phase === a.name);
+      return phase ? `- ${phaseLine(org, phase)}` : `- ${a.name}: skipped${skipped ? ` (${skipped.reason})` : ''}`;
+    })
+    .join('\n');
   const others = org.plans
     .filter((p) => p.cycle === org.cycle.number && p.id !== plan.id && p.ownerId !== plan.ownerId && p.status !== 'cancelled')
     .map((p) => `- ${who(org, p.ownerId)} [${p.ownerId}]: ${p.phases.map((ph) => ph.name).join(' → ')}`);
@@ -447,7 +459,7 @@ ${phases}
 ${ruling}
 
 ${others.length ? `# Other leads' plans this cycle\n${others.join('\n')}\n\n` : ''}# Your task
-Revise the approach and the phase intents so the plan complies with every binding instruction. Keep what the ruling does not touch. Where the ruling says one piece of work must come before another, express it as a wait on that lead's phase (waitsFor), not as a date. Give each phase's full list of waits, including any it already had. Say briefly what you changed.`;
+Revise the approach and the phase intents so the plan complies with every binding instruction. Keep what the ruling does not touch. Where the ruling says one piece of work must come before another, express it as a wait on that lead's phase (waitsFor), not as a date. Give each phase's full list of waits, including any it already had. Give an entry for every phase, skipped ones too: set skip on each phase the plan still does not need, and clear it to bring a skipped phase back if the ruling needs it. Say briefly what you changed.`;
 }
 
 export function kickoffPrompt(org: Organisation, lead: Executive, plan: Plan, index: number, files: WorkspaceFile[]): string {
@@ -618,7 +630,7 @@ ${cycleBlock(org)}
 ${steerBlock(org)}
 
 # Your task
-Decide whether anything in these reports calls for action in your remit now. Start a follow-up only when a report creates work that is yours and that should not wait for the CEO's next cycle, such as an ask addressed to your function. Give at most ${maxFollowUps} follow-up${maxFollowUps === 1 ? '' : 's'}; none is a normal answer. If the reports change something for your function that the board should know, say so in a sentence or two.`;
+Decide whether anything in these reports calls for action in your remit now. Start a follow-up only when a report creates work that is yours and that should not wait for the CEO's next cycle, such as an ask addressed to your function. Give at most ${maxFollowUps} follow-up${maxFollowUps === 1 ? '' : 's'}; none is a normal answer. Keep a follow-up to what the report asks: when you plan it you will run only the phases it needs. If the reports change something for your function that the board should know, say so in a sentence or two.`;
 }
 
 export function steerReviewPrompt(org: Organisation, steerIds: string[], plans: Plan[]): string {

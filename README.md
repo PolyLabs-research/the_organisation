@@ -145,7 +145,7 @@ flowchart TD
 
 **Seats.** Every organisation has a CEO and an [Authorised Signatory](#signing-and-paying). You seat up to eight executive leads beside them, either from a recommendation (describe the idea and a team is proposed, with reasons) or by hand from the profile library. A seat that is not in the library can be added with its own title, remit and phases.
 
-**Standard operating profiles.** Each profile type always works the same way. Every plan a lead owns runs its phases in order, and a phase must pass the lead's gate review before the next begins.
+**Standard operating profiles.** Each profile type always works the same way. Every plan a lead owns runs its phases in order, and a phase must pass the lead's gate review before the next begins. A plan runs only the phases its objective needs: a lead asked for research alone skips the rest, and a follow-up answering another lead often needs one or two. Skipped phases and the reasons are shown to the board, which can ask for them back. Phases the system checks for itself, such as repository checks, are never skipped.
 
 | Seat | Leads | Operating profile |
 | --- | --- | --- |

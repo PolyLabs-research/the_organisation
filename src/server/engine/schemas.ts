@@ -98,7 +98,8 @@ export function planDraftSchema(phaseIds: string[], leadIds: string[] = []) {
     phases: z.array(
       z.object({
         phase: idEnum(phaseIds),
-        intent: z.string().describe('What this phase will produce for this objective'),
+        intent: z.string().describe('What this phase will produce for this objective; if you skip it, why the objective does not need it'),
+        skip: z.boolean().describe('True to leave this phase out because the objective does not need it'),
         waitsFor: waitsFor(leadIds),
       }),
     ),
@@ -140,7 +141,7 @@ export type SignOff = z.infer<typeof SignOff>;
 export function planRevisionSchema(phaseIds: string[], leadIds: string[] = []) {
   return z.object({
     approach: z.string(),
-    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string(), waitsFor: waitsFor(leadIds) })),
+    phases: z.array(z.object({ phase: idEnum(phaseIds), intent: z.string(), skip: z.boolean(), waitsFor: waitsFor(leadIds) })),
     changes: z.string().describe('What you changed to comply with the ruling'),
   });
 }

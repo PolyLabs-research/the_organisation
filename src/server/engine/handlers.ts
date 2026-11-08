@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
 import { accessTools } from '../access-tools';
 import { codeTools } from '../access-code-tools';
-import { STANDARD_APPROACH, approachChoices, approachLabel } from '../../shared/approaches';
+import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
 import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
 import { allows } from '../../shared/privileges';
@@ -113,6 +113,7 @@ function newPlan(
     workApproachReason: null,
     // The plan starts as the lead's standard operating profile applied to this objective. Drafting it may choose another.
     phases: planPhases(owner.phases),
+    skipped: [],
     status: 'planning',
     amendments: [],
     escalations: [],
@@ -164,6 +165,31 @@ function applyIntents(org: Organisation, plan: Plan, phases: Array<{ phase: stri
     if (given) phase.intent = clean(given, 800);
     if (entry && phase.status === 'pending') phase.waitsFor = namedWaits(org, plan.ownerId, entry.waitsFor);
   }
+}
+
+type PhaseEntry = { phase: string; intent: string; skip?: boolean; waitsFor?: Array<{ lead: string; phase: string }> };
+
+/** Every phase of the way of working a plan follows, whether or not the plan runs it. */
+function approachPhases(owner: Executive, plan: Plan): SopPhase[] {
+  if (plan.workApproachId === STANDARD_APPROACH) return owner.phases;
+  return WORK_APPROACHES.find((a) => a.id === plan.workApproachId)?.phases ?? owner.phases;
+}
+
+/**
+ * Settle which phases a plan runs, before any has started: every phase of its way of working except those the
+ * lead skipped. A phase the system checks for itself is never skipped, and a plan that would skip everything
+ * runs everything. A phase skipped earlier can be brought back.
+ */
+export function shapePhases(org: Organisation, owner: Executive, plan: Plan, entries: PhaseEntry[]): void {
+  if (plan.phases.some((p) => p.status !== 'pending')) return applyIntents(org, plan, entries);
+  const all = approachPhases(owner, plan);
+  const entryFor = (id: string) => entries.find((e) => e.phase === id);
+  let skip = new Set(all.filter((p) => !p.gate && entryFor(p.id)?.skip).map((p) => p.id));
+  if (skip.size >= all.length) skip = new Set();
+  plan.phases = all.filter((p) => !skip.has(p.id)).map((p) => plan.phases.find((x) => x.sopPhaseId === p.id) ?? planPhases([p])[0]!);
+  plan.skipped = all.filter((p) => skip.has(p.id)).map((p) => ({ phase: p.name, reason: clean(entryFor(p.id)?.intent.trim() || 'Not needed for this objective.', 400) }));
+  // What a lead wrote for a phase it asked to skip is why it is skipped, not what the phase will do.
+  applyIntents(org, plan, entries.filter((e) => !e.skip));
 }
 
 /** The other leads a lead's plan could wait on. */
@@ -283,7 +309,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         plan.workApproachReason = chosen && workApproachReason ? clean(workApproachReason, 600) : null;
         applyBusinessUpdates(org, data.operations, { id: exec.id });
         plan.approach = clean(data.approach);
-        applyIntents(org, plan, data.phases);
+        shapePhases(org, exec, plan, data.phases);
         plan.escalations = data.escalations
           .filter((e) => e.issue.trim())
           .slice(0, 3)
@@ -296,7 +322,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           'plan',
           exec.id,
           `${exec.short} plan: ${plan.objective.slice(0, 120)}`,
-          `${plan.workApproachId === STANDARD_APPROACH ? '' : `**${approachLabel(plan.workApproachId)}.** ${plan.workApproachReason ?? ''}\n\n`}${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${prompts.phaseIntent(org, p)}`).join('\n')}`,
+          `${plan.workApproachId === STANDARD_APPROACH ? '' : `**${approachLabel(plan.workApproachId)}.** ${plan.workApproachReason ?? ''}\n\n`}${plan.approach}\n\n${plan.phases.map((p) => `- **${p.name}:** ${prompts.phaseIntent(org, p)}`).join('\n')}${prompts.skippedLine(plan)}`,
           { planId: plan.id },
         );
       };
@@ -394,15 +420,16 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'revise': {
       const plan = need(planById(org, item.planId), `plan ${item.planId}`);
       const decision = org.decisions.find((d) => d.id === plan.decisionId);
-      const data = await ask(system, prompts.revisePrompt(org, plan, decision), schemas.planRevisionSchema(plan.phases.map((p) => p.sopPhaseId), otherLeads(org, exec)), {
+      const all = approachPhases(exec, plan);
+      const data = await ask(system, prompts.revisePrompt(org, plan, decision, all), schemas.planRevisionSchema(all.map((p) => p.id), otherLeads(org, exec)), {
         plan: planContext(org, plan),
-        phases: plan.phases.map((p) => ({ id: p.sopPhaseId, name: p.name })),
+        phases: all.map((p) => ({ id: p.id, name: p.name, skipped: !plan.phases.some((x) => x.sopPhaseId === p.id) })),
         amendments: plan.amendments,
       });
       return () => {
         if (plan.status !== 'revising') return;
         plan.approach = clean(data.approach);
-        applyIntents(org, plan, data.phases);
+        shapePhases(org, exec, plan, data.phases);
         plan.status = 'approved';
         plan.updatedAt = now();
         postToBoard(org, 'plan', exec.id, `${exec.short} plan revised to comply`, clean(data.changes), { planId: plan.id });
