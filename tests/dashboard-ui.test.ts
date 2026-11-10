@@ -99,4 +99,25 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
       await page.close();
     }
   });
+
+  it('leaves the Help dialog as it is while the organisation changes behind it', async () => {
+    const runner = await organisation('Reading the guide');
+    const page = await open('/#/org/' + runner.org.id);
+    try {
+      await page.getByRole('button', { name: 'Help and setup guides', exact: true }).click();
+      const guide = page.locator('dialog.guide .guide-body');
+      await guide.locator('h2').first().waitFor();
+      // A heading and a link are marked, so that the same ones can be told from new ones built in their place.
+      await guide.evaluate((body) => {
+        body.querySelector('h2')!.setAttribute('data-marked', '');
+        body.querySelector('a')!.setAttribute('data-marked', '');
+      });
+      // Every change to the organisation is pushed to the page, which then draws itself again.
+      runner.updateSettings({ pace: 'slow' });
+      await page.locator('.pace-options [aria-checked=true]').filter({ hasText: 'Slow' }).waitFor();
+      expect(await guide.locator('[data-marked]').count()).toBe(2);
+    } finally {
+      await page.close();
+    }
+  });
 });
