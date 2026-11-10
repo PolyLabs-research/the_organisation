@@ -195,6 +195,18 @@ describe('pricing', () => {
     expect(usage.costUsd).toBeCloseTo(4 + 20 + 0.2 + 5 + 1, 6);
   });
 
+  it('prices a read from the prompt cache at each model’s own published rate', () => {
+    // Dollars for a million tokens read from the cache. It is not one share of the input price for every model.
+    const read = (model: string, tokens = 1e6) => (costOfRequest(model, { inputTokens: 0, outputTokens: 0, cacheReadTokens: tokens, cacheWriteTokens: 0 }) * 1e6) / tokens;
+    expect(read('claude-opus-5-5')).toBeCloseTo(0.2, 10);
+    expect(read('claude-fable-5-1')).toBeCloseTo(0.25, 10);
+    expect(read('claude-sonnet-5-5')).toBeCloseTo(0.1, 10);
+    // Haiku in a prompt short enough for its lower rates.
+    expect(read('claude-haiku-5-5', 50_000)).toBeCloseTo(0.01, 10);
+    // The model before it in the same line charges twice as much, which is what a request that falls back to it pays.
+    expect(read('claude-sonnet-5')).toBeCloseTo(0.2, 10);
+  });
+
   it('charges Haiku its higher rate for a prompt over 100,000 tokens', () => {
     const tokens = { inputTokens: 400_000, outputTokens: 10_000, cacheReadTokens: 0, cacheWriteTokens: 0 };
     expect(costOfRequest('claude-haiku-5-5', tokens)).toBeCloseTo((400_000 * 0.5 + 10_000 * 2.5) / 1e6, 10);

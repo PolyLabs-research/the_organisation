@@ -20,14 +20,17 @@ export interface ModelPrice extends Rates {
   longPrompt?: Rates & { above: number };
 }
 
-// Anthropic first-party API list prices, as published 2026-10. Spend figures
-// derived from them are estimates: check the Console for what was billed.
+// Anthropic first-party API list prices, as its pricing page gave them on
+// 2026-11-10. Spend figures derived from them are estimates: check the Console
+// for what was billed. A read from the prompt cache is not a fixed share of the
+// input price: it is a tenth for most models, a twentieth for Opus 5.5 and
+// Sonnet 5.5, and a fortieth for Fable 5.1, so each is written out.
 
 /** The models an organisation can be set to run on. The first is the one a new organisation starts on. */
 export const MODELS: ModelPrice[] = [
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', tier: 'flagship', input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, webSearch: 'web_search_20260209' },
   { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', tier: 'flagship', input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, webSearch: 'web_search_20260209' },
-  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', tier: 'balanced', input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, webSearch: 'web_search_20260209' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', tier: 'balanced', input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, webSearch: 'web_search_20260209' },
   {
     id: 'claude-haiku-5-5',
     label: 'Claude Haiku 5.5',
