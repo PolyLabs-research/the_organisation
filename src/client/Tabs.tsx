@@ -332,6 +332,15 @@ function Outward({ url, children }: { url: string; children: ReactNode }) {
   return /^https:\/\//.test(url) ? <a href={url} target="_blank" rel="noreferrer">{children}</a> : <>{children}</>;
 }
 
+/** The site an address is on, or nothing if it is not an address. */
+function siteOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+}
+
 /** What the system found at a gate, which is not what anyone reported. */
 function GateResult({ evidence }: { evidence: GateEvidence }) {
   return (
@@ -340,12 +349,20 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
       <p>{evidence.summary}</p>
       {evidence.checks.length ? (
         <ul className="gate-checks">
-          {evidence.checks.map((check) => (
-            <li key={check.name + check.url}>
-              <Outward url={check.url}>{check.name}</Outward>
-              <span className="muted">{check.state}</span>
-            </li>
-          ))}
+          {evidence.checks.map((check) => {
+            // Whoever posts a check names it and says where its details are, and a name can read like a control
+            // of this page. So the name is text, and what can be clicked is the site it leads to.
+            const site = siteOf(check.url);
+            return (
+              <li key={check.name + check.url}>
+                <span>
+                  {check.name}
+                  {site ? <> (<Outward url={check.url}>{site}</Outward>)</> : null}
+                </span>
+                <span className="muted">{check.state}</span>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>
