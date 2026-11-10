@@ -686,6 +686,31 @@ describe('limits and controls', () => {
     expect(h.runner.activity.filter((a) => a.kind === 'direct' && !a.ok)).toHaveLength(2);
   });
 
+  it('gives up on a call that keeps failing in a way that may pass, after three tries', async () => {
+    let tries = 0;
+    h = await harness({
+      mock: {
+        onCall: (kind) => {
+          if (kind !== 'direct') return;
+          tries += 1;
+          throw new ProviderError('The provider is overloaded', 'unavailable', true);
+        },
+      },
+    });
+    h.runner.start();
+    // Until it pauses, or has plainly gone past where it should have: a fourth try is the failure, not a wait that runs out.
+    await waitFor(() => h!.org.status !== 'running' || tries > 3, 'the organisation to give up, or to try a fourth time');
+    expect(tries).toBe(3);
+    await h.runner.idle();
+    expect(h.org.pauseReason).toBe('error');
+    expect(h.org.lastError).toContain('overloaded');
+    // Nothing was lost: direction is still to be set, and starting again gives the call three more tries.
+    expect(h.org.cycle.stage).toBe('direct');
+    h.runner.start();
+    await waitFor(() => h!.org.status !== 'running' || tries > 6, 'the organisation to give up a second time');
+    expect(tries).toBe(6);
+  });
+
   it('pauses with the error when a call fails for good', async () => {
     h = await harness({
       mock: {
