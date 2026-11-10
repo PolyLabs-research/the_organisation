@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ClaudeProvider } from '../src/server/providers/claude';
 import { ProviderError, type AgentTool, type CallUsage } from '../src/server/providers/types';
+import { waitFor } from './helpers';
 
 // These tests run the Claude provider against a local stand-in for the
 // Messages API that speaks the same streaming protocol. They check what the
@@ -25,6 +26,8 @@ interface Reply {
   usage?: Record<string, unknown>;
   /** Drop the connection part-way through the reply. */
   cut?: boolean;
+  /** Start the reply and then say nothing more, with the connection left open. */
+  hold?: boolean;
 }
 interface Seen {
   path: string;
@@ -89,10 +92,10 @@ beforeAll(async () => {
         return;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      if (reply.cut) {
-        // The reply starts, then the connection goes away.
+      if (reply.cut || reply.hold) {
+        // The reply starts, then the connection goes away, or goes quiet.
         res.write(sse(reply).split('\n\n').slice(0, 2).join('\n\n') + '\n\n');
-        setTimeout(() => res.destroy(), 5);
+        if (reply.cut) setTimeout(() => res.destroy(), 5);
         return;
       }
       res.end(sse(reply));
@@ -217,6 +220,28 @@ describe('structured calls', () => {
     const err = await failure(provider().structured(structuredRequest()));
     expect(err.code).toBe('unavailable');
     expect(err.retryable).toBe(true);
+  });
+
+  it('counts what a reply had said it read by the time the connection was lost', async () => {
+    replies.push({ content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }], cut: true });
+    const usage: CallUsage[] = [];
+    await failure(provider().structured(structuredRequest((u) => usage.push(u))));
+    // The reply never finished, but it had started, and what it had read by then was paid for.
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ model: 'claude-opus-5-5', inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 50 });
+    expect(usage[0]!.costUsd).toBeCloseTo((100 * 4 + 900 * 0.2 + 50 * 5) / 1e6, 10);
+  });
+
+  it('counts nothing for a call that was stopped on purpose', async () => {
+    replies.push({ content: [{ type: 'text', text: 'never finished' }], hold: true });
+    const stop = new AbortController();
+    const usage: CallUsage[] = [];
+    const call = failure(provider().structured({ ...structuredRequest((u) => usage.push(u)), signal: stop.signal }));
+    await waitFor(() => seen.length === 1, 'the request to arrive');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stop.abort();
+    expect((await call).code).toBe('aborted');
+    expect(usage).toHaveLength(0);
   });
 
   it('treats work that outgrew the context window as a failure of the work, not of the provider', async () => {
@@ -427,6 +452,33 @@ describe('agent runs', () => {
     expect(written).toHaveLength(1);
     expect(seen).toHaveLength(3);
     expect(seen[2]!.body.messages).toEqual(seen[1]!.body.messages);
+  });
+
+  it('counts a reply that was lost part-way once, and the one sent for in its place once', async () => {
+    const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
+    replies.push(call, { content: [{ type: 'text', text: 'half a rep' }], cut: true }, { content: [{ type: 'text', text: 'Done after a retry.' }] });
+    const usage: CallUsage[] = [];
+    await provider().agent(agentRequest({ onUsage: (u) => usage.push(u) }));
+    // Three replies were paid for: the tool call, the reply that was lost, and the one that took its place.
+    expect(usage).toHaveLength(3);
+    expect(usage.map((u) => u.inputTokens)).toEqual([100, 100, 100]);
+    // The lost reply never said how long it was; the other two did.
+    expect(usage.map((u) => u.outputTokens)).toEqual([40, 0, 40]);
+  });
+
+  it('counts a reply whose tool call could not be read, before asking for the turn again', async () => {
+    replies.push(
+      // A line break written raw inside a string: the reply arrives whole, and its tool input is not JSON.
+      { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {}, rawInput: '{"path": "a.md", "content": "one line\nand another"}' }], stop_reason: 'tool_use' },
+      { content: [{ type: 'text', text: 'Done.' }] },
+    );
+    const usage: CallUsage[] = [];
+    const result = await provider().agent(agentRequest({ onUsage: (u) => usage.push(u) }));
+    expect(result).toEqual({ text: 'Done.', turns: 1, stopped: 'done' });
+    expect(written).toEqual([]);
+    expect(seen).toHaveLength(2);
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).toMatchObject({ inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 50 });
   });
 
   it('sends the same turn again when the API is overloaded', async () => {

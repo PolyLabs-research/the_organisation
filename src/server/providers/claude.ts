@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
+import type { BetaMessageStream } from '@anthropic-ai/sdk/lib/BetaMessageStream';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
 import { hasCause, translate } from './errors';
@@ -169,8 +170,8 @@ export class ClaudeProvider implements Provider {
   }
 
   private requestStructured<T>(req: StructuredRequest<T>, plain: boolean): Promise<Anthropic.Beta.BetaMessage> {
-    return this.client.beta.messages
-      .stream(
+    return replyOf(
+      this.client.beta.messages.stream(
         {
           model: req.model,
           max_tokens: STRUCTURED_MAX_TOKENS,
@@ -181,8 +182,9 @@ export class ClaudeProvider implements Provider {
           messages: [{ role: 'user', content: req.prompt }],
         },
         { signal: req.signal },
-      )
-      .finalMessage();
+      ),
+      req,
+    );
   }
 
   /**
@@ -228,8 +230,8 @@ export class ClaudeProvider implements Provider {
 
       let message: Anthropic.Beta.BetaMessage;
       try {
-        message = await this.client.beta.messages
-          .stream(
+        message = await replyOf(
+          this.client.beta.messages.stream(
             {
               model: req.model,
               max_tokens: AGENT_MAX_TOKENS,
@@ -243,8 +245,9 @@ export class ClaudeProvider implements Provider {
               messages,
             },
             { signal: req.signal },
-          )
-          .finalMessage();
+          ),
+          req,
+        );
         badJson = 0;
         retries = 0;
       } catch (err) {
@@ -331,6 +334,24 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     }
     signal?.addEventListener('abort', done, { once: true });
   });
+
+/**
+ * The finished reply of a stream. A reply that fails once it has started to arrive has been paid for as far as
+ * it got, so what the stream had said of its size by then is counted before the failure is passed on. A call
+ * that was stopped on purpose is not counted.
+ */
+async function replyOf(stream: BetaMessageStream, req: Pick<AgentRequest, 'model' | 'signal' | 'onUsage'>): Promise<Anthropic.Beta.BetaMessage> {
+  let started: Anthropic.Beta.BetaMessage | undefined;
+  stream.on('streamEvent', (_event, snapshot) => {
+    started = snapshot;
+  });
+  try {
+    return await stream.finalMessage();
+  } catch (err) {
+    if (started && !req.signal?.aborted) req.onUsage?.(usageOf(started, req.model));
+    throw err;
+  }
+}
 
 /**
  * What of an assistant turn may be sent back, and which tool calls in it are
