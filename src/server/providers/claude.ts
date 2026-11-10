@@ -6,7 +6,7 @@ import type { ProviderInfo } from '../../shared/types';
 import { hasCause, translate } from './errors';
 import { strictSchema, type JsonSchema } from './schema';
 import { ManagedResources } from './managed/resources';
-import { DEFAULT_TIMINGS, PlanSession, archiveSession, threadDetail, type SessionTimings } from './managed/session';
+import { DEFAULT_TIMINGS, PlanSession, archiveSession, holdSession, threadDetail, type SessionTimings } from './managed/session';
 import { scrub } from './openai-compatible';
 import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webFetchToolFor, webSearchToolFor } from './pricing';
 import {
@@ -115,6 +115,14 @@ export class ClaudeProvider implements Provider {
   async archiveSession(sessionId: string): Promise<'archived' | 'busy' | 'gone'> {
     try {
       return await archiveSession(this.client, sessionId, Math.min(300, this.sessionTimings.graceMs));
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  async holdSession(sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null> {
+    try {
+      return await holdSession(this.client, sessionId);
     } catch (err) {
       throw this.translate(err);
     }

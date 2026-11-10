@@ -1234,6 +1234,39 @@ export async function archiveSession(client: Anthropic, sessionId: string, waitM
   }
 }
 
+/**
+ * Hold a session that nobody is following: bring its spend cap down to what it has spent, so that nothing in it
+ * can go on spending. A session is normally held by whoever follows it (see `hold` above). This is for one that
+ * was left with room under its cap when the server stopped without warning, or that belongs to an organisation
+ * which is being removed. Returns the cap now set and what the session has spent, in dollars, or null if there is
+ * nothing to hold: the session no longer exists, has ended, or has been archived.
+ */
+export async function holdSession(client: Anthropic, sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null> {
+  const { sessions } = client.beta;
+  for (const margin of [0.01, 0.05, 0.25]) {
+    let session: Session;
+    try {
+      session = await sessions.retrieve(sessionId, {}, QUICK);
+    } catch (err) {
+      if (err instanceof Anthropic.NotFoundError) return null;
+      throw err;
+    }
+    if (session.status === 'terminated' || session.archived_at) return null;
+    const spentUsd = usd(session.usage.list_cost);
+    const cap = round2(spentUsd + margin);
+    const current = session.budget ? usd(session.budget.max_list_cost) : Infinity;
+    if (cap >= current) return { budgetUsd: current, spentUsd };
+    try {
+      await sessions.update(sessionId, { budget: limit(cap) }, QUICK);
+      return { budgetUsd: cap, spentUsd };
+    } catch (err) {
+      // The platform only accepts a cap above what was consumed: it has spent more since it was looked at. Look again.
+      if (!(err instanceof Anthropic.BadRequestError)) throw err;
+    }
+  }
+  throw new ProviderError("The session's spend cap could not be brought down: it keeps spending past the new cap.", 'unavailable', true);
+}
+
 /** What one agent in a session was asked and what it returned, read from its own thread. */
 export async function threadDetail(client: Anthropic, sessionId: string, threadId: string): Promise<{ brief: string | null; report: string | null }> {
   let brief: string | null = null;

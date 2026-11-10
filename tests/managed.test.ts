@@ -1086,6 +1086,46 @@ describe('holding a session', () => {
     expect(api.requests.some((x) => x.method === 'DELETE' || x.path.endsWith('/archive'))).toBe(false);
   });
 
+  it('holds a session that nobody is following, by its id', async () => {
+    // A session that was let go of with most of its cap unspent, as when the server stops without warning.
+    api.script = wholePlan;
+    await provider.executePlan(job(recorder().hooks));
+    const session = api.session();
+    expect([session.capCents, session.spentCents]).toEqual([200, 40]);
+
+    expect(await provider.holdSession(session.id)).toEqual({ budgetUsd: 0.41, spentUsd: 0.4 });
+    expect(session.capCents).toBe(41);
+    // Asked again, it is found held already and left as it is.
+    expect(await provider.holdSession(session.id)).toEqual({ budgetUsd: 0.41, spentUsd: 0.4 });
+    expect(api.count('POST', `/v1/sessions/${session.id}`)).toBe(1);
+    expect(sent(session, 'user.interrupt')).toHaveLength(0);
+
+    // It spent more while the first try was on its way: the next try allows a little more room.
+    session.capCents = 200;
+    api.failOnce((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}`, 400, "budget.max_list_cost must be greater than the session's consumed list cost");
+    expect(await provider.holdSession(session.id)).toEqual({ budgetUsd: 0.45, spentUsd: 0.4 });
+    expect(session.capCents).toBe(45);
+
+    // One that cannot be capped is said to be so, and is not passed off as held.
+    session.capCents = 200;
+    api.failAlways((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}`, 400, 'budget cannot be changed');
+    await expect(provider.holdSession(session.id)).rejects.toMatchObject({ code: 'unavailable', retryable: true });
+    expect(session.capCents).toBe(200);
+  });
+
+  it('finds nothing to hold in a session that has ended, was archived, or does not exist', async () => {
+    api.script = wholePlan;
+    await provider.executePlan(job(recorder().hooks));
+    const session = api.session();
+    expect(await provider.holdSession('sesn_missing')).toBeNull();
+    session.archived = true;
+    expect(await provider.holdSession(session.id)).toBeNull();
+    session.archived = false;
+    session.terminate();
+    expect(await provider.holdSession(session.id)).toBeNull();
+    expect(api.count('POST', `/v1/sessions/${session.id}`)).toBe(0);
+  });
+
   it('holds the session at once when work in flight is dropped', async () => {
     const stop = new AbortController();
     api.script = async (s) => {

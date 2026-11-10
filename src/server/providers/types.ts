@@ -281,4 +281,11 @@ export interface Provider {
    * archived: done (or it already was). busy: it is still working and was left alone. gone: it no longer exists.
    */
   archiveSession?(sessionId: string): Promise<'archived' | 'busy' | 'gone'>;
+  /**
+   * Hold a hosted session that is not being followed: bring its spend cap down to what it has spent, so that
+   * it cannot go on spending. Carrying a plan out holds its session by itself whenever it lets go of it; this is
+   * for a session that was let go of without that (the server stopped without warning). Returns the cap now
+   * set and what the session has spent, in dollars, or null if the session no longer exists or has ended.
+   */
+  holdSession?(sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null>;
 }

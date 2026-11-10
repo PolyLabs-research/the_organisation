@@ -251,7 +251,14 @@ describe('hosted sessions with more than one Anthropic key', () => {
         const session = /^\/v1\/sessions\/([^/]+)(\/archive)?$/.exec(url);
         if (!session || !this.sessions.includes(session[1]!)) return void json(404, { type: 'error', error: { type: 'not_found_error', message: 'Not found' } });
         if (session[2]) this.archived.add(session[1]!);
-        json(200, { id: session[1], type: 'session', status: 'idle', archived_at: this.archived.has(session[1]!) ? '2026-11-05T12:00:00Z' : null });
+        json(200, {
+          id: session[1],
+          type: 'session',
+          status: 'idle',
+          archived_at: this.archived.has(session[1]!) ? '2026-11-05T12:00:00Z' : null,
+          usage: { list_cost: { amount: '40', currency: 'USD' } },
+          budget: { type: 'limit', max_list_cost: { amount: '200', currency: 'USD' } },
+        });
       });
       await new Promise<void>((resolve) => this.server.listen(0, '127.0.0.1', resolve));
       this.address = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
@@ -303,6 +310,15 @@ describe('hosted sessions with more than one Anthropic key', () => {
     expect([...first.archived]).toEqual([]);
     // A session no connected key knows is gone, as far as anyone here can tell.
     expect(await router.archiveSession('sesn_nobodys')).toBe('gone');
+  });
+
+  it('holds a session on the account it is on, and nowhere else', async () => {
+    const { router } = await twoKeys();
+    expect(await router.holdSession('sesn_second')).toEqual({ budgetUsd: 0.41, spentUsd: 0.4 });
+    expect(second.asked).toContain('POST /v1/sessions/sesn_second');
+    expect(first.asked.filter((a) => a.startsWith('POST'))).toEqual([]);
+    // A session no connected key knows is not there to hold.
+    expect(await router.holdSession('sesn_nobodys')).toBeNull();
   });
 
   it('gives plain Claude names to the key called "anthropic" and to no other', async () => {
@@ -456,6 +472,7 @@ describe('looking after keys', () => {
     expect(router.searches('claude-opus-5-5')).toBe(false);
     // A real hosted session is not marked archived, or carried on, by a simulator that has never heard of it.
     await expect(router.archiveSession('sesn_real')).rejects.toThrow(/No Anthropic key is connected/);
+    await expect(router.holdSession('sesn_real')).rejects.toThrow(/No Anthropic key is connected/);
     await expect(router.executePlan({ executiveModel: 'claude-opus-5-5', workerModel: 'claude-opus-5-5', session: { id: 'sesn_real' } } as never)).rejects.toThrow(/no Anthropic key is connected to pick it up/);
     expect(api.seen).toHaveLength(0);
 

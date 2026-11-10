@@ -582,6 +582,18 @@ describe('a hosted session and money', () => {
     expect(h.org.usage.costUsd).toBeLessThan(3);
   });
 
+  it('can be held by its id when nobody is following it', async () => {
+    h = await harness({ settings: HOSTED, executives: ONE_LEAD, mock: { runs: 'never' } });
+    await runToRest(h.runner);
+    const provider = h.provider as MockProvider;
+    const { sessionId, spentUsd } = planOf(h.org).managed!;
+    const held = await provider.holdSession(sessionId!);
+    expect(held).toEqual({ budgetUsd: Math.round((spentUsd + 0.02) * 100) / 100, spentUsd });
+    expect(provider.held).toEqual([sessionId]);
+    // A session it has never heard of is not there to hold.
+    expect(await provider.holdSession('sim_nobodys')).toBeNull();
+  });
+
   it('shares what is left between the plans that will want a session', () => {
     const plan = (id: string, managed: Partial<NonNullable<Plan['managed']>> | null, status: Plan['status'] = 'executing') =>
       ({ id, status, execution: 'managed', managed }) as unknown as Plan;

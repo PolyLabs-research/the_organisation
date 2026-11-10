@@ -464,6 +464,13 @@ export class ProviderRouter implements Provider {
     return (await this.onAnthropic((provider) => provider.archiveSession(sessionId), (result) => result === 'gone')) ?? 'gone';
   }
 
+  async holdSession(sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null> {
+    if (this.simulated) return this.mock.holdSession(sessionId);
+    // With no Anthropic key there is nobody to ask. That is not the same as there being nothing to hold.
+    if (!this.anthropicKeys().length) throw new ProviderError('No Anthropic key is connected to hold this session with. Add one under Models and keys.', 'auth', false);
+    return (await this.onAnthropic((provider) => provider.holdSession(sessionId), (result) => result === null)) ?? null;
+  }
+
   // ---- adding and looking after keys ----
 
   /** Add a key. The provider is asked what the key can call, which is also how a wrong key is found out. */
