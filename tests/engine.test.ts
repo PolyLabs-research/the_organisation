@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CEO_QUESTION } from '../src/server/engine/state';
 import { MockProvider } from '../src/server/providers/mock';
 import { ProviderError, type AgentRequest, type AgentResult, type StructuredRequest } from '../src/server/providers/types';
@@ -208,6 +208,39 @@ describe('the loop', () => {
     expect(archived.record.number).toBe(1);
     expect(h.org.board.every((m) => m.cycle > 2)).toBe(true);
     expect(h.org.history.map((c) => c.number)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('keeps a cycle in live state while it cannot be archived, and archives it once it can', async () => {
+    h = await harness({ settings: { maxCycles: 3 } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failing = vi.spyOn(h.store, 'archiveCycleNow').mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+    try {
+      // The first cycle is due to leave when the third closes, and the archive cannot be written.
+      await runToRest(h.runner);
+      expect(h.org.cycle.number).toBe(4);
+      expect(failing).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.flat().join(' ')).toMatch(/Could not archive cycle 1 of .*: ENOSPC/);
+      // Nothing of it has been dropped: its plans, its reports, its board feed are all still here.
+      expect(plansOf(h.org, 1)).toHaveLength(3);
+      expect(h.org.reports.filter((r) => r.cycle === 1)).toHaveLength(3);
+      expect(h.org.board.some((m) => m.cycle === 1 && m.type === 'direction')).toBe(true);
+      expect(existsSync(path.join(h.store.orgDir(h.org.id), 'archive', 'cycle-1.json'))).toBe(false);
+    } finally {
+      failing.mockRestore();
+      warn.mockRestore();
+    }
+    // With storage back, the next close of a cycle archives what was left behind along with what is now due.
+    h.runner.updateSettings({ maxCycles: 4 });
+    await runToRest(h.runner);
+    expect(plansOf(h.org, 1)).toHaveLength(0);
+    expect(plansOf(h.org, 2)).toHaveLength(0);
+    for (const cycle of [1, 2]) {
+      const archived = JSON.parse(await readFile(path.join(h.store.orgDir(h.org.id), 'archive', `cycle-${cycle}.json`), 'utf8'));
+      expect(archived.plans).toHaveLength(3);
+      expect(archived.reports).toHaveLength(3);
+    }
   });
 });
 

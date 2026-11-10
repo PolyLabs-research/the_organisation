@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { promises as fs, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BusinessAudit } from '../shared/business';
 import type { ActivityEntry, Organisation } from '../shared/types';
@@ -128,6 +128,19 @@ export class Store {
       }
     }
     return limit !== undefined && entries.length > limit ? entries.slice(-limit) : entries;
+  }
+
+  /**
+   * Write a cycle to the archive before returning, and throw if it could not be written. The caller removes the
+   * cycle from live state on the strength of this, in the same breath, so it must know for certain that it is there.
+   */
+  archiveCycleNow(id: string, cycle: number, data: unknown): void {
+    const dir = path.join(this.orgDir(id), 'archive');
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `cycle-${cycle}.json`);
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    renameSync(tmp, file);
   }
 
   async archiveCycle(id: string, cycle: number, data: unknown): Promise<void> {

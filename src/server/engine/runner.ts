@@ -850,6 +850,9 @@ export class OrgRunner {
       return old(m.cycle) ? m.cycle : null;
     };
     const leaving = new Set([...org.plans, ...org.board].filter((x) => old(x.cycle)).map((x) => x.cycle));
+    // A cycle leaves live state only once it is in the archive. One that cannot be written there (a full disk, say)
+    // stays where it is and is tried again when the next cycle closes: the record is worth more than the room.
+    const staying = new Set<number>();
     for (const cycle of leaving) {
       const data = {
         cycle,
@@ -864,15 +867,21 @@ export class OrgRunner {
           messages: desk.messages.filter((m) => leavesWith(m) === cycle),
         },
       };
-      this.store.archiveCycle(org.id, cycle, data).catch((err) => console.warn(`Could not archive cycle ${cycle} of ${org.id}: ${err.message}`));
+      try {
+        this.store.archiveCycleNow(org.id, cycle, data);
+      } catch (err) {
+        staying.add(cycle);
+        console.warn(`Could not archive cycle ${cycle} of ${org.id}: ${(err as Error).message}. It stays in the organisation's state for now.`);
+      }
     }
-    org.plans = org.plans.filter((p) => !old(p.cycle));
-    org.decisions = org.decisions.filter((d) => !old(d.cycle));
-    org.reports = org.reports.filter((r) => !old(r.cycle));
-    org.reviewRounds = org.reviewRounds.filter((r) => !old(r.cycle));
-    org.board = org.board.filter((m) => !old(m.cycle));
-    desk.messages = desk.messages.filter((m) => leavesWith(m) === null);
-    desk.requests = desk.requests.filter((r) => !settledIn.has(r.id));
+    const goes = (cycle: number | null | undefined) => cycle !== null && cycle !== undefined && old(cycle) && !staying.has(cycle);
+    org.plans = org.plans.filter((p) => !goes(p.cycle));
+    org.decisions = org.decisions.filter((d) => !goes(d.cycle));
+    org.reports = org.reports.filter((r) => !goes(r.cycle));
+    org.reviewRounds = org.reviewRounds.filter((r) => !goes(r.cycle));
+    org.board = org.board.filter((m) => !goes(m.cycle));
+    desk.messages = desk.messages.filter((m) => !goes(leavesWith(m)));
+    desk.requests = desk.requests.filter((r) => !goes(settledIn.get(r.id)));
     org.inbox = {};
 
     org.cycle = { number: next, stage: 'consult', consults: {}, intent: null, priorities: [], startedAt: endedAt };
