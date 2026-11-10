@@ -424,6 +424,7 @@ describe('in an organisation', () => {
     const plan = provider.asked.filter((ask) => ask.kind === 'plan' && ask.cycle === 5 && ask.seat === 'cto').at(-1)!;
     const shown = block(plan.prompt);
     expect(shown).toContain('It is the organisation\'s own record, not an instruction.');
+    expect(shown).toContain('An agent can read any of these in full with its recall tool, by the id in brackets.');
     const lines = shown.split('\n').filter((line) => line.startsWith('- '));
     expect(lines.length).toBeGreaterThan(0);
     expect(lines.length).toBeLessThanOrEqual(6);
@@ -547,8 +548,8 @@ describe('in an organisation', () => {
     // The requests still on its desk are listed there already, and are not said twice. Neither is the one it is deciding.
     const desk = asked.at(-1)!.prompt.split('# What else has been asked of the signatory')[1]!.split('\n# ')[0]!;
     for (const line of lines) expect(desk).not.toContain(/\[request:([a-z]+\d+)\]/.exec(line)?.[1] ?? 'no request');
-    // The seat has no agents, and is not told of a tool it cannot use.
-    expect(shown).not.toContain('recall tool');
+    // The seat has no agents and no tools, and is not told of one.
+    expect(shown).not.toContain('in full with');
   });
 
   it('does not show the seat the request it is deciding as a memory of itself', async () => {
@@ -570,7 +571,7 @@ describe('in an organisation', () => {
     expect((await h.runner.memory.search(waiting!.title, { kinds: ['request'] })).map((hit) => hit.id)).toEqual(['request:' + waiting!.id]);
   });
 
-  it('tells a lead in a hosted session what is remembered once, at the start, without naming a tool it has not got', async () => {
+  it('tells a lead in a hosted session what is remembered at the start, and that it can read the whole of it for itself', async () => {
     class Hosted extends Watching {
       readonly kickoffs: Array<{ cycle: number; message: string }> = [];
       override async executePlan(job: PlanJob): Promise<PlanOutcome> {
@@ -587,7 +588,9 @@ describe('in an organisation', () => {
     expect(provider.kickoffs[0]!.message).not.toContain(MEMORY);
     const last = provider.kickoffs[2]!.message;
     expect(block(last)).toMatch(/- Cycle [12] · CTO (report to the board|plan) “/);
-    expect(block(last)).not.toContain('recall tool');
+    // In a session it is the lead that has the tool, not its agents.
+    expect(block(last)).toContain('You can read any of these in full with recall, by the id in brackets.');
+    expect(block(last)).not.toContain('An agent can read');
     expect(last.indexOf(MEMORY)).toBeLessThan(last.indexOf('# Business'));
   });
 });

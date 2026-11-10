@@ -104,7 +104,7 @@ export class ProviderError extends Error {
 // ---- running a whole plan in a hosted session ----
 
 /** The two things a lead in a session tells the organisation, by name. The lead's instructions refer to them by these names. */
-export const PLAN_TOOLS = { recordPhase: 'record_phase', reportToBoard: 'report_to_board' } as const;
+export const PLAN_TOOLS = { recordPhase: 'record_phase', reportToBoard: 'report_to_board', recall: 'recall' } as const;
 
 /** What a lead recorded when a phase of its operating profile passed its gate. */
 export interface PhaseRecord {
@@ -175,6 +175,8 @@ export interface PlanHooks {
   session(info: { id: string; consoleUrl: string | null; budgetUsd: number }): void;
   phase(record: PhaseRecord): HookReply;
   report(draft: BoardReportDraft): HookReply;
+  /** Someone in the session looked something up in the organisation's memory. It changes nothing, and is answered at any time. */
+  recall(input: Record<string, unknown>): Promise<HookReply>;
   /** An agent was given work: by the lead (with the brief), or by a workflow run (the brief is not on the lead's stream). */
   assigned(work: { threadId: string; agentName: string; brief: string | null; runId: string | null }): void;
   /** An agent reported back to the lead. */

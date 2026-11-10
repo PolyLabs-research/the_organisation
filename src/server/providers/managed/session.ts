@@ -988,7 +988,10 @@ export class PlanSession {
       hooks.declined(call.name, describe(call.input));
     } else {
       let reply: HookReply;
-      if (call.threadId) {
+      if (call.name === PLAN_TOOLS.recall) {
+        // Looking something up changes nothing, so it is answered whoever in the session asks, and whenever.
+        reply = await hooks.recall(call.input);
+      } else if (call.threadId) {
         reply = { ok: false, message: 'Only the lead records phases and reports to the board. Report to your lead instead.' };
       } else if (call.name === PLAN_TOOLS.recordPhase) {
         // The phase's files come home before it is recorded, so the board can read them as soon as it is.

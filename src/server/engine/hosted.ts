@@ -6,7 +6,8 @@ import { PLAN_TOOLS, ProviderError, type PlanHooks, type PlanJob, type PlanOutco
 import { WorkspaceError } from '../workspace';
 import type { Commit, EngineContext } from './handlers';
 import * as prompts from './prompts';
-import { recalled } from './recall';
+import { recallAnswer } from '../memory';
+import { recalled, who } from './recall';
 import { MAX_RESULT_CHARS, clean, fileReport, logRemitDecisions, newTask, now } from './records';
 import { MAX_REQUESTS_PER_GATE, alreadyRaised, raiseRequests } from './signatory';
 import { execById, isPlanActive, postToBoard, sessionAllowance, teamDir } from './state';
@@ -279,6 +280,12 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       return { ok: true, message: 'Your report is with the board. End your turn now and start nothing further.' };
     },
 
+    async recall(input) {
+      // The lead's own look in the organisation's memory. It reads, and changes nothing, so it is answered however the plan stands.
+      const answer = await recallAnswer(ctx.memory, who(org), input, `A file named here is in your sandbox under ${prompts.SESSION_WORKSPACE}/ if it was among the files mounted when this session began.`);
+      return { ok: !('error' in answer), message: JSON.stringify(answer) };
+    },
+
     assigned({ threadId, agentName, brief, runId }) {
       const phase = workingPhase(plan);
       if (!phase) return;
@@ -525,6 +532,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     session: undefined,
     phase: { ok: false, message: 'This session is no longer being followed.' },
     report: { ok: false, message: 'This session is no longer being followed.' },
+    recall: Promise.resolve({ ok: false, message: 'This session is no longer being followed.' }),
     assigned: undefined,
     reported: undefined,
     agentEnded: undefined,
@@ -548,8 +556,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
   try {
     const files = mountable(await workspace.list());
     // A lead in a session plans its own phases, so it is told at the start what the organisation remembers on the objective.
-    // It is told once: nothing in a session can search the memory.
-    const memory = await recalled(org, ctx.memory, [plan.objective, plan.successCriteria, plan.rationale].join('\n'), { tool: false });
+    // After that it looks things up for itself, with the tool it has for that.
+    const memory = await recalled(org, ctx.memory, [plan.objective, plan.successCriteria, plan.rationale].join('\n'), { reader: 'you' });
     const job: PlanJob = {
       planId: plan.id,
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),

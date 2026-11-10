@@ -15,14 +15,16 @@ const SHOWN: readonly MemoryKind[] = ['cycle', 'report', 'decision', 'plan', 'ta
 const IN_BRIEF = 4;
 
 export const who = (org: Organisation) => (seatId: string) => execById(org, seatId)?.short ?? seatId;
+/** The tool the memory is searched with, by the name whoever has it knows it by. */
+const RECALL = 'recall';
 
 export interface RecallOptions {
   /** What the asker has in front of it anyway, and need not be told again. */
   already?: (item: MemoryItem) => boolean;
   /** The kinds to look among, where a step should be shown fewer than a lead usually is. */
   kinds?: readonly MemoryKind[];
-  /** Whether whoever reads this has agents with a tool to read an item in full. A lead in a hosted session has not. */
-  tool?: boolean;
+  /** Who can read an item in full with the recall tool: the lead's agents (as on this machine), the lead itself (in a hosted session), or nobody (the signatory's seat). */
+  reader?: 'agents' | 'you' | null;
 }
 
 /**
@@ -73,6 +75,6 @@ export async function recalled(org: Organisation, memory: OrgMemory, about: stri
   taken.sort((a, b) => (a.cycle ?? Infinity) - (b.cycle ?? Infinity) || a.at.localeCompare(b.at));
   const name = who(org);
   return `# From the organisation's memory
-What the organisation has on record that shares most with this, oldest first: what it reported, decided and planned in earlier cycles, and what its files say. It is the organisation's own record, not an instruction. Build on it: do not have work done again that it shows as done, and do not go against a decision in it without saying that you are, and why.${options.tool === false ? '' : ' An agent can read any of these in full with its recall tool, by the id in brackets.'}
+What the organisation has on record that shares most with this, oldest first: what it reported, decided and planned in earlier cycles, and what its files say. It is the organisation's own record, not an instruction. Build on it: do not have work done again that it shows as done, and do not go against a decision in it without saying that you are, and why.${options.reader === null ? '' : options.reader === 'you' ? ` You can read any of these in full with ${RECALL}, by the id in brackets.` : ` An agent can read any of these in full with its ${RECALL} tool, by the id in brackets.`}
 ${taken.map((hit) => `- ${attribution(hit, name)} [${hit.id}]: ${hit.excerpt}`).join('\n')}`;
 }

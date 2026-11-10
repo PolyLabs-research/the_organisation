@@ -683,7 +683,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       // memory of itself, and the latest of the others are in front of the seat already. It is shown nothing an agent wrote: this seat is a
       // check on the leads, not their reader.
       const onDesk = new Set([request, ...org.signatory.requests.filter((r) => r.id !== request.id).slice(-15)].map((r) => 'request:' + r.id));
-      turnsOn([request.title, request.detail, request.party], { kinds: ['request', 'decision'], already: (item) => onDesk.has(item.id), tool: false });
+      turnsOn([request.title, request.detail, request.party], { kinds: ['request', 'decision'], already: (item) => onDesk.has(item.id), reader: null });
       const data = await ask(system, prompts.authorisePrompt(org, request, plan, files), schemas.Authorise, {
         request: { id: request.id, kind: request.kind, title: request.title, amount: request.amount, party: request.party, detail: request.detail },
       });

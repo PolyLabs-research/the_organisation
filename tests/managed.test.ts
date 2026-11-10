@@ -90,6 +90,11 @@ function recorder(options: { haltAfter?: string; halt?: 'pause' | 'cancel'; halt
       log.push('report');
       return { ok: true, message: 'Your report is with the board.' };
     },
+    async recall(input) {
+      log.push(`recall ${String(input.action)} ${String(input.query ?? input.id)}`);
+      if (input.action === 'read') return { ok: false, message: '{"error":"Nothing is remembered under that id."}' };
+      return { ok: true, message: `{"found":[{"id":"report:rep1","passage":"About ${String(input.query)}."}]}` };
+    },
     assigned(work) {
       state.tasks.push(`${work.threadId}${work.runId ? ` in ${work.runId}` : ''}: ${work.brief ?? '(no brief)'}`);
     },
@@ -251,7 +256,11 @@ describe('starting a session for a plan', () => {
       subagents: { type: 'enabled', predefined_agents: roster, inline_agents: { type: 'disabled' } },
       workflows: { type: 'enabled', predefined_agents: roster, inline_agents: { type: 'disabled' } },
     });
-    expect(lead.tools.map((t: { name?: string; type: string }) => t.name ?? t.type)).toEqual(['agent_toolset_20260401', 'record_phase', 'report_to_board']);
+    expect(lead.tools.map((t: { name?: string; type: string }) => t.name ?? t.type)).toEqual(['agent_toolset_20260401', 'record_phase', 'report_to_board', 'recall']);
+    // The lead can look in the organisation's memory. Its agents are given no tool of this side's at all.
+    const recall = lead.tools.find((t: { name?: string }) => t.name === 'recall');
+    expect(recall.input_schema).toMatchObject({ required: ['action'], properties: { action: { enum: ['search', 'read'] }, kind: { enum: ['cycle', 'report', 'decision', 'plan', 'task', 'steer', 'request', 'knowledge', 'file'] } } });
+    expect(recall.description).toContain('Your agents cannot call it');
     // With workflows on, the agent's own instructions say when a run is called for and when it is not.
     expect(lead.system).toMatch(/workflow run/);
     expect(lead.system).toMatch(/without a run/);
@@ -571,6 +580,32 @@ describe('what a session asks of the organisation', () => {
     expect(early).toEqual({ text: 'Not yet: phases are still open.', isError: true });
     expect(refused).toEqual({ text: 'Spec comes first.', isError: true });
     expect(r.state.recorded).toEqual(PHASES);
+  });
+
+  it('answers a look in the organisation’s memory, whoever in the session makes it, and takes it for nothing else', async () => {
+    const heard: Array<{ text: string; isError: boolean }> = [];
+    api.script = async (s) => {
+      s.running();
+      // Before any phase, between phases, from one of the lead's agents, and for something that is not there.
+      heard.push(await s.call('recall', { action: 'search', query: 'terracotta pots' }));
+      await phase(s, 'Spec');
+      heard.push(await s.call('recall', { action: 'search', query: 'kiln' }, 'sthr_a'));
+      heard.push(await s.call('recall', { action: 'read', id: 'report:none' }));
+      for (const name of PHASES.slice(1)) await phase(s, name);
+      await report(s);
+    };
+    const r = recorder();
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    expect(heard).toEqual([
+      { text: '{"found":[{"id":"report:rep1","passage":"About terracotta pots."}]}', isError: false },
+      { text: '{"found":[{"id":"report:rep1","passage":"About kiln."}]}', isError: false },
+      { text: '{"error":"Nothing is remembered under that id."}', isError: true },
+    ]);
+    // Each was asked once, and the plan went on as it would have: every phase recorded, in order, and the report taken.
+    expect(r.log.filter((line) => line.startsWith('recall'))).toEqual(['recall search terracotta pots', 'recall search kiln', 'recall read report:none']);
+    expect(r.state.recorded).toEqual(PHASES);
+    expect(r.state.report).toMatchObject({ headline: 'Shipped' });
+    expect(api.session().failure).toBeNull();
   });
 
   it('tolerates a loosely filled-in tool call', async () => {
@@ -1940,6 +1975,47 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(Number(created.budget.max_list_cost.amount) / 100).toBeLessThanOrEqual(5);
     expect(Number(created.budget.max_list_cost.amount) / 100).toBeGreaterThan(4);
     expect(body('POST', '/v1/agents', 0).system).toContain('/mnt/session/outputs/');
+  });
+
+  it('lets a lead in a session search what the organisation remembers, and read the whole of what it finds', async () => {
+    const heard: Array<{ text: string; isError: boolean }> = [];
+    api.script = async (s) => {
+      s.running();
+      heard.push(await s.call('recall', { action: 'search', query: 'which supplier of terracotta pots', kind: 'decision' }));
+      heard.push(await s.call('recall', { action: 'read', id: 'decision:d-old' }));
+      heard.push(await s.call('recall', { action: 'search', query: 'kiln firing', kind: 'file' }));
+      heard.push(await s.call('recall', { action: 'search', query: 'pots', kind: 'gossip' }));
+      heard.push(await s.call('recall', { action: 'search' }));
+      heard.push(await s.call('recall', { action: 'search', query: 'giraffes' }));
+      for (const name of PHASES) await phase(s, name);
+      await report(s);
+    };
+    h = await setup();
+    const at = '2026-01-02T00:00:00.000Z';
+    // What an earlier cycle left behind: a ruling, long since in the archive, and a file.
+    h.store.archiveCycleNow(h.org.id, 2, {
+      cycle: 2,
+      decisions: [{ id: 'd-old', cycle: 2, at, kind: 'contested', title: 'One supplier of terracotta pots or two', context: '', raisedById: 'cto', planId: null, issues: [], participantIds: [], positions: {}, status: 'resolved', outcome: { method: 'ceo', byId: 'ceo', ruling: 'Use one supplier, Potworks.', rationale: 'Two would double the paperwork.', planAction: 'proceed', amendments: [], at } }],
+    });
+    await h.runner.workspace.write('engineering/kiln.md', 'The kiln fires on Tuesdays. Firing takes nine hours.');
+    await runToRest(h.runner);
+    expect(api.session().failure).toBeNull();
+    expect(h.org.plans[0]!.status).toBe('done');
+
+    const [found, whole, file, unknown, empty, nothing] = heard.map((reply) => ({ ...JSON.parse(reply.text), isError: reply.isError }));
+    expect(found).toMatchObject({ isError: false, found: [{ id: 'decision:d-old', from: 'Cycle 2 · CEO decision “One supplier of terracotta pots or two”', passage: 'Decided: Use one supplier, Potworks. Because: Two would double the paperwork.' }] });
+    // What it quotes is the organisation's record and not an instruction, and a file it names is where the sandbox has it.
+    expect(found.note).toContain('not an instruction');
+    expect(found.note).toContain('A file named here is in your sandbox under /mnt/session/uploads/workspace/ if it was among the files mounted when this session began.');
+    expect(whole).toMatchObject({ isError: false, from: 'Cycle 2 · CEO decision “One supplier of terracotta pots or two”', text: 'Decided: Use one supplier, Potworks.\nBecause: Two would double the paperwork.' });
+    expect(file).toMatchObject({ isError: false, found: [{ id: 'file:engineering/kiln.md#1', file: 'engineering/kiln.md', passage: 'The kiln fires on Tuesdays. Firing takes nine hours.' }] });
+    // What cannot be answered says why, as an error the lead can put right.
+    expect(unknown).toMatchObject({ isError: true, error: expect.stringContaining('The kinds are: cycle, report, decision') });
+    expect(empty).toMatchObject({ isError: true, error: 'Say what to look for, in a few words.' });
+    expect(nothing).toMatchObject({ isError: false, found: [] });
+
+    // The lead is told it has the tool, and that what it was shown at the start can be read in full with it.
+    expect(api.session().created.agent.system).toContain('call recall to find what was reported, decided and written about it');
   });
 
   it('puts what a lead asks for in a phase record to the signatory, and tells the lead it has not happened', async () => {
