@@ -147,6 +147,22 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     }
   });
 
+  it('shows a link in the file a request points to as words, with nothing to click', async () => {
+    const runner = await organisation('Pay here');
+    // The file a payment request tells the signatory to read first, written by an agent, with a link to pay somewhere of its choosing.
+    await runner.workspace.write('sales/invoice.md', '# Invoice\n\nThe deposit is 48 GBP. [Pay the deposit here](https://elsewhere.example/pay?ref=q-1)');
+    runner.org.signatory.requests.push({ id: 'q-1', cycle: 1, kind: 'payment', fromId: 'cto', planId: null, phase: null, title: 'Deposit for the supplier', detail: 'The invoice is in the file.', amount: '48 GBP', party: 'Acme Supplies', files: ['sales/invoice.md'], status: 'pending', raisedAt: new Date().toISOString(), ruling: null, outcome: null });
+    const page = await open('/#/org/' + runner.org.id);
+    try {
+      await page.getByRole('tab', { name: /^Signatory/ }).click();
+      await page.getByTitle('Open sales/invoice.md', { exact: true }).click();
+      await page.locator('.file-view').getByText('Pay the deposit here (https://elsewhere.example/pay?ref=q-1)').waitFor();
+      expect(await page.locator('.file-view a').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('sends a steer once, however the shortcut is pressed', async () => {
     const runner = await organisation('Steered once');
     const page = await open('/#/org/' + runner.org.id);
