@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
 import { accessTools, connectedTools } from '../access-tools';
 import { memoryTools, type OrgMemory } from '../memory';
+import { sandboxTools, type OrgSandbox } from '../sandbox';
 import { recalled, who, type RecallOptions } from './recall';
 import { codeTools } from '../access-code-tools';
 import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel } from '../../shared/approaches';
@@ -30,6 +31,8 @@ export interface EngineContext {
   access: BusinessAccess;
   /** Everything the organisation has reported, decided and written, to look things up in. */
   memory: OrgMemory;
+  /** Where a role that may run code runs it. */
+  sandbox: OrgSandbox;
   provider: Provider;
   workspace: Workspace;
   signal: AbortSignal;
@@ -51,6 +54,8 @@ export interface EngineContext {
 export type Commit = () => void;
 
 const MAX_TASK_TURNS = 24;
+/** How many of a task's commands are kept on its record. The most recent say most about where the work stands. */
+const MAX_TASK_RUNS = 30;
 const MAX_TASK_SEARCHES = 8;
 const MAX_REWORK_ROUNDS = 1;
 /** A phase held to what the checks say gets more goes: seeing a build fail and fixing it is the work. */
@@ -511,7 +516,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const files = await workspace.list();
       const max = Math.min(org.settings.maxTasksPerPhase, Math.max(exec.agentCount, 1) * 2);
       turnsOn([plan.objective, phase.name, phase.intent, phase.deliverable]);
-      const data = await ask(system, prompts.kickoffPrompt(org, exec, plan, item.phaseIndex, files), schemas.Kickoff, {
+      const canRun = allows(org, exec.id, 'run_code') && (await ctx.sandbox.unusable()) === null;
+      const data = await ask(system, prompts.kickoffPrompt(org, exec, plan, item.phaseIndex, files, canRun ? { network: org.settings.sandboxNetwork } : null), schemas.Kickoff, {
         plan: planContext(org, plan),
         phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex },
         maxTasks: max,
@@ -545,6 +551,31 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(...connectedTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(...memoryTools(ctx.memory, who(org), () => !ctx.halting() && isPlanActive(plan)));
+      // Running code: for a role that may, where there is something on this machine to run it in. What was run is the system's to
+      // record, as each command ends: a lead reads that at the gate, beside whatever the agent says of it.
+      const canRun = allows(org, exec.id, 'run_code') && (await ctx.sandbox.unusable()) === null;
+      if (canRun) {
+        task.runs ??= [];
+        tools.push(
+          ...sandboxTools(ctx.sandbox, {
+            planId: plan.id,
+            workspace,
+            signal: ctx.signal,
+            // Taking the privilege away stops what is running, as it does for every other tool.
+            active: () => !ctx.halting() && isPlanActive(plan) && allows(org, exec.id, 'run_code'),
+            redact: (text) => ctx.access.withoutSecrets(text),
+            ran: (run) => {
+              const runs = (task.runs ??= []);
+              runs.push(run);
+              if (runs.length > MAX_TASK_RUNS) runs.splice(0, runs.length - MAX_TASK_RUNS);
+              ctx.touch();
+            },
+            wrote: (path) => {
+              if (!written.includes(path)) written.push(path);
+            },
+          }),
+        );
+      }
       tools.push(
         ...codeTools(
           ctx.access,
@@ -574,7 +605,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const canSearch = org.settings.webResearch && allows(org, exec.id, 'web_search') && (provider.searches?.(model) ?? true);
       const result = await provider.agent({
         kind: 'task',
-        system: prompts.systemForAgent(org, exec, canSearch),
+        system: prompts.systemForAgent(org, exec, canSearch, canRun ? { network: org.settings.sandboxNetwork } : null),
         prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files, planBranch(org, plan)) + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
         model,
         effort: org.settings.workerEffort,

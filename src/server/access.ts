@@ -248,6 +248,14 @@ export class BusinessAccess {
     if (!this.vault.unlocked) return '[Vault locked before the result could be returned.]';
     return cleanPageText(value, this.secrets());
   }
+  /**
+   * A saved password or token taken out of text that did not come through the vault, such as what a command printed.
+   * While the vault is locked nothing in it can be read, by this or by any agent's tool, so there is nothing to look
+   * for and the text is as it was. Running code does not wait on the vault.
+   */
+  withoutSecrets(value: string): string {
+    return this.vault.unlocked ? cleanPageText(value, this.secrets()) : value;
+  }
   async view(): Promise<AccessView> {
     const base = { available: true, autoLockMinutes: this.idleMs / 60_000, googleConfigured: googleConfigured(), initialised: await this.vault.exists(), unlocked: this.vault.unlocked };
     if (!base.unlocked) return { ...base, mailboxes: [], accounts: [], repositories: [], toolServers: [], drafts: [], requests: [], audit: [] };

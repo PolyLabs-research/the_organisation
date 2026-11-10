@@ -1,5 +1,6 @@
 import type { WorkApproach } from '../../shared/approaches';
 import { PRIVILEGES, allows, applies } from '../../shared/privileges';
+import { describeRun } from '../../shared/sandbox';
 import { describeRequest, isOpen, waitsOnAi } from '../../shared/signatory';
 import type { BoardReport, Decision, Executive, GateEvidence, Organisation, PhaseGate, Plan, PlanPhase, ReviewRound, SignatoryRequest, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, type SystemPrompt } from '../providers/types';
@@ -142,10 +143,16 @@ export function systemFor(org: Organisation, exec: Executive, where: 'local' | '
   return { charter: charter(org), role: seatBlock(exec) + (limits ? `\n\n# Your privileges\n${limits}` : '') };
 }
 
-export function systemForAgent(org: Organisation, lead: Executive, canSearch = org.settings.webResearch): SystemPrompt {
+/** What an agent is told about running code: that it cannot, or how it can and what that asks of it. */
+function runningCode(sandbox: { network: boolean } | null): string {
+  if (!sandbox) return 'You cannot run code.';
+  return `You can run commands in a sandbox with run_command: a container that holds a copy of the workspace${sandbox.network ? ' and can reach the internet' : ', with no way to the internet, so it has only what its image came with'}. Where what you write can be run, run it: the tests, the script, the build. Write files with your file tools and then run them; bring a file a command produced into the workspace with save_from_sandbox. Say in your report what you ran and how it ended, with its exit code. A command that failed has failed: fix it and run it again, or say plainly that it still fails. The system keeps its own record of every command and how it ended, and your lead reads that beside your report.`;
+}
+
+export function systemForAgent(org: Organisation, lead: Executive, canSearch = org.settings.webResearch, sandbox: { network: boolean } | null = null): SystemPrompt {
   const web = canSearch
-    ? 'You can search the web and read pages: web_fetch reads a page whose address came from a search result, your task or a file. Use them for facts you would otherwise have to assume: search to find a source, then read the page itself before relying on what it says, and cite the address next to anything you take from it. A task has a limited number of searches. A search or fetch that comes back with an error has hit that limit or a page that could not be read: it is not a ban on research. Try another source or carry on with what you have, and say in your report exactly what you could not check. You cannot run code. Outside systems are available only through explicitly granted business email and account tools, and through tools a person has connected for your team.'
-    : 'You cannot run code or browse arbitrary websites. You can use explicitly granted business email and account tools, and tools a person has connected for your team.';
+    ? `You can search the web and read pages: web_fetch reads a page whose address came from a search result, your task or a file. Use them for facts you would otherwise have to assume: search to find a source, then read the page itself before relying on what it says, and cite the address next to anything you take from it. A task has a limited number of searches. A search or fetch that comes back with an error has hit that limit or a page that could not be read: it is not a ban on research. Try another source or carry on with what you have, and say in your report exactly what you could not check. ${runningCode(sandbox)} Outside systems are available only through explicitly granted business email and account tools, and through tools a person has connected for your team.`
+    : `${sandbox ? `${runningCode(sandbox)} You cannot browse arbitrary websites.` : 'You cannot run code or browse arbitrary websites.'} You can use explicitly granted business email and account tools, and tools a person has connected for your team.`;
   const limits = limitsOf(org, lead, 'local');
   return {
     charter: charter(org),
@@ -490,7 +497,7 @@ ${others.length ? `# Other leads' plans this cycle\n${others.join('\n')}\n\n` : 
 Revise the approach and the phase intents so the plan complies with every binding instruction. Keep what the ruling does not touch. Where the ruling says one piece of work must come before another, express it as a wait on that lead's phase (waitsFor), not as a date. Give each phase's full list of waits, including any it already had. Give an entry for every phase, skipped ones too: set skip on each phase the plan still does not need, and clear it to bring a skipped phase back if the ruling needs it. Say briefly what you changed.`;
 }
 
-export function kickoffPrompt(org: Organisation, lead: Executive, plan: Plan, index: number, files: WorkspaceFile[]): string {
+export function kickoffPrompt(org: Organisation, lead: Executive, plan: Plan, index: number, files: WorkspaceFile[], sandbox: { network: boolean } | null = null): string {
   const phase = plan.phases[index]!;
   const max = Math.min(org.settings.maxTasksPerPhase, Math.max(lead.agentCount, 1) * 2);
   return `You are starting phase ${index + 1} of ${plan.phases.length} of your plan: ${phase.name}.
@@ -506,7 +513,11 @@ What you said it would produce: ${phase.intent}${phase.gate ? `\nThis phase has 
 ${[phaseSummaries(plan, index), waitedBlock(org, phase), signatoryBlock(org), filesBlock(files)].filter(Boolean).join('\n\n')}
 
 # Your task
-Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Rate each task on the effort scale. Commission the deliverable itself, not paperwork about it: no task whose only output is a tracker, register, reconciliation log, cross-reference or a review of other files, unless the phase deliverable is exactly that. To improve an existing file, have the task edit it in place rather than write a new version beside it. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.`;
+Hand out the work for this phase. You have ${lead.agentCount} agent${lead.agentCount === 1 ? '' : 's'}, who work in parallel and do not see each other's tasks, so each task must stand alone: say what to produce, which files to build on (by path), and what done looks like. Give out between 1 and ${max} tasks; a few well-shaped tasks beat many small ones. Rate each task on the effort scale. Commission the deliverable itself, not paperwork about it: no task whose only output is a tracker, register, reconciliation log, cross-reference or a review of other files, unless the phase deliverable is exactly that. To improve an existing file, have the task edit it in place rather than write a new version beside it. Name the file each task is to write, under \`${teamDir(lead)}/\` and different for every task, so that agents working at the same time do not overwrite each other.${
+    sandbox
+      ? ` Your agents can run commands in a sandbox: a container that holds a copy of the workspace${sandbox.network ? ' and can reach the internet' : ' and cannot reach the internet, so it has only what its image came with'}. Where the work can be run, ask for it to be run and tested, and for the report to say what was run and how it ended. The system records every command and its exit code, and you will be shown that record at the gate.`
+      : ''
+  }`;
 }
 
 /** What the phase waited for in other leads' plans, so the lead builds on it rather than looking for it. */
@@ -553,12 +564,20 @@ Phase ${index + 1} of ${plan.phases.length}, ${phase.name}: ${phase.purpose} The
 ${filesBlock(files)}${codeBlock(plan, branch)}`;
 }
 
+/** What a task ran in the sandbox, as the system recorded it. Nothing where the agent had no sandbox to run anything in. */
+function runsOf(task: Task): string {
+  if (!task.runs) return '';
+  if (!task.runs.length) return '\nRan in the sandbox, as the system recorded it: nothing.';
+  // A command is an agent's words. On one line each, so that nothing in one can pass for another entry of the list.
+  return `\nRan in the sandbox, as the system recorded it:\n${task.runs.slice(-12).map((run) => `- ${oneLine(describeRun(run), 300)}`).join('\n')}`;
+}
+
 function taskReport(task: Task): string {
   // The id is how a lead says whose work a rework task puts right.
   const head = `## ${task.title}${task.rework ? ' (rework)' : ''}\nTask id: ${task.id}`;
-  if (task.status === 'failed') return `${head}\nFAILED: ${task.error ?? 'no result'}`;
+  if (task.status === 'failed') return `${head}\nFAILED: ${task.error ?? 'no result'}${runsOf(task)}`;
   const files = task.files.length ? `\nFiles: ${task.files.join(', ')}` : '\nFiles: none written';
-  return `${head}\n${(task.result ?? '').slice(0, 6000)}${files}`;
+  return `${head}\n${(task.result ?? '').slice(0, 6000)}${files}${runsOf(task)}`;
 }
 
 export interface ReviewFile {
@@ -616,7 +635,7 @@ ${proof ? evidenceBlock(proof) : ''}${reviewFiles(files)}
 ${signatoryBlock(org)}
 
 # Your task
-Review the phase as its gate. Judge the files themselves, not only what the agents say about them. ${gate} Your summary is what later phases and your board report will be built on, so state what was actually produced, not what was intended.
+Review the phase as its gate. Judge the files themselves, not only what the agents say about them.${phase.tasks.some((task) => task.runs) ? ' Where an agent says something was run, tested or passed, go by the system’s record of what it ran and how that ended: a claim the record does not bear out is not established.' : ''} ${gate} Your summary is what later phases and your board report will be built on, so state what was actually produced, not what was intended.
 
 ${allows(org, plan.ownerId, 'ask_signatory') ? `If the plan has reached a point where something must be paid for or signed for its work to take effect, put it to the signatory as a request: what it is, how much and to whom, why now, and the files to read first. Ask only for what this plan needs next, and never for anything already listed above. At most gates there is nothing to ask for: return an empty list.` : 'Your role may not ask the signatory. If something must be paid for or signed for this work to take effect, say so in your summary.'}`;
 }

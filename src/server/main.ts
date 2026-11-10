@@ -7,6 +7,7 @@ import { ConnectionStore } from './connections';
 import { DataDirInUse, claimDataDir } from './lock';
 import { ProviderRouter } from './providers/router';
 import { Registry } from './registry';
+import { SandboxRuntime } from './sandbox';
 import { Store } from './store';
 
 /** How to give the data folder back, once this server has taken it. */
@@ -38,7 +39,8 @@ async function main(): Promise<void> {
       ...(config.claudeCode.blocked ? { blocked: config.claudeCode.blocked } : {}),
     },
   });
-  const registry = new Registry(store, provider);
+  // What code is run with, for the roles the shareholders let run it. Whether there is anything here to run it with is found out when it is first wanted.
+  const registry = new Registry(store, provider, { sandbox: new SandboxRuntime(config.sandbox ?? { blocked: 'Running code is not set up on this server.' }) });
   await registry.load();
   // What each key can call is asked for in the background: the server does not wait on other people's APIs to start.
   void provider.refreshStale();
