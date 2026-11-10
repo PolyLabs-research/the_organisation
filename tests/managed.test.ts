@@ -924,6 +924,24 @@ describe('the spend cap', () => {
     expect(r.log.some((l) => l.startsWith('asked'))).toBe(false);
   });
 
+  it('asks for more when the session\'s cap was brought down under it from elsewhere', async () => {
+    api.script = async (s) => {
+      s.running();
+      await phase(s, 'Spec');
+      // A hold that was asked for while nobody followed the session arrives only now, after it was set going.
+      s.capCents = s.spentCents + 1;
+      for (const name of PHASES.slice(1)) await phase(s, name);
+      await report(s);
+    };
+    const r = recorder();
+    r.state.grants.push(1.5);
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    // It stopped at the cap it had been given from elsewhere, and was given what the organisation allows it.
+    expect(r.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.20: 1.5']);
+    expect(api.session().capCents).toBe(150);
+    expect(r.state.recorded).toEqual(PHASES);
+  });
+
   it('asks again with the true figure when the session has spent more than the organisation knew', async () => {
     api.script = wholePlan;
     const r = recorder();

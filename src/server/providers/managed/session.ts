@@ -1116,7 +1116,10 @@ export class PlanSession {
         // be raised and the request fails: the watch ends when the raise is done, not before.
         this.budgetCheckAt = Date.now() + this.timings.graceMs;
         if (session.status !== 'idle') return;
-        if (this.capUsd - this.spentUsd < 0.01) {
+        // The cap as the session has it, which need not be the one last set from here: a session can be held by
+        // its id while nobody follows it, and a hold asked for then can arrive after the session was picked up.
+        const cap = Math.min(this.capUsd, session.budget ? usd(session.budget.max_list_cost) : Infinity);
+        if (cap - this.spentUsd < 0.01) {
           await this.raise(this.hooks.moreBudget(this.spentUsd));
           this.budgetCheckAt = null;
           return;
@@ -1125,7 +1128,7 @@ export class PlanSession {
         // when its usage includes a model the platform has no price for.) It needs someone to look.
         return this.fail(
           new ProviderError(
-            `The session says it is at its budget, but its cap ($${this.capUsd.toFixed(2)}) is above what it has spent ($${this.spentUsd.toFixed(2)}). Look at it in the Anthropic Console before resuming.`,
+            `The session says it is at its budget, but its cap ($${cap.toFixed(2)}) is above what it has spent ($${this.spentUsd.toFixed(2)}). Look at it in the Anthropic Console before resuming.`,
             'bad_request',
             false,
           ),
