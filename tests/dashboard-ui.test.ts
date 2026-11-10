@@ -167,6 +167,25 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     }
   });
 
+  it('goes to an organisation it has established even when starting it fails, and establishes no other', async () => {
+    const page = await open('/#/new');
+    // The organisation is established by one request and started by a second, and here the second never arrives.
+    await page.route('**/api/orgs/*/start', (route) => route.abort('connectionreset'));
+    try {
+      await page.getByLabel('What should this organisation pursue?', { exact: true }).fill('Sharpened pencils by post, a box a month.');
+      await page.getByLabel('Name', { exact: true }).fill('Established once');
+      await page.getByRole('button', { name: 'Seat the team myself', exact: true }).click();
+      await page.getByRole('button', { name: 'Add a seat', exact: true }).click();
+      await page.locator('.library li button').first().click();
+      await page.getByRole('button', { name: 'Establish the organisation', exact: true }).click();
+      await page.getByRole('heading', { name: 'Established once', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Start', exact: true }).waitFor();
+      expect(registry.list().filter((org) => org.name === 'Established once')).toHaveLength(1);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('leaves the Help dialog as it is while the organisation changes behind it', async () => {
     const runner = await organisation('Reading the guide');
     const page = await open('/#/org/' + runner.org.id);
