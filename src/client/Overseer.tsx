@@ -187,6 +187,8 @@ type Window = 'all' | '60' | '15';
 
 const LABEL_COL = 100;
 const ROW_H = 22;
+/** The most calls the timeline draws. Each bar is an element of the page, and tens of thousands of them make the page too slow to use. */
+const MAX_BARS = 3000;
 
 function laneOrder(org: Organisation): string[] {
   const kinds = ['ceo', 'lead', 'judge', 'signatory'];
@@ -201,7 +203,8 @@ export function Timeline({ org, entries, projected, now, running }: { org: Organ
   const [ref, width, box0] = useWidth<HTMLDivElement>();
 
   const { rows, bars } = useMemo(() => {
-    const bars: Bar[] = entries.map((e, i) => {
+    // Of a log too long to draw whole, the latest calls: the log runs from the earliest to the latest.
+    const bars: Bar[] = entries.slice(-MAX_BARS).map((e, i) => {
       const agent = e.kind === 'execute' ? 'session' : e.kind === 'task' ? agentOf(e) : null;
       const seat = e.execId ?? 'system';
       return {
@@ -306,6 +309,11 @@ export function Timeline({ org, entries, projected, now, running }: { org: Organ
         ]}
       />
       {showForecast && !projected.length ? <p className="muted small">No forecast yet: it needs finished work with effort ratings to learn from, and unfinished work that has been rated.</p> : null}
+      {entries.length > MAX_BARS ? (
+        <p className="muted small">
+          The timeline shows the latest {MAX_BARS.toLocaleString('en')} of {entries.length.toLocaleString('en')} calls, so that the page stays quick. Effort and Spend still count every call.
+        </p>
+      ) : null}
       {asTable ? (
         <TimelineTable org={org} bars={visible} />
       ) : (

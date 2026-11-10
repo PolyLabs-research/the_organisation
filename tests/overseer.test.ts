@@ -29,9 +29,19 @@ describe('the overseer on a long log', () => {
     expect(renderToStaticMarkup(createElement(Overseer, { view, activity: calls }))).toContain('class="overseer"');
   });
 
-  it('draws the timeline', () => {
+  it('draws the latest calls on the timeline, and says how many there are in all', () => {
     const html = renderToStaticMarkup(createElement(Timeline, { org: organisation(), entries: calls, projected: [], now: NOON, running: false }));
     expect(html).toContain('class="gantt"');
-    expect(html).toContain('Call 150000');
+    expect(html.match(/class="gantt-bar/g)).toHaveLength(3000);
+    expect(html).toContain('aria-label="Call 150000,');
+    expect(html).toContain('aria-label="Call 147001,');
+    expect(html).not.toContain('aria-label="Call 147000,');
+    expect(html).toContain('The timeline shows the latest 3,000 of 150,000 calls');
+  });
+
+  it('draws every call of a log short enough to draw whole, and has nothing to add', () => {
+    const html = renderToStaticMarkup(createElement(Timeline, { org: organisation(), entries: log(40), projected: [], now: NOON, running: false }));
+    expect(html.match(/class="gantt-bar/g)).toHaveLength(40);
+    expect(html).not.toContain('The timeline shows the latest');
   });
 });
