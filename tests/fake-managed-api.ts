@@ -39,6 +39,10 @@ export class FakeSession {
   openRun = false;
   /** An error thrown by the script, for the test to see. */
   failure: unknown = null;
+  /** Whether the session was given its first message when it was created, and so has a script to play. */
+  briefed = false;
+  /** Whether its script has been started. */
+  playing = false;
   readonly createdAt = new Date().toISOString();
   private consumed = 0;
   private waiters: Array<() => void> = [];
@@ -436,9 +440,9 @@ export class FakeManagedApi {
         session.received.push({ ...event });
         session.emit(event.type, { content: event.content });
       }
+      // The agent has its kickoff, and starts on it when a client first follows the session (see the stream below).
+      session.briefed = !!body.initial_events?.length;
       send(200, session.json());
-      // The agent starts on its kickoff once the session exists.
-      if (body.initial_events?.length) void this.play(session);
       return;
     }
     if (method === 'GET' && path === '/v1/sessions') {
@@ -492,6 +496,13 @@ export class FakeManagedApi {
       session.streams.add(res);
       res.on('close', () => session.streams.delete(res));
       this.onStream?.(session);
+      // A real session starts work by itself, some time after it is created. Here it starts at a fixed point, when
+      // a client first follows it, so that no test turns on whether the client or the session was the quicker:
+      // what the script says before it first waits is on this stream and in the history the client reads next.
+      if (session.briefed && !session.playing) {
+        session.playing = true;
+        void this.play(session);
+      }
       return;
     }
     const thread = /^\/threads\/([^/]+)\/events$/.exec(rest);
@@ -500,8 +511,6 @@ export class FakeManagedApi {
   }
 
   private async play(session: FakeSession): Promise<void> {
-    // Give the client a moment to attach, as a real session takes time to start work.
-    await new Promise((resolve) => setTimeout(resolve, 5));
     try {
       await this.script(session);
     } catch (err) {

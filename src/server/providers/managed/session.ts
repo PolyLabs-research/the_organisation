@@ -196,6 +196,8 @@ export class PlanSession {
   private replaying = false;
   /** The lead was interrupted the last time the session was held, so its work waits for a message. */
   private interrupted = false;
+  /** The session's status says that it has ended, and its history has still to be read to the end. */
+  private over = false;
 
   /** Why the session is idle, as far as is known; null while it is working. */
   private idle: StopReason | null = null;
@@ -417,6 +419,18 @@ export class PlanSession {
     return true;
   }
 
+  /**
+   * The same, asked beside the stream. A session that has ended is not given up from here: the stream may not
+   * have been read as far as its end, and what the session said last, and why it ended, is in its history.
+   * The stream is left, and the history is read to the end in its place (see `follow`).
+   */
+  private ended(session: Session): boolean {
+    if (session.archived_at || session.status !== 'terminated') return this.gone(session);
+    this.over = true;
+    this.leave('reconnect');
+    return true;
+  }
+
   // ---- the spend cap ----
 
   private capped(dollars: number): void {
@@ -519,6 +533,11 @@ export class PlanSession {
     const controller = new AbortController();
     this.stream = controller;
     try {
+      // A session that has ended says nothing more on a stream. Its history is read to the end, and that is all.
+      if (this.over) {
+        this.over = false;
+        return await this.catchUp();
+      }
       // Opened before anything else, so that nothing said while the history is read is lost.
       const stream = await this.sessions.events.stream(this.sessionId, {}, { signal: controller.signal });
       await this.catchUp();
@@ -539,8 +558,12 @@ export class PlanSession {
     }
   }
 
-  /** Read the session's history from where it was last read, then settle where things stand. */
-  private async catchUp(): Promise<void> {
+  /**
+   * Read the session's history from where it was last read, then settle where things stand. The session's
+   * status is read after its history, and can show a stop or an end that came in between. The history is then
+   * read once more (`again`), so that nothing is acted on ahead of the events that led up to it.
+   */
+  private async catchUp(again = false): Promise<void> {
     this.replaying = true;
     let briefed = this.cursor !== null;
     try {
@@ -561,6 +584,8 @@ export class PlanSession {
     if (this.openRuns.size) await this.refreshRuns();
     const session = await this.retrieve();
     this.lastPollAt = Date.now();
+    // It has ended since its history was read: what it said last, and why it ended, is read before it is given up.
+    if (!again && session.status === 'terminated' && !session.archived_at) return this.catchUp(true);
     if (this.gone(session)) return;
     if (!briefed) {
       // The session exists but was never given its plan.
@@ -576,16 +601,22 @@ export class PlanSession {
     // The history can end on a stop that the session's status does not show yet, so what the history says is
     // acted on whatever the status reads. A stop from before the history read here is looked up.
     if (!this.idle && session.status === 'idle') {
-      this.idle = await this.latestIdle();
+      const stop = await this.latestIdle();
+      // A stop that is not in the history just read came before it, or has come since. One that has come since
+      // has the events that led up to it still unread: a call it names would be answered before the work that
+      // went before the call had been heard of. The second reading meets it in its turn.
+      if (stop && !again && !this.seen.has(stop.id)) return this.catchUp(true);
+      this.idle = stop?.stop_reason ?? null;
       this.idleActed = false;
     }
     if (this.idle && !this.idleActed) await this.onIdle(this.idle);
     else if (!this.idle && session.status === 'idle') this.wake = { at: Date.now() + this.timings.graceMs, why: 'the session was idle and did not start again.' };
   }
 
-  private async latestIdle(): Promise<StopReason | null> {
+  /** The session's most recent stop. */
+  private async latestIdle(): Promise<Anthropic.Beta.Sessions.BetaManagedAgentsSessionStatusIdleEvent | null> {
     for await (const event of this.sessions.events.list(this.sessionId, { types: ['session.status_idle'], order: 'desc', limit: 1 })) {
-      if (event.type === 'session.status_idle') return event.stop_reason;
+      if (event.type === 'session.status_idle') return event;
     }
     return null;
   }
@@ -951,7 +982,7 @@ export class PlanSession {
       if (now - this.lastPollAt >= this.timings.usagePollMs) {
         this.lastPollAt = now;
         const session = await this.retrieve();
-        if (this.gone(session)) return;
+        if (this.ended(session)) return;
         if (session.status === 'idle' && now - this.lastEventAt >= this.timings.usagePollMs) {
           // Stopped, but the stream never said so: it has gone quiet. Connect again and read what was missed.
           if (this.idle === null) return this.leave('reconnect');
@@ -962,7 +993,7 @@ export class PlanSession {
 
       if (this.budgetCheckAt && Date.now() >= this.budgetCheckAt && this.idle?.type === 'budget_reached') {
         const session = await this.retrieve();
-        if (this.gone(session)) return;
+        if (this.ended(session)) return;
         // Not stopped as far as its status says: either its work is on its way again (the stream will say so, and
         // that ends this watch) or the status is a moment behind. Look again shortly.
         this.budgetCheckAt = session.status === 'idle' ? null : Date.now() + this.timings.graceMs;

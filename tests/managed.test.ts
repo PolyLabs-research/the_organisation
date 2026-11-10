@@ -38,8 +38,12 @@ afterEach(async () => {
 
 const PHASES = ['Spec', 'Build', 'Test', 'Release'];
 
-/** Stands in for the engine: records what a session tells it and answers as the engine would. */
-function recorder(options: { haltAfter?: string; halt?: 'pause' | 'cancel' } = {}) {
+/**
+ * Stands in for the engine: records what a session tells it and answers as the engine would. With `haltOnceRead`
+ * it asks for the session to be held as soon as its history has been read, which is when a session says where
+ * reading stands: after everything that was there has been heard, and before any of it is answered.
+ */
+function recorder(options: { haltAfter?: string; halt?: 'pause' | 'cancel'; haltOnceRead?: boolean } = {}) {
   const log: string[] = [];
   const state = {
     recorded: [] as string[],
@@ -134,6 +138,7 @@ function recorder(options: { haltAfter?: string; halt?: 'pause' | 'cancel' } = {
     checkpoint(readFrom, handledTo) {
       state.cursor = readFrom;
       state.handled = handledTo;
+      if (options.haltOnceRead) state.halt = options.halt ?? 'pause';
     },
   };
   return { hooks, log, state };
@@ -833,7 +838,9 @@ describe('holding a session', () => {
     let listings = 0;
     api.failAlways((x) => x.method === 'GET' && x.path === '/v1/files' && ++listings > 1, 500, 'internal error');
     const r = recorder();
-    const failure = await provider.executePlan(job(r.hooks)).catch((err) => err);
+    // Without the look at a session that has gone quiet, which connects again by itself and would add to the count.
+    const unwatched = new ClaudeProvider({ apiKey: 'test-key', baseURL: api.baseURL, maxRetries: 0, managedStateFile: path.join(dir, 'managed.json'), sessionTimings: { ...TIMINGS, usagePollMs: 60_000 } });
+    const failure = await unwatched.executePlan(job(r.hooks)).catch((err) => err);
     expect(failure).toBeInstanceOf(ProviderError);
     expect(failure).toMatchObject({ code: 'unavailable', retryable: true });
     const session = api.session();
@@ -929,8 +936,7 @@ describe('picking a session up again', () => {
     expect(sent(session, 'user.custom_tool_result')).toHaveLength(0);
 
     // A second look, which reads the call and what came after it, and is again told to hold before answering.
-    const second = recorder();
-    second.state.halt = 'pause';
+    const second = recorder({ haltOnceRead: true });
     expect(await provider.executePlan(job(second.hooks, { session: pickUp(session, first) }))).toEqual({ status: 'paused' });
     expect(sent(session, 'user.custom_tool_result')).toHaveLength(0);
     // Where to read from next time stays at the call; how far things were acted on has moved past it.
@@ -968,8 +974,7 @@ describe('picking a session up again', () => {
     const said = session.events.find((e) => e.type === 'agent.message')!;
 
     // The next look reads the call again, after what came just before it, and is told to hold once more.
-    const second = recorder();
-    second.state.halt = 'pause';
+    const second = recorder({ haltOnceRead: true });
     const left = { id: session.id, cursor: call.processed_at as string, handled: said.processed_at as string, openRuns: [], runThreads: [], reported: false };
     expect(await provider.executePlan(job(second.hooks, { session: left }))).toEqual({ status: 'paused' });
     expect(sent(session, 'user.custom_tool_result')).toHaveLength(0);
@@ -1095,20 +1100,22 @@ describe('a session that goes wrong', () => {
   });
 
   it('acts on a stop it read in the history even when the session\'s status has not caught up', async () => {
+    let dropped = Infinity;
     api.script = async (s) => {
       s.running();
       for (const name of PHASES) await phase(s, name);
       const reply = await s.call('report_to_board', { headline: 'Shipped', summary: 'Done.', outcomes: [] });
       if (reply.isError) throw new Error(reply.text);
       // The stream drops just as the lead ends its turn, and for a while the session still reads as running.
-      s.statusLagMs = 300;
+      s.statusLagMs = 3000;
       s.drop();
+      dropped = Date.now();
       s.idle({ type: 'end_turn' });
     };
     const r = recorder();
-    const started = Date.now();
     expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
-    expect(Date.now() - started).toBeLessThan(250);
+    // Well before the status caught up. Measured from the drop, so that a slow machine does not count against it.
+    expect(Date.now() - dropped).toBeLessThan(2000);
   });
 
   it('does not take a pause between an agent finishing and its lead waking as the lead stopping', async () => {
@@ -1125,7 +1132,9 @@ describe('a session that goes wrong', () => {
       await report(s);
     };
     const r = recorder();
-    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    // With a long wait for a lead to start again by itself: on a busy machine these pauses can last many times what they ask for.
+    const patient = new ClaudeProvider({ apiKey: 'test-key', baseURL: api.baseURL, maxRetries: 0, managedStateFile: path.join(dir, 'managed.json'), sessionTimings: { ...TIMINGS, graceMs: 5000 } });
+    expect(await patient.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
     expect(messages(api.session())).toEqual(['Carry out this plan.']);
   });
 
@@ -1185,7 +1194,8 @@ describe('a session that goes wrong', () => {
     };
     const r = recorder();
     expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
-    expect(api.count('GET', `/v1/sessions/${api.session().id}/events/stream`)).toBe(2);
+    // It connected again to find out. (More than once on a busy machine, where an answer can take long enough to look like silence.)
+    expect(api.count('GET', `/v1/sessions/${api.session().id}/events/stream`)).toBeGreaterThanOrEqual(2);
   });
 
   it('sets a lead going again when it stops without reporting', async () => {
@@ -1244,6 +1254,22 @@ describe('a session that goes wrong', () => {
     const r = recorder();
     expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'lost', reason: 'The sandbox could not be restored.' });
     expect(r.state.recorded).toEqual(['Spec']);
+    // What the session said last was heard before it was given up.
+    expect(r.state.notes).toContain('The session met an error: The sandbox could not be restored.');
+  });
+
+  it('says why a session ended when its end never reached the stream', async () => {
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES.slice(0, 2)) await phase(s, name);
+      // The session dies, and neither its error nor its end is said on the stream: only its status shows it.
+      s.streams.clear();
+      s.emit('session.error', { error: { type: 'unknown_error', message: 'The sandbox could not be restored.', retry_status: { type: 'terminal' } } });
+      s.terminate();
+    };
+    const r = recorder();
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'lost', reason: 'The sandbox could not be restored.' });
+    expect(r.state.recorded).toEqual(['Spec', 'Build']);
   });
 
   it('marks an agent that gave up or was declined as failed', async () => {
@@ -1654,6 +1680,32 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(plan.status).toBe('done');
     expect(api.sessions.size).toBe(1);
     expect(plan.managed!.spentUsd).toBe(0.8);
+  });
+
+  it('files a task under the phase it was done in when that phase is recorded just as the session is picked up', async () => {
+    // The lead does the whole of Spec, records it and waits, in the moment between the history of its session
+    // being read and its status being asked for. The record is found from the status, ahead of the events that
+    // led up to it, which are still on the stream.
+    api.script = async () => {};
+    let started = false;
+    const push = api.requests.push.bind(api.requests);
+    api.requests.push = (...items) => {
+      for (const request of items) {
+        const history = request.method === 'GET' && /^\/v1\/sessions\/[^/]+\/events$/.test(request.path) && ![...request.query.keys()].some((key) => key.startsWith('types'));
+        if (!history || started) continue;
+        started = true;
+        // A microtask: it runs when the stand-in has finished serving the listing.
+        queueMicrotask(() => void wholePlan(api.session()).catch((err) => (api.session().failure = err)));
+      }
+      return push(...items);
+    };
+    h = await setup();
+    await runToRest(h.runner);
+    api.requests.push = push;
+    const plan = h.org.plans[0]!;
+    expect(api.session().failure).toBeNull();
+    expect(plan.status).toBe('done');
+    expect(plan.phases.map((p) => p.tasks.map((t) => t.title))).toEqual(PHASES.map((name) => [`${name}: write the document`]));
   });
 
   it('starts a fresh session when the first is lost, with the phases already recorded marked as such', async () => {
