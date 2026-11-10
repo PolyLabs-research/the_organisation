@@ -7,6 +7,9 @@ import { nextWork } from './engine/work';
 import type { Provider } from './providers/types';
 import type { Store } from './store';
 
+/** How long deleting an organisation waits for its hosted sessions to be held. */
+const HOLD_BEFORE_REMOVAL_MS = 30_000;
+
 /** Every organisation this server knows about, each with the runner that drives it. */
 export class Registry {
   private readonly runners = new Map<string, OrgRunner>();
@@ -98,8 +101,12 @@ export class Registry {
     await runner.idle().catch(() => {});
     // Once the organisation is gone nothing knows of its hosted sessions, so none may be left with room to spend.
     // The ones that were being followed have just been held. Any other that is not finished is held here: it is
-    // usually at its cap already, and then this changes nothing.
-    await runner.holdSessions({ all: true }).catch(() => {});
+    // usually at its cap already, and then this changes nothing. It is given half a minute and no longer, so that
+    // an organisation can still be deleted while the provider is out of reach.
+    await Promise.race([
+      runner.holdSessions({ all: true }).catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, HOLD_BEFORE_REMOVAL_MS).unref()),
+    ]);
     // Its hosted sessions would be left with nothing to say what they were for. Where the organisation was
     // set to archive sessions, the ones still open are archived with it.
     if (runner.org.settings.archiveSessions) await runner.archiveSessions({ all: true }).catch(() => {});
