@@ -210,6 +210,24 @@ describe('the loop', () => {
     expect(h.org.history.map((c) => c.number)).toEqual([1, 2, 3, 4]);
   });
 
+  it('says once that the log of calls cannot be written, and carries on with the work', async () => {
+    h = await harness();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failing = vi.spyOn(h.store, 'appendActivity').mockRejectedValue(new Error('EACCES: permission denied'));
+    try {
+      await runToRest(h.runner);
+      await waitFor(() => warn.mock.calls.length > 0, 'the warning');
+      expect(h.org.plans.every((p) => p.status === 'done')).toBe(true);
+      expect(failing.mock.calls.length).toBeGreaterThan(10);
+      const said = warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('activity log'));
+      expect(said).toHaveLength(1);
+      expect(said[0]).toMatch(/Could not write to the activity log of org_\w+: EACCES/);
+    } finally {
+      failing.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   it('keeps a cycle in live state while it cannot be archived, and archives it once it can', async () => {
     h = await harness({ settings: { maxCycles: 3 } });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

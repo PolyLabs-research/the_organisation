@@ -121,6 +121,7 @@ export class OrgRunner {
   private saving: Promise<void> = Promise.resolve();
   private saveError: Error | null = null;
   private auditWarned = false;
+  private activityWarned = false;
   private activitySeq = 0;
   private readonly retryDelayMs: number;
   private readonly emitIntervalMs: number;
@@ -909,7 +910,14 @@ export class OrgRunner {
     if (this.disposed) return;
     this.activity.push(entry);
     if (this.activity.length > MAX_ACTIVITY) this.activity.splice(0, this.activity.length - MAX_ACTIVITY);
-    this.store.appendActivity(this.org.id, entry).catch(() => {});
+    this.store.appendActivity(this.org.id, entry).then(
+      () => (this.activityWarned = false),
+      (err: Error) => {
+        // The work itself is safe in the organisation's state; what is lost is its line in the log of calls. Said once, not per call.
+        if (!this.activityWarned) console.warn(`Could not write to the activity log of ${this.org.id}: ${err.message}. Calls made until this is put right will be missing from the timeline and the spend history.`);
+        this.activityWarned = true;
+      },
+    );
     for (const listener of this.listeners) listener({ type: 'activity', entry });
   }
 
