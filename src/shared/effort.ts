@@ -68,6 +68,13 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 };
 
+/**
+ * The smallest and the largest of a list of any length. Math.min(...list) hands over every value as an argument of
+ * its own, and the log of a long-lived organisation is more arguments than a call can take.
+ */
+export const least = (xs: number[]) => xs.reduce((a, b) => Math.min(a, b), Infinity);
+export const most = (xs: number[]) => xs.reduce((a, b) => Math.max(a, b), -Infinity);
+
 /** Least squares of log(y) on effort: work tends to grow by a factor per level, not by a fixed amount. */
 function fitLog(samples: Sample[], y: (s: Sample) => number): { a: number; b: number } | null {
   const points = samples.filter((s) => y(s) > 0);
@@ -90,13 +97,18 @@ export class Calibration {
   constructor(readonly samples: Sample[]) {
     const groups = new Map<string, Sample[]>();
     for (const s of samples) {
-      for (const key of [`${s.model}|${s.effort}`, `*|${s.effort}`]) groups.set(key, [...(groups.get(key) ?? []), s]);
+      for (const key of [`${s.model}|${s.effort}`, `*|${s.effort}`]) {
+        // Added to its group where the group is: a fresh copy of the group for every sample takes the square of a long log's length.
+        const group = groups.get(key);
+        if (group) group.push(s);
+        else groups.set(key, [s]);
+      }
     }
     this.levels = [...groups.entries()]
       .map(([key, group]) => {
         const [model, effort] = key.split('|');
         const minutes = group.map((s) => s.minutes);
-        return { effort: Number(effort), model: model!, n: group.length, minutes: { median: median(minutes), min: Math.min(...minutes), max: Math.max(...minutes) }, costUsd: { median: median(group.map((s) => s.costUsd)) } };
+        return { effort: Number(effort), model: model!, n: group.length, minutes: { median: median(minutes), min: least(minutes), max: most(minutes) }, costUsd: { median: median(group.map((s) => s.costUsd)) } };
       })
       .sort((a, b) => a.model.localeCompare(b.model) || a.effort - b.effort);
   }
@@ -261,13 +273,13 @@ function planForecast(
           complete = false;
           continue;
         }
-        const slot = free.indexOf(Math.min(...free));
+        const slot = free.indexOf(least(free));
         const start = free[slot]!;
         const taskEnd = start + est.minutes * MINUTE;
         free[slot] = taskEnd;
         bars.push({ execId: plan.ownerId, planId: plan.id, phaseIndex: index, taskId: task.id, agent: slot + 1, label: task.title, effort: task.effort!, start, end: taskEnd, basis: est.basis, costUsd: est.costUsd });
       }
-      end = complete ? Math.max(...free) + reviewMs : null;
+      end = complete ? most(free) + reviewMs : null;
     } else {
       const est = phases.estimate(phase.effort, model);
       if (est) {

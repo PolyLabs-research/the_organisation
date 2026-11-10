@@ -1,6 +1,6 @@
 import { CircleAlert, CircleCheck, Clock, Hourglass, Scale, TriangleAlert } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
-import { Calibration, EFFORT_SCALE, forecast, phaseSamples, startOf, taskSamples, type ProjectedBar } from '../shared/effort';
+import { Calibration, EFFORT_SCALE, forecast, least, most, phaseSamples, startOf, taskSamples, type ProjectedBar } from '../shared/effort';
 import { isOpen } from '../shared/signatory';
 import { INTERRUPTED, type ActivityEntry, type Organisation, type OrgView, type WorkKind } from '../shared/types';
 import { describeWait, heldBy } from '../shared/waits';
@@ -134,7 +134,7 @@ export function Overseer({ view, activity }: { view: OrgView; activity: Activity
   useEffect(() => setNow(Date.now()), [entries.length]);
   // Paused, the forecast runs from where the work stopped (as if resumed then), so a long pause does not squeeze the history.
   const running = org.status === 'running';
-  const anchor = running || !entries.length ? now : Math.max(...entries.map((e) => Date.parse(e.at)));
+  const anchor = running || !entries.length ? now : most(entries.map((e) => Date.parse(e.at)));
   const projected = useMemo(() => forecast(org, entries, anchor), [org, entries, anchor]);
 
   return (
@@ -193,7 +193,7 @@ function laneOrder(org: Organisation): string[] {
   return [...org.executives].sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind)).map((e) => e.id);
 }
 
-function Timeline({ org, entries, projected, now, running }: { org: Organisation; entries: ActivityEntry[]; projected: ProjectedBar[]; now: number; running: boolean }) {
+export function Timeline({ org, entries, projected, now, running }: { org: Organisation; entries: ActivityEntry[]; projected: ProjectedBar[]; now: number; running: boolean }) {
   const [win, setWin] = useState<Window>('all');
   const [showForecast, setShowForecast] = useState(true);
   const [asTable, setAsTable] = useState(false);
@@ -240,8 +240,8 @@ function Timeline({ org, entries, projected, now, running }: { org: Organisation
   if (!bars.length) return <Empty title="Nothing has happened yet.">Once the organisation starts, every call and agent task appears here on its seat’s lane.</Empty>;
 
   const forecasting = showForecast && projected.length > 0;
-  const last = Math.max(...bars.map((b) => b.end), running || forecasting ? now : 0);
-  const first = Math.min(...bars.map((b) => b.start));
+  const last = Math.max(most(bars.map((b) => b.end)), running || forecasting ? now : 0);
+  const first = least(bars.map((b) => b.start));
   const t1 = last;
   const t0 = win === 'all' ? first : Math.max(first, t1 - Number(win) * 60_000);
   const span = Math.max(t1 - t0, 60_000);
@@ -458,8 +458,8 @@ function CalibrationChart({ calibration, models }: { calibration: Calibration; m
   const M = { l: 52, r: 12, t: 10, b: 30 };
   const levels = calibration.levels.filter((l) => models.includes(l.model));
   const values = levels.flatMap((l) => [l.minutes.min, l.minutes.max]).filter((v) => v > 0);
-  const lo = Math.max(Math.min(...values) / 1.6, 0.02);
-  const hi = Math.max(...values) * 1.6;
+  const lo = Math.max(least(values) / 1.6, 0.02);
+  const hi = most(values) * 1.6;
   const w = Math.max(width, 280);
   const xOf = (effort: number, i: number) => M.l + ((effort - 0.5) / 10) * (w - M.l - M.r) + (i - (models.length - 1) / 2) * 7;
   const yOf = (minutes: number) => M.t + (1 - (Math.log(Math.max(minutes, lo)) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))) * (H - M.t - M.b);
@@ -485,7 +485,7 @@ function CalibrationChart({ calibration, models }: { calibration: Calibration; m
           // The trend is drawn one level either side of what has been measured, not out to levels nothing supports.
           const seen = levels.filter((l) => l.model === model).map((l) => l.effort);
           const curve = Array.from({ length: 10 }, (_, k) => k + 1)
-            .filter((effort) => effort >= Math.min(...seen) - 1 && effort <= Math.max(...seen) + 1)
+            .filter((effort) => effort >= least(seen) - 1 && effort <= most(seen) + 1)
             .map((effort) => ({ effort, est: calibration.estimate(effort, model) }))
             .filter((p) => p.est && p.est.basis === 'fitted');
           return (
@@ -678,7 +678,7 @@ function SpendLine({ entries, budget }: { entries: ActivityEntry[]; budget: numb
 
 function HBars({ rows }: { rows: Array<{ label: string; title?: string; value: number }> }) {
   const sorted = [...rows].filter((r) => r.value > 0).sort((a, b) => b.value - a.value);
-  const max = Math.max(...sorted.map((r) => r.value), 0.0001);
+  const max = Math.max(most(sorted.map((r) => r.value)), 0.0001);
   if (!sorted.length) return <p className="muted small">Nothing spent yet.</p>;
   return (
     <ul className="hbars">
