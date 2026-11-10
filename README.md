@@ -134,7 +134,7 @@ This is early software, and the README says plainly what has been run for real a
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
 | Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
 | GitHub repositories | Reads checked against the real API on a public repository, without a token. Commits, pull requests and workflows tested against a local stand-in only. Nothing has been written to a real repository. |
-| Tests | 641, among them whole organisations run through the loop. The suite takes about twenty seconds. |
+| Tests | More than 850, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
@@ -593,7 +593,7 @@ The API has no login. It listens on loopback, refuses requests that are not addr
 ## Development
 
 ```bash
-npm test            # engine, providers, keys, workspace, HTTP API
+npm test            # everything: engine, providers, keys, workspace, HTTP API, and the dashboard in a browser
 npm run typecheck
 npm run dev         # server with hot-reloading client on one port
 npm run build       # client production build
