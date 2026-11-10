@@ -391,7 +391,10 @@ export function syncJudge(org: Organisation): void {
   if (org.settings.arbiter === 'judge' && !hasJudge) {
     // Beside the board, ahead of the signatory, where a judge seated at the start would be.
     const at = org.executives.findIndex((e) => e.kind === 'signatory');
-    org.executives.splice(at < 0 ? org.executives.length : at, 0, executiveFromDraft({ profileId: 'judge' }, 'judge')!);
+    // A seat is found by its id, and a lead the founders called "Judge" already answers to this one.
+    let id = 'judge';
+    for (let n = 2; org.executives.some((e) => e.id === id); n++) id = `judge-${n}`;
+    org.executives.splice(at < 0 ? org.executives.length : at, 0, executiveFromDraft({ profileId: 'judge' }, id)!);
   } else if (org.settings.arbiter === 'ceo' && hasJudge) {
     org.executives = org.executives.filter((e) => e.kind !== 'judge');
   }

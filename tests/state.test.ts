@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LEAD_PROFILES, PROFILES, executiveFromDraft } from '../src/shared/profiles';
-import { DEFAULT_SETTINGS, ValidationError, assertModelRefs, createOrganisation, isModelRef, sanitiseSettings } from '../src/server/engine/state';
+import { DEFAULT_SETTINGS, ValidationError, arbiterOf, assertModelRefs, createOrganisation, execById, isModelRef, sanitiseSettings, syncJudge } from '../src/server/engine/state';
 import { MODELS, costOfRequest, priceUsage } from '../src/server/providers/pricing';
 import { MockProvider } from '../src/server/providers/mock';
 import { recommendTeam } from '../src/server/recommend';
@@ -94,6 +94,20 @@ describe('establishing an organisation', () => {
       ['judge', 'judge', 0],
       ['signatory', 'signatory', 0],
     ]);
+  });
+
+  it('seats a judge chosen later under an id no other seat answers to', () => {
+    const judging = { profileId: 'custom', title: 'Head of Judging', short: 'Judge', function: 'Competitions', remit: 'Runs the panel.', phases: [{ id: 'plan', name: 'Plan', purpose: 'p', deliverable: 'd' }, { id: 'run', name: 'Run', purpose: 'p', deliverable: 'd' }] };
+    const org = createOrganisation({ ...base, executives: [judging, { profileId: 'product' }] }, 'org_1');
+    expect(org.executives.map((e) => `${e.id}:${e.kind}`)).toEqual(['ceo:ceo', 'judge:lead', 'cpo:lead', 'signatory:signatory']);
+    org.settings = sanitiseSettings({ arbiter: 'judge' }, org.settings);
+    syncJudge(org);
+    expect(org.executives.map((e) => `${e.id}:${e.kind}`)).toEqual(['ceo:ceo', 'judge:lead', 'cpo:lead', 'judge-2:judge', 'signatory:signatory']);
+    // The engine finds the arbiter's seat by its id: it must find the judge, not the lead.
+    expect(execById(org, arbiterOf(org).id)).toMatchObject({ kind: 'judge', title: 'Independent Judge' });
+    org.settings = sanitiseSettings({ arbiter: 'ceo' }, org.settings);
+    syncJudge(org);
+    expect(org.executives.map((e) => e.id)).toEqual(['ceo', 'judge', 'cpo', 'signatory']);
   });
 
   it('gives two seats of the same profile different ids', () => {
