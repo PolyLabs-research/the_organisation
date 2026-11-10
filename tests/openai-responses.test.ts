@@ -4,6 +4,7 @@ import type { Dialect, Price } from '../src/server/providers/catalogue';
 import { OpenAIResponsesProvider } from '../src/server/providers/openai-responses';
 import type { AgentTool, CallUsage } from '../src/server/providers/types';
 import { FakeOpenAI } from './fake-openai-api';
+import { waitFor } from './helpers';
 
 // The provider for OpenAI's own models, which speaks the Responses API, run
 // against a local stand-in (fake-openai-api.ts). These check what is sent
@@ -176,6 +177,38 @@ describe('fitting a request to what a model takes', () => {
     expect(usage[1]).toMatchObject({ inputTokens: 500, outputTokens: 32000 });
   });
 
+  it('counts a response that was lost part-way, by its length, since it never said what it cost', async () => {
+    const usage: CallUsage[] = [];
+    // The connection drops after 4,000 characters of the answer have arrived.
+    api.responses = [{ text: 'x'.repeat(4000), cut: true }];
+    expect(await ask(provider(), (u) => usage.push(u)).catch((e) => e)).toMatchObject({ code: 'unavailable', retryable: true });
+    expect(usage).toHaveLength(1);
+    // About four characters to a token, for the exchange that went in and for what had come back.
+    expect(usage[0]!.inputTokens).toBe(Math.ceil((JSON.stringify(api.asked[0].input).length + api.asked[0].instructions.length) / 4));
+    expect(usage[0]!.outputTokens).toBeGreaterThanOrEqual(1000);
+    expect(usage[0]!.outputTokens).toBeLessThan(1100);
+    expect(usage[0]!.costUsd).toBeCloseTo((usage[0]!.inputTokens * 2 + usage[0]!.outputTokens * 10) / 1e6, 10);
+    // So is one that an error stopped after it had started.
+    api.responses = [{ text: 'x'.repeat(4000), streamError: { code: 'server_error', message: 'The server had an error.' } }];
+    await ask(provider(), (u) => usage.push(u)).catch(() => {});
+    expect(usage).toHaveLength(2);
+    expect(usage[1]!.outputTokens).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('counts nothing for a call that was stopped on purpose', async () => {
+    const stop = new AbortController();
+    const usage: CallUsage[] = [];
+    api.responses = [{ text: 'x'.repeat(4000), hold: true }];
+    const call = provider()
+      .structured({ kind: 'phase_review', system: SYSTEM, prompt: 'Review the phase.', schema: Answer, model: 'big-model', effort: 'xhigh', onUsage: (u) => usage.push(u), signal: stop.signal, context: {} })
+      .catch((e) => e);
+    await waitFor(() => api.asked.length === 1, 'the request to arrive');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stop.abort();
+    await call;
+    expect(usage).toHaveLength(0);
+  });
+
   it('makes room when the exchange and its reply together overflow the model, and gives the work up when it cannot fit', async () => {
     const overflow = 'Your input exceeds the context window of this model. Please adjust your input and try again.';
     api.rules = [(b) => (b.max_output_tokens > 8000 ? overflow : undefined)];
@@ -335,8 +368,8 @@ describe('an agent run through the Responses API', () => {
     // Five requests for two turns: the second turn was sent four times, each time with the same exchange.
     expect(api.asked).toHaveLength(5);
     for (const again of api.asked.slice(2)) expect(again.input).toEqual(api.asked[1].input);
-    // Two turns, and the response that failed after it had been charged for.
-    expect(usage).toHaveLength(3);
+    // Two turns, the response that failed after it had been charged for, and the one an error stopped part-way.
+    expect(usage).toHaveLength(4);
 
     // A failure that keeps coming is given up on.
     api.seen.length = 0;

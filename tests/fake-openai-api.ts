@@ -65,6 +65,8 @@ export interface FakeResponse {
   bareFinal?: boolean;
   /** Drop the connection before the response is finished. */
   cut?: boolean;
+  /** Send what the model produced and then say nothing more, with the connection left open. */
+  hold?: boolean;
 }
 
 export interface FakeRequest {
@@ -266,7 +268,8 @@ export class FakeOpenAI {
       if (item.type === 'message' && reply.text) for (const delta of pieces(reply.text)) send('response.output_text.delta', { output_index, content_index: 0, item_id: item.id, delta });
       send('response.output_item.done', { output_index, item });
     });
-    if (reply.cut) return void res.destroy();
+    if (reply.cut) return void setTimeout(() => res.destroy(), 5);
+    if (reply.hold) return;
     if (reply.streamError) {
       send('error', { code: reply.streamError.code, message: reply.streamError.message, param: null });
       return void res.end();

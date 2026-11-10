@@ -639,7 +639,7 @@ export class OpenAICompatibleProvider {
 }
 
 /** The pieces of a streamed reply, as they come. If the stream fails before its end, `lost` is called before the failure is passed on. */
-async function* whileItLasts<T>(stream: AsyncIterable<T>, lost: () => void): AsyncGenerator<T> {
+export async function* whileItLasts<T>(stream: AsyncIterable<T>, lost: () => void): AsyncGenerator<T> {
   try {
     yield* stream;
   } catch (err) {
