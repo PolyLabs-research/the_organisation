@@ -12,7 +12,7 @@ const NOON = Date.parse('2026-11-08T12:00:00Z');
 /** That many calls by one lead, twenty seconds apart, the last of them at noon. */
 function log(count: number): ActivityEntry[] {
   return Array.from({ length: count }, (_, i) => ({
-    id: `a${i + 1}`, at: new Date(NOON - (count - 1 - i) * 20_000).toISOString(), kind: 'consult' as const, execId: 'cto', label: `Call ${i + 1}`, model: 'claude-sonnet-5-5',
+    id: `a${i + 1}`, at: new Date(NOON - (count - 1 - i) * 20_000).toISOString(), kind: 'consult' as const, execId: 'cto', label: `Call ${i + 1}`, model: 'm',
     ms: 5000, ok: true, error: null, inputTokens: 3000, outputTokens: 300, costUsd: 0.01,
   }));
 }

@@ -14,9 +14,9 @@ describe('text an agent wrote, as the dashboard shows it', () => {
     const control = shown('Done.\n\n[Open the plan](https://elsewhere.example/collect?d=quote)');
     expect(control).not.toContain('<a');
     expect(control).toContain('<p>Open the plan (https://elsewhere.example/collect?d=quote)</p>');
-    const address = shown('Make a new key at [https://console.anthropic.com/settings/keys](https://elsewhere.example/keys).');
+    const address = shown('Sign in again at [https://bank.example/login](https://elsewhere.example/login).');
     expect(address).not.toContain('<a');
-    expect(address).toContain('https://console.anthropic.com/settings/keys (https://elsewhere.example/keys)');
+    expect(address).toContain('https://bank.example/login (https://elsewhere.example/login)');
     // A path in the workspace, which is what most links in a report are.
     expect(shown('See [the **spec**](engineering/spec.md).')).toBe('<div class="md"><p>See the <strong>spec</strong> (engineering/spec.md).</p></div>');
     expect(shown('[Pay here][1]\n\n[1]: https://elsewhere.example/pay')).toContain('<p>Pay here (https://elsewhere.example/pay)</p>');
