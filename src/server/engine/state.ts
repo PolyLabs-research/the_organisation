@@ -74,6 +74,9 @@ const MAX_BOARD_MESSAGES = 3000;
 
 export class ValidationError extends Error {}
 
+/** The organisation's state could not be written to disk. What was asked for was done, but may not outlast a restart. */
+export class StorageError extends Error {}
+
 /**
  * The version of the saved format this program writes. A new field that has a sensible default needs only its
  * line in `normaliseLoaded`. Raise this when a change needs more than that, and make the step there depend on

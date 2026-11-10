@@ -44,6 +44,7 @@ import {
   sessionAllowance,
   syncJudge,
   toClientView,
+  StorageError,
   ValidationError,
 } from './state';
 import { cycleComplete, nextWork, settle, type WorkItem } from './work';
@@ -486,7 +487,7 @@ export class OrgRunner {
     }
     this.queueSave();
     await this.saving;
-    if (this.saveError) throw this.saveError;
+    if (this.saveError) throw new StorageError(`The organisation could not be saved (${this.saveError.message}), so this may not outlast a restart. Restore storage, then try again.`);
   }
 
   /** Resolves when paused or waiting for a scheduled review, with nothing in flight. */
