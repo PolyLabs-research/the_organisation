@@ -7,6 +7,7 @@ import { hasCause, translate } from './errors';
 import { strictSchema, type JsonSchema } from './schema';
 import { ManagedResources } from './managed/resources';
 import { DEFAULT_TIMINGS, PlanSession, archiveSession, threadDetail, type SessionTimings } from './managed/session';
+import { scrub } from './openai-compatible';
 import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webFetchToolFor, webSearchToolFor } from './pricing';
 import {
   ProviderError,
@@ -52,6 +53,7 @@ export interface ClaudeProviderOptions {
 /** Runs the organisation on Claude through the Anthropic API. */
 export class ClaudeProvider implements Provider {
   private readonly client: Anthropic;
+  private readonly apiKey: string;
   private readonly turnRetryDelayMs: number;
   private readonly resources: ManagedResources;
   private readonly workspace: string;
@@ -60,12 +62,23 @@ export class ClaudeProvider implements Provider {
   constructor(options: ClaudeProviderOptions = {}) {
     const { turnRetryDelayMs = 2000, managedStateFile = 'data/managed.json', workspace = 'default', sessionTimings, ...clientOptions } = options;
     this.turnRetryDelayMs = turnRetryDelayMs;
+    this.apiKey = options.apiKey ?? '';
     // With no key passed, the SDK resolves credentials from the environment
     // (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile).
     this.client = new Anthropic({ maxRetries: 4, ...clientOptions });
     this.resources = new ManagedResources(this.client, managedStateFile);
     this.workspace = workspace;
     this.sessionTimings = { ...DEFAULT_TIMINGS, ...sessionTimings };
+  }
+
+  /**
+   * What went wrong, as the engine needs to know it. What Anthropic, or an endpoint that stands in for it, said goes
+   * on to be shown and kept, so a key it quotes back is taken out first.
+   */
+  private translate(err: unknown): ProviderError {
+    const failure = translate(err);
+    const clean = scrub(failure.message, this.apiKey);
+    return clean === failure.message ? failure : new ProviderError(clean, failure.code, failure.retryable);
   }
 
   /**
@@ -76,7 +89,7 @@ export class ClaudeProvider implements Provider {
     try {
       return await new PlanSession({ client: this.client, resources: this.resources, workspace: this.workspace, timings: this.sessionTimings }, job).run();
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -84,7 +97,7 @@ export class ClaudeProvider implements Provider {
     try {
       return await threadDetail(this.client, sessionId, threadId);
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -95,7 +108,7 @@ export class ClaudeProvider implements Provider {
       return true;
     } catch (err) {
       if (err instanceof Anthropic.NotFoundError) return false;
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -103,7 +116,7 @@ export class ClaudeProvider implements Provider {
     try {
       return await archiveSession(this.client, sessionId, Math.min(300, this.sessionTimings.graceMs));
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -112,7 +125,7 @@ export class ClaudeProvider implements Provider {
     try {
       return await this.resources.ensure(spec);
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -140,12 +153,12 @@ export class ClaudeProvider implements Provider {
       // refuse such a schema, repeat the call with the SDK's more conservative
       // form and keep to that form afterwards.
       // A request turned away for what it says, or for its length, would be turned away in either form.
-      if (!(err instanceof Anthropic.BadRequestError) || this.plainSchemas || translate(err).code !== 'bad_request') throw translate(err);
+      if (!(err instanceof Anthropic.BadRequestError) || this.plainSchemas || this.translate(err).code !== 'bad_request') throw this.translate(err);
       try {
         message = await this.requestStructured(req, true);
         this.plainSchemas = true;
       } catch {
-        throw translate(err);
+        throw this.translate(err);
       }
     }
     req.onUsage?.(usageOf(message, req.model));
@@ -254,8 +267,8 @@ export class ClaudeProvider implements Provider {
         badJson = 0;
         retries = 0;
       } catch (err) {
-        if (req.signal?.aborted) throw translate(err);
-        const failure = translate(err);
+        if (req.signal?.aborted) throw this.translate(err);
+        const failure = this.translate(err);
         // The failed turn was never added to the history, so the same request can be sent
         // again. Giving up on the run instead would mean paying for every earlier turn twice.
         if (failure.retryable && retries < TURN_RETRIES) {

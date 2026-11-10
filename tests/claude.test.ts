@@ -312,6 +312,18 @@ describe('structured calls', () => {
     expect(usage[0]!.costUsd).toBeCloseTo(declined + fallback, 10);
   });
 
+  it('takes the key out of a refusal that quotes it back, before the refusal is shown or kept', async () => {
+    replies.push({ status: 401, error: { type: 'authentication_error', message: 'invalid x-api-key: test-key has been revoked' } });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect(err.code).toBe('auth');
+    expect(err.message).toContain('invalid x-api-key: [the key] has been revoked');
+    expect(err.message).not.toContain('test-key');
+    // An agent's call meets the same refusal the same way.
+    replies.push({ status: 401, error: { type: 'authentication_error', message: 'invalid x-api-key: test-key has been revoked' } });
+    const met = await failure(provider().agent({ kind: 'task', system, prompt: 'Write the spec.', model: 'claude-opus-5-5', effort: 'medium', tools: [], webSearch: null, maxTurns: 10, context: {} }));
+    expect(met.message).not.toContain('test-key');
+  });
+
   it.each([
     [401, 'authentication_error', 'auth', false],
     [403, 'permission_error', 'auth', false],
