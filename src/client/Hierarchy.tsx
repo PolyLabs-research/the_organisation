@@ -1,5 +1,5 @@
 import { Gavel, PenLine, Send } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { waitingOnPerson, waitsOnAi } from '../shared/signatory';
 import type { ActiveWork, Executive, Organisation, OrgView, Plan, Steer } from '../shared/types';
 import { api, useAction, type Meta } from './api';
@@ -22,11 +22,19 @@ function Working({ label }: { label: string }) {
 function Shareholders({ org, onView }: { org: Organisation; onView: (view: OrgView) => void }) {
   const [text, setText] = useState('');
   const send = useAction();
-  const submit = () =>
-    send.run(async () => {
-      onView(await api.steer(org.id, text.trim()));
-      setText('');
-    });
+  // One steer is sent once. The button is out of use while a steer is on its way, but the shortcut is not a button, and
+  // a key held down repeats: without this, each repeat that came before the page had drawn itself again sent the steer again.
+  const sending = useRef(false);
+  const submit = () => {
+    if (send.busy || sending.current) return;
+    sending.current = true;
+    return send
+      .run(async () => {
+        onView(await api.steer(org.id, text.trim()));
+        setText('');
+      })
+      .finally(() => (sending.current = false));
+  };
   const steers = [...org.steers].reverse();
   const latest = steers.slice(0, 1);
   const earlier = steers.slice(1, 8);

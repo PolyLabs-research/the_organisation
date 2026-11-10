@@ -146,6 +146,27 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     }
   });
 
+  it('sends a steer once, however the shortcut is pressed', async () => {
+    const runner = await organisation('Steered once');
+    const page = await open('/#/org/' + runner.org.id);
+    try {
+      const box = page.getByLabel('Steer for the CEO', { exact: true });
+      await box.fill('Keep the first box under 20 GBP.');
+      // Ctrl+Enter held down: the key repeats before the page has heard back, or even drawn itself again.
+      await box.evaluate((el) => {
+        for (const repeat of [false, true, true]) el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, repeat }));
+      });
+      await expect.poll(() => box.inputValue()).toBe('');
+      expect(runner.org.steers.map((s) => s.text)).toEqual(['Keep the first box under 20 GBP.']);
+      // The next steer goes as usual.
+      await box.fill('Deliver within the country only.');
+      await box.press('Control+Enter');
+      await expect.poll(() => runner.org.steers.length).toBe(2);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('leaves the Help dialog as it is while the organisation changes behind it', async () => {
     const runner = await organisation('Reading the guide');
     const page = await open('/#/org/' + runner.org.id);
