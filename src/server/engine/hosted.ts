@@ -6,6 +6,7 @@ import { PLAN_TOOLS, ProviderError, type PlanHooks, type PlanJob, type PlanOutco
 import { WorkspaceError } from '../workspace';
 import type { Commit, EngineContext } from './handlers';
 import * as prompts from './prompts';
+import { recalled } from './recall';
 import { MAX_RESULT_CHARS, clean, fileReport, logRemitDecisions, newTask, now } from './records';
 import { MAX_REQUESTS_PER_GATE, alreadyRaised, raiseRequests } from './signatory';
 import { execById, isPlanActive, postToBoard, sessionAllowance, teamDir } from './state';
@@ -546,12 +547,15 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
   let outcome: PlanOutcome;
   try {
     const files = mountable(await workspace.list());
+    // A lead in a session plans its own phases, so it is told at the start what the organisation remembers on the objective.
+    // It is told once: nothing in a session can search the memory.
+    const memory = await recalled(org, ctx.memory, [plan.objective, plan.successCriteria, plan.rationale].join('\n'), { tool: false });
     const job: PlanJob = {
       planId: plan.id,
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),
       system: prompts.sessionSystem(org, lead),
       // The kickoff states every instruction the board has given so far.
-      kickoff: { message: prompts.sessionKickoff(org, lead, plan, files) + '\n\n' + businessContext(org), instructions: plan.amendments.length },
+      kickoff: { message: prompts.sessionKickoff(org, lead, plan, files) + (memory ? '\n\n' + memory : '') + '\n\n' + businessContext(org), instructions: plan.amendments.length },
       resume: () => ({ message: prompts.sessionResume(org, lead, plan, pendingInstructions()) + '\n\n' + businessContext(org), instructions: plan.amendments.length }),
       executiveModel: org.settings.executiveModel,
       executiveEffort: org.settings.executiveEffort,

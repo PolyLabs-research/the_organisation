@@ -198,6 +198,13 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
           </span>
         </label>
         <label className="check">
+          <input type="checkbox" checked={draft.recall} onChange={(e) => set('recall', e.target.checked)} />
+          <span>
+            <strong>Show leads what the organisation remembers.</strong> Before a lead directs, plans or rules, it is shown the passages from earlier cycles that bear most on the matter:
+            six at most, which adds a little to those calls. Agents can search the memory whatever is set here.
+          </span>
+        </label>
+        <label className="check">
           <input type="checkbox" checked={draft.resumeOnRestart} onChange={(e) => set('resumeOnRestart', e.target.checked)} />
           <span><strong>Resume after a server restart.</strong> Applies only when this organisation was running or waiting. Manual pauses, budget limits and cycle limits still hold.</span>
         </label>

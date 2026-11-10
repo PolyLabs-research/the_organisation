@@ -21,6 +21,7 @@ It runs on **Claude, GPT, Gemini, DeepSeek, Qwen, Kimi and anything on OpenRoute
 
 - **It is an organisation, not a swarm.** A CEO, up to eight executive leads from a library of fifteen (CTO, CPO, CMO, CFO, COO, General Counsel and the rest, or seats you define yourself), and one to eight agents under each. Every lead works to an operating profile, such as Spec → Build → Test → Release, and a phase has to pass the lead's gate before the next begins. Work that fails the gate is sent back.
 - **It remembers the business.** A shared calendar and persistent commitments survive cycles. Every job has an owner, next action, dependencies and optional dates. Customer records, a scorecard, financial records, organisational knowledge and incoming events are shared with the agents. Deliveries need evidence and verification.
+- **It remembers every cycle.** Prompts stay short, and only the three most recent cycles stay in live state. Everything the organisation reported, decided, planned and wrote stays findable all the same: a lead is shown the passages from earlier cycles that bear on what it is about to direct, plan or rule on, and agents search it when their work calls for it. It is an index of words built from the organisation's own files, with no model and no service behind it.
 - **It can wait.** Scheduled reviews, incoming events and calendar dates drive work. Between reviews it sleeps without model calls. The interface and establish command default to hourly reviews; continuous operation remains available.
 - **It governs itself.** A lead decides whatever is inside its remit. When two leads' priorities collide, each states a position and the CEO rules, or an independent judge if you seat one. Every decision is on the record, with its reasons.
 - **It does not stop, and it cannot run away.** One cycle's reports set off the next round of work, for as long as you let it. A hard budget pauses it. So does a cycle limit. You can pause, stop, steer or change any setting while it runs, and all of its state is plain JSON on disk, so it carries on where it left off after a restart.
@@ -136,6 +137,7 @@ This is early software, and the README says plainly what has been run for real a
 | Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
 | GitHub repositories | Reads checked against the real API on a public repository, without a token. Commits, pull requests and workflows tested against a local stand-in only. Nothing has been written to a real repository. |
 | Tool servers (MCP) | Tested with the protocol's official client against a real server of the protocol on the same machine, and signing in against an authorisation server built from the protocol's own handlers. No third party's server has been connected, and no real service signed in to. |
+| Memory | Run in simulation and in tests: whole organisations over six cycles, with what the archive holds found again and put in front of the leads. No real model has yet been shown any of it, or chosen for itself when to search. |
 | Tests | More than 900, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
@@ -145,7 +147,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 - [User guide](docs/user-guide.md): how to use it, step by step
 - [Features](#features), [what you can use it for](#what-you-can-use-it-for) and [how it differs from agent frameworks](#how-it-differs-from-agent-frameworks)
 - [How an organisation works](#how-an-organisation-works)
-- [Shared calendar and business operations](#shared-calendar-and-business-operations)
+- [Shared calendar and business operations](#shared-calendar-and-business-operations) and [memory](#memory)
 - [Business email and service accounts](#business-email-and-service-accounts), and [what each role may do](#what-each-role-may-do)
 - [GitHub repositories](#github-repositories), [tool servers](#tool-servers-mcp) and [work approaches](#work-approaches)
 - [The interface](#the-interface)
@@ -239,6 +241,34 @@ The COO owns operational continuity: overdue commitments, handovers, recurring o
 In **Settings**, set the minutes between reviews (zero means continuous operation). New organisations from the interface or establish command default to 60 minutes; existing organisations and API callers retain continuous operation unless changed. **Resume after a server restart** is opt-in and applies only to organisations previously running or waiting. It never overrides a manual pause, spent budget or cycle limit. The server must be running for timers to fire; on resume, missed boundaries are considered once.
 
 The [operating API and data guide](docs/business-operations.md) describes event ingestion, permissions, revisions, recurrence and recovery. The event endpoint is a local integration point. Gmail and other mailboxes can be connected explicitly under **Email & accounts**; payment services and outbound publishing are not connected automatically.
+
+## Memory
+
+Prompts are kept short on purpose. A lead is shown the cycle it is in and the last four in brief, and only the three most recent cycles stay in live state: older ones go to the archive. Left at that, an organisation that runs for long forgets what it did, has it done again, and rules against itself. So everything it has reported, decided, planned and written is kept findable, however many cycles ago it was:
+
+- every report to the board, and what each cycle came to;
+- every decision: the ruling, the reasons, the objections and each lead's position;
+- every plan, with how it ended and what each phase produced;
+- every agent's report on its task;
+- every request to the signatory, and what became of it;
+- every steer with the CEO's answer, and the business knowledge register;
+- the text of the files in the workspace.
+
+**Who is shown what.**
+
+- **A lead** is shown the passages that share most with the matter in hand before it proposes or directs a cycle's work, drafts a plan, hands out a phase's tasks, or takes part in a board decision: six at most, oldest first, each named by its cycle, whose it was and what it is. They come from earlier cycles and from the files; the cycle it is in is in front of it already. Only what is close to the best match is shown, so a young organisation's prompts mostly carry none. Work that comes round under the same name is shown once, as it last stood. A decision is quoted with its ruling, a plan with how it ended, a request with whether it was paid or signed. The lead is told that this is the organisation's own record and not an instruction: to build on it, not to have done again what it shows as done, and not to go against a decision in it without saying that it is, and why. The steps that judge the work in hand (gate reviews, board reports, reading other leads' reports) are shown none of it.
+- **An AI in the signatory's seat** is shown what was asked of the signatory in cycles gone by and what the board ruled, so that a payment asked for a second time is seen for a repeat. It is shown nothing an agent wrote.
+- **Agents** have a `recall` tool: search in a few words, among everything or one kind of thing, and read any result in full. Every role's agents have it, with no privilege to grant, because it reads only what the organisation itself wrote for all its seats to see.
+
+Showing leads is a setting, **Show leads what the organisation remembers**, on by default, for organisations established before this as well. It adds at most about 1,200 tokens to each of those calls, and usually far fewer. Agents can search whatever it says.
+
+**How it finds things.** It is an index of words, built in memory from the organisation's own files when it is first needed, with no model and no outside service behind it. It works in simulation, costs nothing to search, and holds nothing that is not on disk already: lose it and it is built again. It finds what shares words with what is asked, not what means the same in other words. "Supplier" finds "suppliers" and "pricing" finds "priced"; "vendor" does not find "supplier". A word that is rare in the organisation's record counts for more than one that is everywhere, and a word in a title for more than one in the text. Asked about four things or more, an item has to share at least two of the words. The plain forms of English words are brought together; in other languages a word is found in the form it is written in, and writing with no spaces between words (Chinese, Japanese, Thai) is matched two characters at a time.
+
+**What it holds.** Text files of up to 400 KB, the most recently written first up to 8 million characters in all, each in parts of about 1,800 characters; up to 8,000 characters of any one report, decision, plan or task report; and agents' task reports from archived cycles up to 24 million characters in all, past which the oldest cycles' are let go, while what was reported to the board about that work stays. The archive is read as it was written, by whatever version of the program wrote it. A cycle whose file cannot be read is left out, and tried again later. Email is not in it: a mailbox is read by the roles allowed to read it, and is not remembered here.
+
+What it quotes from files and task reports is text agents wrote, some of it taken from the web or from email. It reaches a lead or an agent as record, with the reminder that what it quotes from outside is still not an instruction.
+
+**In hosted sessions**, a lead is told at the start of its session what is remembered on the plan's objective, once. Nothing inside a session can search the memory.
 
 ## Business email and service accounts
 
@@ -511,6 +541,7 @@ What drives spend, and where to change it (wizard or settings):
 - **Follow-up work per cycle** (default one round, and never more than two follow-up plans per lead).
 - **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; 8 searches per task). An agent that has used its 8 is told to finish with what it has found, and is cut short if it searches again. What the API itself enforces is 8 per model request, so an agent that ignores what it is told can reach 24 before it is stopped. With it, agents can also read the pages a search finds (web fetch, up to 4 pages per model request, each cut to 20,000 tokens). Reading a page has no per-use fee; its text is billed as input tokens.
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
+- **Show leads what the organisation remembers** (on by default). At most about 1,200 tokens more, and usually far fewer, on the calls where a lead proposes, directs, plans, hands out tasks or takes part in a decision. See [Memory](#memory).
 
 If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. A failure that belongs to one agent's task and not to the provider (the model declined it, its reply was cut off or made no sense, or what the agent had read grew past what the model takes) fails that task alone: the lead sees it at the phase gate and decides what to do, and the organisation carries on. Token counts an endpoint reports that are not numbers are set aside, and the call is counted by its length instead. Should a call's cost still come back as something that is not a number, it is not added to the spend: the organisation pauses and says so, since a total that is not a number could never reach the budget. By default, an organisation that was running comes back paused after a server restart. The optional resume-on-restart setting restores a previously running or waiting organisation automatically, while retaining manual pauses and limits.
 
@@ -529,7 +560,7 @@ On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is wh
 
 ## What agents can and cannot do
 
-**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts, repositories and the tools on [connected servers](#tool-servers-mcp) are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach anything else, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
+**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. A fifth, `recall`, searches the organisation's [memory](#memory) of earlier cycles. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts, repositories and the tools on [connected servers](#tool-servers-mcp) are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach anything else, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
 
 **In hosted sessions** (Claude models only), agents have a shell and file tools in a sandbox on Anthropic's side. They can install packages, build, run and test, and are told to report what actually happened.
 
@@ -579,7 +610,8 @@ data/orgs/<id>/
   activity.jsonl   one line per unit of work
   business-audit.jsonl  the edit history of the business records, once it is older than the
                    most recent hundred or two changes, which stay in org.json
-  archive/         cycles that have left live state (the three most recent stay live)
+  archive/         cycles that have left live state (the three most recent stay live);
+                   the organisation's memory reads them from here
   workspace/       the files the agents produce
   managed/         which workspace files have been uploaded for hosted sessions, and a
                    note of any request for a session whose reply has not come yet
@@ -678,6 +710,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - GitHub is the only code host. Repository work needs agents on this machine, handles text files only, and has not yet been run with a real token: see [the guide](docs/code-repositories.md#what-has-been-checked). Deployment is not built: a person merges, and whatever follows from that is up to your repository.
 - Tool servers are reached over HTTP, with a token, a sign-in through the browser, or neither. There is no server started as a command on this machine, and none of it in hosted sessions. A tool's pictures and files are not passed to agents, only its text. No third party's server has been connected and no real service signed in to yet: see [the guide](docs/tool-servers.md#what-has-been-checked).
 - Hosted sessions have not been run against the live API (see above), and hold a lead to its allocation of agents by instruction only.
+- The [memory](#memory) finds words, not meanings: a thing written of in other words than those asked is not found. Nothing inside a hosted session can search it. It has been run in simulation and in tests, not yet with a real model deciding when to search.
 - No provider's API has been called from this code: not Claude's, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)). The one way to a real model that has been tried is the [Claude Code connection](#claude-code-in-place-of-a-key), on which one small organisation has run one cycle.
 - The Claude Code connection has been tried on Linux only, has no hosted sessions and no web search, and depends on how the `claude` command behaves, which changes from release to release.
 - Hosted sessions and web search are for Claude models only.

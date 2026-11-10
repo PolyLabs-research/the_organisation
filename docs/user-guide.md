@@ -110,6 +110,15 @@ The left side shows the hierarchy: you, the CEO, the signatory, and each lead wi
 
 ![The dashboard](dashboard.png)
 
+### What it remembers
+
+A lead is shown this cycle and the last four in brief, and cycles older than the three most recent are archived. So that a long-running organisation does not forget what it did, everything it has reported, decided, planned and written stays findable, however long ago it was.
+
+- **Leads** are shown, before they propose, direct, plan, hand out tasks or take part in a board decision, the passages from earlier cycles that bear most on the matter: six at most. To switch that off, open **Settings** and untick **Show leads what the organisation remembers**.
+- **Agents** search it themselves, with a tool called `recall`, when their work may have been done before or touches something the board has ruled on.
+
+It finds words, not meanings. The [README](../README.md#memory) says what is remembered and what is left out.
+
 ## Steer it
 
 Type in the box under **Shareholders** and choose **Send steer**. Steer is binding, and the CEO enforces it. It can change plans, or cancel them. An agent finishes the task it is on, so a steer does not reach work already running.
@@ -215,7 +224,7 @@ Agents work on this machine for this, so keep **On this machine** selected. Ever
 
 ## Change the settings
 
-The gear at the top right of an organisation opens **Settings**, where you can change the budget, the review interval, models, effort, how many calls run at once, web search and the cycle limit. Most changes apply at once.
+The gear at the top right of an organisation opens **Settings**, where you can change the budget, the review interval, models, effort, how many calls run at once, web search, whether leads are shown what the organisation remembers, and the cycle limit. Most changes apply at once.
 
 Lower the budget or the cycle limit if you want it to stop sooner. Set **Minutes between operating reviews** to zero to run continuously, which spends much faster.
 

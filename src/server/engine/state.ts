@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS: OrgSettings = {
   execution: 'local',
   workflowRuns: true,
   archiveSessions: false,
+  recall: true,
   signatory: 'human',
   workerLadder: [],
   workerLadderLearns: true,
@@ -182,6 +183,7 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
     execution: p.execution === 'managed' || p.execution === 'local' ? p.execution : base.execution,
     workflowRuns: typeof p.workflowRuns === 'boolean' ? p.workflowRuns : base.workflowRuns,
     archiveSessions: typeof p.archiveSessions === 'boolean' ? p.archiveSessions : base.archiveSessions,
+    recall: typeof p.recall === 'boolean' ? p.recall : base.recall,
     signatory: p.signatory === 'ai' || p.signatory === 'human' ? p.signatory : base.signatory,
     // Tidied against the agents' model as it will be: a rung that names that model is no rung.
     workerLadder: tidyLadder(p.workerLadder !== undefined ? p.workerLadder : base.workerLadder, model(p.workerModel, base.workerModel)),

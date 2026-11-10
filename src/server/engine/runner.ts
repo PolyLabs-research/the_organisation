@@ -19,6 +19,7 @@ import { INTERRUPTED } from '../../shared/types';
 import { waitsOnAi } from '../../shared/signatory';
 import { ProviderError, type CallUsage, type Provider } from '../providers/types';
 import type { Store } from '../store';
+import { OrgMemory } from '../memory';
 import { Workspace } from '../workspace';
 import { changeApproach } from './approaches';
 import { CHECK_TIMES, WaitingOnChecks, type CheckTimes } from './evidence';
@@ -98,6 +99,8 @@ type Listener = (event: { type: 'view'; view: OrgView } | { type: 'activity'; en
 export class OrgRunner {
   readonly workspace: Workspace;
   readonly access: BusinessAccess;
+  /** Everything this organisation has reported, decided and written, to be searched. Built from its own files when it is first asked. */
+  readonly memory: OrgMemory;
   readonly activity: ActivityEntry[] = [];
   private readonly inFlight = new Map<string, ActiveWork>();
   private readonly attempts = new Map<string, number>();
@@ -146,6 +149,7 @@ export class OrgRunner {
     options: RunnerOptions = {},
   ) {
     this.workspace = new Workspace(store.workspaceRoot(org.id));
+    this.memory = new OrgMemory(org, { archivedCycles: () => store.archivedCycles(org.id), archivedCycle: (cycle) => store.archivedCycle(org.id, cycle) }, this.workspace);
     this.access = new BusinessAccess(path.join(store.orgDir(org.id), 'access-vault.json'), org.id, () => org.executives.filter(exec => exec.kind === 'lead' || exec.kind === 'ceo').map(exec => exec.id), {
       ...options.access,
       allows: (actorId, privilege) => allows(org, actorId, privilege),
@@ -838,6 +842,7 @@ export class OrgRunner {
     const ctx: EngineContext = {
       org,
       access: this.access,
+      memory: this.memory,
       provider: this.provider,
       workspace: this.workspace,
       signal: this.abort.signal,
