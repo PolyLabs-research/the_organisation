@@ -10,6 +10,7 @@ import type { Config } from '../src/server/config';
 import { MockProvider } from '../src/server/providers/mock';
 import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
+import { FakeAuthorisationServer } from './fake-auth-server';
 import { FakeToolServer, taking, text } from './fake-mcp-server';
 import { CHROME, QUIET, withoutBrowser } from './helpers';
 
@@ -150,6 +151,93 @@ it.skipIf(withoutBrowser({ build: true }))('connects a tool server and allows it
     await browser.close();
     await registry.shutdown();
     await tools.close();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(withoutBrowser({ build: true }))('signs in to a tool server on the service’s own pages, and again when the sign-in has lapsed', { timeout: 90_000 }, async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'tool-sign-in-ui-'));
+  const store = new Store(dir); await store.init();
+  const auth = new FakeAuthorisationServer(), tools = new FakeToolServer();
+  await auth.listen();
+  tools.auth = auth;
+  await tools.listen();
+  const registry = new Registry(store, new MockProvider(QUIET));
+  const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: true, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
+  const app = createApp(registry, config); app.use(express.static(path.resolve('dist/client')));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => server.once('listening', resolve));
+  const base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
+  const browser = await chromium.launch({ executablePath: CHROME, headless: true, chromiumSandbox: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+  page.setDefaultTimeout(30_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const card = page.locator('.ops-card').filter({ hasText: tools.url });
+  try {
+    await page.goto(base);
+    await page.getByRole('button', { name: 'Try Only Paperclips', exact: true }).click();
+    await page.getByRole('tab', { name: 'Email & accounts', exact: true }).click();
+    await page.getByLabel('Vault passphrase', { exact: true }).fill('a safe test vault passphrase');
+    await page.getByLabel('Repeat vault passphrase', { exact: true }).fill('a safe test vault passphrase');
+    await page.getByRole('button', { name: 'Create vault', exact: true }).click();
+    await page.getByRole('button', { name: 'Tool servers', exact: true }).click();
+    const vault = registry.get(registry.list()[0]!.id)!.access;
+
+    // A server that wants a sign-in says so when it is given none, and the form says what to press.
+    await page.getByLabel('Name', { exact: true }).fill('Orders');
+    await page.getByLabel(/^Address/).fill(tools.url);
+    await page.getByRole('checkbox', { name: /^COO/ }).check();
+    await page.getByRole('button', { name: 'Connect tool server', exact: true }).click();
+    await page.getByText('The server asks for a token or a sign-in. Give it a token, or sign in to it.').waitFor();
+
+    // The whole window goes to the service, which asks the person and sends them back. The page they land on says what came of it.
+    await page.getByRole('button', { name: 'Sign in to the server', exact: true }).click();
+    await page.getByText('Orders is connected. None of its tools is allowed yet.').waitFor();
+    expect(new URL(page.url()).search).toBe('');
+    expect(new URL(page.url()).hash).toBe('#/org/' + registry.list()[0]!.id);
+    await card.getByText('0 of 4 tools allowed').waitFor();
+    expect(await card.innerText()).toContain('signed in at ' + new URL(auth.base).host);
+    expect(auth.asked).toEqual([expect.objectContaining({ redirectUri: base + '/api/oauth/tools/callback', resource: tools.url })]);
+    const kept = () => vault.vault.read().toolServers[0]!;
+    for (const secret of [kept().password, kept().signIn!.refreshToken]) expect(await page.content()).not.toContain(secret);
+    await card.getByRole('checkbox', { name: 'Allow find_order', exact: true }).check();
+    await card.getByRole('button', { name: 'Save allowed tools', exact: true }).click();
+    await card.getByText('1 of 4 tools allowed').waitFor();
+
+    // The sign-in is withdrawn at the service. The next use finds out, the card says so, and it is waiting on the person's desk.
+    auth.withdraw();
+    await card.getByRole('button', { name: 'Read the server’s tools again', exact: true }).click();
+    await card.getByText('The sign-in to this tool server has lapsed. A person has to sign in again, under Email & accounts.').waitFor();
+    await card.getByText('The sign-in to this server has lapsed, so agents are offered none of its tools.').waitFor();
+    await page.getByRole('button', { name: 'Access requests (1)', exact: true }).waitFor();
+    expect(kept().signIn!.lapsed).toBe(true);
+
+    // Signing in again goes the same way round, and what was allowed is allowed again.
+    await card.getByRole('button', { name: 'Sign in again', exact: true }).click();
+    await page.getByText('Signed in to Orders again.').waitFor();
+    await card.getByText('1 of 4 tools allowed').waitFor();
+    expect(await card.getByText('The sign-in to this server has lapsed').count()).toBe(0);
+    await page.getByRole('button', { name: 'Access requests', exact: true }).waitFor();
+    expect(kept().signIn).toMatchObject({ lapsed: false });
+    expect(vault.vault.read().toolServers).toHaveLength(1);
+
+    // Refused at the service, the person is brought back and told, and nothing is connected.
+    auth.approves = false;
+    await page.getByText('Connect a tool server', { exact: true }).first().click();
+    await page.getByLabel('Name', { exact: true }).fill('More orders');
+    await page.getByLabel(/^Address/).fill(tools.url + '?more');
+    await page.getByRole('button', { name: 'Sign in to the server', exact: true }).click();
+    await page.getByText('The sign-in was cancelled or refused at the service. Nothing was connected.').waitFor();
+    expect(vault.vault.read().toolServers).toHaveLength(1);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    await registry.shutdown();
+    await tools.close();
+    await auth.close();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });

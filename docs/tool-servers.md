@@ -6,11 +6,12 @@ An organisation's agents can use tools from other programs and services, through
 
 About 5 minutes. Step 1 happens at the service, the rest in the app.
 
-### 1. Find the server's address, and get a token for it
+### 1. Find the server's address, and how it lets a program in
 
 - **Address:** the one the service documents for its MCP server over HTTP, which usually ends in `/mcp`. It has to be an HTTPS address. A server running on this machine can be plain HTTP at `http://localhost:<port>/…`.
 - **Token:** where the service takes an API key or an access token, create one for this and nothing else, limited to what agents should be able to do: reading only, or one project, where the service offers that. A server that asks for none needs none. Some services put a key in the address itself. That works, but prefer the token field where the service gives the choice: the address is kept in the vault and shown on the server's card, and it is not blanked out of what tools return the way a token is.
-- **What cannot be connected yet:** a server that wants you to sign in through the browser (OAuth), a server that is started as a command on this machine (stdio), and the older addresses that end in `/sse`. A bridge program can put a command-started server behind a local HTTP address, and then it is a server on this machine like any other.
+- **Sign-in:** many services have no token to hand over and ask you to sign in instead, on their own pages (OAuth). That needs nothing from step 1 but the address: see [signing in](#a-server-that-asks-you-to-sign-in).
+- **What cannot be connected yet:** a server that is started as a command on this machine (stdio), and the older addresses that end in `/sse`. A bridge program can put a command-started server behind a local HTTP address, and then it is a server on this machine like any other.
 
 ### 2. Open the form in the app
 
@@ -39,6 +40,28 @@ On the **Privileges** tab, turn on **Use connected tools** for each role whose a
 
 To replace a token later, use **Replace token** on the server's card. The server is asked for its tools with the new token before it is saved.
 
+## A server that asks you to sign in
+
+Fill in the name, the address and the teams as in step 3, leave the token empty, and click **Sign in to the server**.
+
+1. **You are sent to the service.** The server says which service signs people in for it. This program registers itself there, and the whole window goes to that service's own page, where you sign in and agree to what is asked. Look at the address bar before you type a password: it should be the service you expect.
+2. **You are brought back.** The service sends the browser back with a code, which is exchanged for a token. The server is asked for its tools with it, and shows as a card, signed in, with none of its tools allowed. Go on from step 4.
+3. **It renews itself.** A token from a sign-in runs out, usually within the hour. It is renewed when it is about to, without you, for as long as the service lets it be. Where a service only allows that when it is asked for, the program asks, and the service's page says that you are letting it stay signed in while you are away.
+
+If the service **will not register a program by itself**, the form says so. Register this program at the service yourself, as a client that signs in from a browser, with the redirect address the form shows under **For a server that asks you to sign in**, and put the client ID it issues, and the secret if it issues one, in the fields there. The same place takes the scopes to ask for, for a service that does not say which it needs.
+
+**When a sign-in lapses.** A service can withdraw a sign-in, and some let one run only so long. When a sign-in can no longer be renewed, the board is told, the server's card says so, a note waits under **Access requests**, and agents are offered none of that server's tools until you click **Sign in again** on the card. What you had allowed is then allowed again. An agent cannot sign in, and nothing an agent does starts a sign-in.
+
+What is kept, and where it goes:
+
+- **The tokens stay in the vault**, like a token you give: never in the browser, never in what an agent reads, blanked out of what a tool returns.
+- **A sign-in is renewed where you made it and nowhere else.** If the server later names a different service for signing in, that service is told nothing. You would have to sign in again, and would see where.
+- **A token is asked for this server only**, where the service supports that, so that it is of no use on another.
+- **A server cannot point the sign-in further in than it is itself.** A server out on the internet cannot send this program, or your browser, to an address on this machine or inside your network. Sign-in addresses are HTTPS, or plain HTTP only when the server itself is on this machine.
+- **Only the browser that started a sign-in can finish it**, within ten minutes, and with the vault still open as it was.
+
+Removing the connection deletes its tokens here. To end the sign-in at the service as well, withdraw it in your account there.
+
 ## What agents can do
 
 A team's agents are offered the tools you allowed, on the servers assigned to their team, while their role holds **Use connected tools**. Their lead is told which tools those are, so that it can plan work that uses them.
@@ -47,6 +70,7 @@ A team's agents are offered the tools you allowed, on the servers assigned to th
 - **Every call is recorded** under **Access history**, with the role, the server and the tool.
 - **What a tool returns comes back as text**, marked as untrusted content. Pictures, recordings and attached files are named and not passed on. A saved password or token found in a result is blanked out, and a call whose values contain one is refused.
 - **A task keeps one session with a server** for all its calls, since some servers keep their place between calls. The session ends with the task.
+- **A sign-in is renewed as needed.** Before a call, if its token is about to run out, and once more if the server turns the token down. If it cannot be renewed, the agent is told that a person has to sign in again.
 - **Limits:** 20 servers in a vault, 150 tools kept for a server, 60 connected tools offered to one role, two minutes for a call, and 60,000 characters of a result. Each allowed tool is described to the model in every task of the team, which is paid for like the rest of the prompt, so allow what is needed and not everything on offer. A server's card says roughly what its ticked tools add to each task, and the pane says so if a team has more than 60 allowed, since the ones past 60 are left out.
 
 Connected tools need agents working on this machine. Hosted sessions cannot reach the vault.
@@ -61,7 +85,7 @@ Agents are always shown a tool as it was described when you allowed it, whatever
 
 ## What is enforced, and what to watch
 
-**Enforced by the program:** which servers a team can reach, which tools on them, the privilege, that agents see a tool only as you allowed it and with nothing in its description that you could not see, that the token goes only to the site you gave, and that no saved password or token is sent or handed back.
+**Enforced by the program:** which servers a team can reach, which tools on them, the privilege, that agents see a tool only as you allowed it and with nothing in its description that you could not see, that the token goes only to the site you gave, that a sign-in is renewed only where you made it, and that no saved password or token is sent or handed back.
 
 **Not stopped:**
 
@@ -71,11 +95,13 @@ Agents are always shown a tool as it was described when you allowed it, whatever
 - **The server's word is not checked.** A server can change what a tool does without changing a word of its description, and "only reads" is a claim.
 - **Secrets are matched exactly.** A saved password that has been encoded some other way, such as in base64, is not caught.
 - **A server on a private network can be reached.** The address is yours to give, so it may be an internal one. No agent can choose or change it.
+- **A server chooses where you sign in.** Signing in means going to the address the server names and typing a password there. The program holds that address to HTTPS and keeps it from pointing into your network, but it cannot know that the page is the service you think it is. You can: read the address bar.
+- **A sign-in gives what the service's consent page says it gives**, which may be more than the tools you go on to allow. The tools you allow are the limit on what agents can call. The token itself may be good for more, and it is in the vault.
 - **One tool can stop a team's tasks.** A tool's description of what it takes is checked before it can be allowed, and one a model provider would refuse is marked as not offerable. The check cannot know every provider's rules. If a team's tasks start failing with a refused request after you allow a tool, take the tick away.
 
 ## What has been checked
 
-The tests run the protocol's official client, which this program uses, against a real server of the protocol on the same machine: connecting, listing, allowing, calling, sessions, tokens, a server that forgets its sessions, and one that sends a request elsewhere. No third party's server has been connected, and no call has been made through a real model provider with a connected tool in its list.
+The tests run the protocol's official client, which this program uses, against a real server of the protocol on the same machine: connecting, listing, allowing, calling, sessions, tokens, a server that forgets its sessions, and one that sends a request elsewhere. Signing in is tested against an authorisation server built from the protocol's own handlers, with a real Chrome making the round trip: registering, the code and its proof, renewal with a refresh token that changes each time, a service in trouble, a sign-in withdrawn, and signing in again. No third party's server has been connected and no real service has been signed in to, so how each one's sign-in differs from the protocol's own is not known. No call has been made through a real model provider with a connected tool in its list.
 
 ## Local API
 
@@ -87,5 +113,10 @@ Under `/api/orgs/:id/access`, with the same origin and loopback controls as the 
 | `POST /toolServers/:id/tools/read` | Ask the server for its tools again |
 | `PATCH /toolServers/:id/tools` | Replace the allowed tools: `{ allowed: [{ name, fingerprint }] }`, each as the access view shows it |
 | `PATCH /toolServers/:id` | Replace `{ ownerIds, enabled }` |
+| `POST /toolServers/signin` | Start a sign-in to a server to be connected: `{ label, url, ownerIds, clientId, clientSecret, scope }`, the last three optional. Answers `{ url }`, where to send the browser |
+| `POST /toolServers/:id/signin` | Start signing in again to a connected server. Takes `{ clientId, clientSecret, scope }`, all optional |
+| `GET /toolServers/signin` | How the last sign-in ended, `{ outcome: { ok, message } }`, once |
 | `DELETE /toolServers/:id` | Remove the connection, its token and its allowances. The server is left alone |
 | `POST /toolServers/:id/password` | Check and replace the token, as `{ password }` |
+
+The service sends the browser back to `GET /api/oauth/tools/callback`, which stands outside those controls because it is reached from another site. It finishes only a sign-in started from this dashboard, in the same browser.

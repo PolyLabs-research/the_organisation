@@ -188,6 +188,12 @@ function ToolServerConnect({ org, onView }: { org: Organisation; onView: Update 
   const [token, setToken] = useState('');
   const [header, setHeader] = useState('');
   const [owners, setOwners] = useState<string[]>([]);
+  const [client, setClient] = useState({ clientId: '', clientSecret: '', scope: '' });
+  // The service asks the person in its own pages, so the whole window goes there. It is sent back here when they have agreed or refused.
+  const signIn = () => void action.run(async () => {
+    const result = await call<{ url: string }>(org.id, 'POST', '/toolServers/signin', { label, url, ownerIds: owners, ...client });
+    window.location.assign(result.url);
+  });
   return <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => {
     try {
       onView(await call(org.id, 'POST', '/toolServers', { label, url, token, header: header.trim() || 'Authorization', ownerIds: owners }));
@@ -204,9 +210,23 @@ function ToolServerConnect({ org, onView }: { org: Organisation; onView: Update 
       <Field label="Header for the token (optional)" hint="Leave empty to send it as a bearer token, which most servers take. Otherwise the header the service names for its key, such as X-API-Key."><input value={header} onChange={e => setHeader(e.target.value)} placeholder="Authorization" maxLength={64} autoComplete="off" /></Field>
     </div>
     <TeamPicker org={org} value={owners} onChange={setOwners} />
-    <ErrorNote>{action.error}</ErrorNote><button className="button button-primary" disabled={action.busy}>{action.busy ? 'Asking the server for its tools…' : 'Connect tool server'}</button>
+    <details className="access-details"><summary>For a server that asks you to sign in</summary>
+      <p className="muted">Leave the token empty and press <strong>Sign in to the server</strong>. You are sent to the service the server names, and brought back here when you have agreed. Most services register this program by themselves when it asks. For one that does not, register it there yourself, with <code>{window.location.origin}/api/oauth/tools/callback</code> as its redirect address, and give the client it issues.</p>
+      <div className="grid-2">
+        <Field label="Client ID (optional)"><input value={client.clientId} onChange={e => setClient({ ...client, clientId: e.target.value })} maxLength={500} autoComplete="off" /></Field>
+        <Field label="Client secret (optional)"><input type="password" value={client.clientSecret} onChange={e => setClient({ ...client, clientSecret: e.target.value })} maxLength={2048} autoComplete="new-password" /></Field>
+        <Field label="What to ask to be allowed (optional)" hint="Scopes, with spaces between them. Leave empty to ask for what the server says it needs."><input value={client.scope} onChange={e => setClient({ ...client, scope: e.target.value })} maxLength={1000} autoComplete="off" /></Field>
+      </div>
+    </details>
+    <ErrorNote>{action.error}</ErrorNote>
+    <div className="access-actions">
+      <button className="button button-primary" disabled={action.busy}>{action.busy ? 'Asking the server…' : 'Connect tool server'}</button>
+      <button type="button" className="button" disabled={action.busy || !label.trim() || !url.trim()} onClick={signIn}>Sign in to the server</button>
+    </div>
   </form>;
 }
+/** The name a person knows a service by: where its address is, without the rest. */
+const hostOf = (address: string) => { try { return new URL(address).host; } catch { return address; } };
 const SAYS = { reads: 'Says it only reads', changes: 'Says it changes things', deletes: 'Says it can delete', '': '' } as const;
 const allowedNames = (tools: ToolView[]) => tools.filter(tool => tool.allowed).map(tool => tool.name);
 function ToolServerCard({ org, server, onView }: { org: Organisation; server: ToolServerView; onView: Update }) {
@@ -223,8 +243,9 @@ function ToolServerCard({ org, server, onView }: { org: Organisation; server: To
   const save = () => void action.run(async () => onView(await call(org.id, 'PATCH', '/toolServers/' + server.id + '/tools', { allowed: server.tools.filter(tool => ticked.includes(tool.name)).map(tool => ({ name: tool.name, fingerprint: tool.fingerprint })) })));
   return <article className="ops-card">
     <div className="row"><h3>{server.label}</h3><span className="tag">{allowed.length} of {server.tools.length} tools allowed · {server.enabled ? 'Enabled' : 'Disabled'}</span></div>
-    <p>{server.url}{server.serverName ? <> · calls itself {server.serverName}</> : null} · {!server.hasToken ? 'no token' : server.header.toLowerCase() === 'authorization' ? 'token saved' : 'token saved, sent as ' + server.header}</p>
+    <p>{server.url}{server.serverName ? <> · calls itself {server.serverName}</> : null} · {server.signIn ? 'signed in at ' + hostOf(server.signIn.issuer) : !server.hasToken ? 'no token' : server.header.toLowerCase() === 'authorization' ? 'token saved' : 'token saved, sent as ' + server.header}</p>
     <Reach org={org} ownerIds={server.ownerIds} describe={toolReach(org)} />
+    {server.signIn?.lapsed ? <p className="note note-warn">The sign-in to this server has lapsed, so agents are offered none of its tools. Sign in again below, and what you allowed here is allowed again.</p> : null}
     {server.tools.some(tool => tool.changed) ? <p className="note note-warn">The server now describes a tool differently from when you allowed it. It is kept back from agents until you have looked at it and allowed it again.</p> : null}
     <fieldset className="access-tools" disabled={action.busy}>
       <legend>Tools agents may call</legend>
@@ -249,10 +270,17 @@ function ToolServerCard({ org, server, onView }: { org: Organisation; server: To
     <ErrorNote>{action.error}</ErrorNote>
     <div className="access-actions">
       <button type="button" className="button button-primary" disabled={action.busy || !unsaved} onClick={save}>Save allowed tools</button>
-      <button type="button" className="button" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/toolServers/' + server.id + '/tools/read', {})))}>{action.busy ? 'Working…' : 'Read the server’s tools again'}</button>
+      <button type="button" className="button" disabled={action.busy} onClick={() => void action.run(async () => {
+        // A reading that fails may have found that the sign-in has lapsed, which the card has to show now and not at its next refresh.
+        try { onView(await call(org.id, 'POST', '/toolServers/' + server.id + '/tools/read', {})); }
+        catch (error) { onView(await call(org.id, 'GET')); throw error; }
+      })}>{action.busy ? 'Working…' : 'Read the server’s tools again'}</button>
     </div>
     <GrantEditor org={org} kind="toolServers" record={server} onView={onView} />
-    <PasswordUpdate orgId={org.id} kind="toolServers" id={server.id} onView={onView} />
+    {server.signIn ? <details className="access-details" open={server.signIn.lapsed}><summary>Sign in again</summary>
+      <p className="muted">You signed in at {hostOf(server.signIn.issuer)} on {new Date(server.signIn.signedInAt).toLocaleString()}. {server.signIn.renews ? 'The sign-in renews itself until the service withdraws it.' : 'The service gave no way to renew it, so it lasts only as long as its token does.'} Signing in again sends you to the service and brings you back here.</p>
+      <button type="button" className="button" disabled={action.busy} onClick={() => void action.run(async () => { window.location.assign((await call<{ url: string }>(org.id, 'POST', '/toolServers/' + server.id + '/signin', {})).url); })}>Sign in again</button>
+    </details> : <PasswordUpdate orgId={org.id} kind="toolServers" id={server.id} onView={onView} />}
   </article>;
 }
 /** A team's agents are offered a limited number of connected tools, in the order the servers and their tools stand here. Past that, a tool allowed is a tool left out, which a person has to be told. */
@@ -355,9 +383,9 @@ function Drafts({ org, view, onView }: { org: Organisation; view: AccessView; on
     </article>)}
   </>;
 }
-function Unlocked({ org, view, onView }: { org: Organisation; view: AccessView; onView: Update }) {
+function Unlocked({ org, view, onView, arrived }: { org: Organisation; view: AccessView; onView: Update; arrived: 'tools' | null }) {
   const action = useAction();
-  const [pane, setPane] = useState<'mail' | 'accounts' | 'code' | 'tools' | 'drafts' | 'requests' | 'history'>('mail');
+  const [pane, setPane] = useState<'mail' | 'accounts' | 'code' | 'tools' | 'drafts' | 'requests' | 'history'>(arrived ?? 'mail');
   return <>
     <div className="row"><p className="muted">Unlocked · {view.autoLockMinutes === 0 ? 'stays unlocked until you lock it or the server stops.' : 'locks after 30 minutes without an access action, or when the server stops.'}</p><div className="access-actions"><a className="button" href={'/api/orgs/' + org.id + '/access/backup'} download>Download encrypted backup</a><button type="button" className="button" onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/lock', {})))} disabled={action.busy}>Lock vault</button></div></div>
     {org.settings.execution === 'managed' ? <p className="note note-warn">The email, account, repository and connected tools run with local task execution. Switch Execution in Settings to local to give the agents these tools.</p> : null}
@@ -372,14 +400,21 @@ function Unlocked({ org, view, onView }: { org: Organisation; view: AccessView; 
     {pane === 'history' ? <div className="access-history">{view.audit.map((item, i) => <p key={i}><time>{new Date(item.at).toLocaleString()}</time> · {item.actorId} · {item.action.replaceAll('_', ' ')} · <code>{item.targetId}</code></p>)}</div> : null}
   </>;
 }
-export function Access({ org }: { org: Organisation }) {
+export function Access({ org, arrived = null }: { org: Organisation; arrived?: 'tools' | null }) {
   const action = useAction();
   const [view, setView] = useState<AccessView | null>(null);
+  // The browser has come back from signing in to a tool server. What came of it is asked for once, and said here.
+  const [signedIn, setSignedIn] = useState<{ ok: boolean; message: string } | null>(null);
+  useEffect(() => {
+    if (arrived !== 'tools') return;
+    void call<{ outcome: { ok: boolean; message: string } | null }>(org.id, 'GET', '/toolServers/signin').then(result => setSignedIn(result.outcome), () => {});
+  }, [org.id, arrived]);
   const [passphrase, setPassphrase] = useState('');
   const [confirm, setConfirm] = useState('');
   const [keepUnlocked, setKeepUnlocked] = useState(false);
   const revision = useRef(0);
-  const update = (next: AccessView) => { revision.current++; setView(next); };
+  // What came of a sign-in is said until the person does something else here. After that it is old news.
+  const update = (next: AccessView) => { revision.current++; setView(next); setSignedIn(null); };
   useEffect(() => {
     let closed = false;
     const refresh = () => { const current = revision.current; return call<AccessView>(org.id, 'GET').then(next => { if (!closed && current === revision.current) setView(next); }); };
@@ -391,7 +426,8 @@ export function Access({ org }: { org: Organisation }) {
     <h2>Email &amp; accounts</h2>
     <p>Business mail, saved logins, repositories and tool servers for the agents, held in this organisation’s encrypted vault. <HelpLink guide="email-and-accounts">Setup guide</HelpLink></p>
     <ErrorNote onDismiss={action.clearError}>{action.error}</ErrorNote>
-    {!view ? <p className="muted">Loading access settings…</p> : !view.available ? <p className="note note-warn">{view.reason}</p> : view.unlocked ? <Unlocked org={org} view={view} onView={update} /> :
+    {signedIn ? <p className={signedIn.ok ? 'note' : 'note note-warn'} role="status">{signedIn.message}</p> : null}
+    {!view ? <p className="muted">Loading access settings…</p> : !view.available ? <p className="note note-warn">{view.reason}</p> : view.unlocked ? <Unlocked org={org} view={view} onView={update} arrived={arrived} /> :
       <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => {
         if (!view.initialised && passphrase !== confirm) throw new Error('The passphrases do not match.');
         try { update(await call(org.id, 'POST', view.initialised ? '/unlock' : '/create', { passphrase, keepUnlocked })); } finally { setPassphrase(''); setConfirm(''); }

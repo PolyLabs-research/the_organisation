@@ -207,7 +207,7 @@ If a gate cannot pass, the plan stops and the board says why. Fix the cause, the
 Agents can call tools on a server that speaks the Model Context Protocol (MCP), such as an issue tracker's or one you run yourself. This has been tested against a server on the same machine, and not yet against a third party's. The [full guide](tool-servers.md) covers what can be connected and the limits.
 
 1. Get the server's address, and a token for it if it asks for one. Make the token as narrow as the service allows.
-2. In **Email & accounts**, open **Tool servers** and fill in **Connect a tool server**. Assign it to a team.
+2. In **Email & accounts**, open **Tool servers** and fill in **Connect a tool server**. Assign it to a team. For a service that asks you to sign in instead of giving a token, leave the token empty and click **Sign in to the server**: you are sent to the service and brought back.
 3. On the server's card, read what each tool does, tick the ones agents may call, and click **Save allowed tools**. None is allowed until you do.
 4. Under **Privileges**, tick **Use connected tools** for that role.
 

@@ -135,7 +135,7 @@ This is early software, and the README says plainly what has been run for real a
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
 | Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
 | GitHub repositories | Reads checked against the real API on a public repository, without a token. Commits, pull requests and workflows tested against a local stand-in only. Nothing has been written to a real repository. |
-| Tool servers (MCP) | Tested with the protocol's official client against a real server of the protocol on the same machine. No third party's server has been connected. |
+| Tool servers (MCP) | Tested with the protocol's official client against a real server of the protocol on the same machine, and signing in against an authorisation server built from the protocol's own handlers. No third party's server has been connected, and no real service signed in to. |
 | Tests | More than 900, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
@@ -304,7 +304,9 @@ What keeps this in hand:
 - **The token stays in the vault** and goes only to the site you gave. A saved password or token is blanked out of what a tool returns, and a call that contains one is refused.
 - **Every call is recorded** under Access history, and what a tool returns reaches the agent as text marked as untrusted.
 
-A tool still does whatever its server lets it do, and no person checks each call, so use a narrow token and allow only what the work needs. Servers are reached over HTTP with a fixed token or none: one that needs a sign-in in the browser, or is started as a command on this machine, cannot be connected yet. Read the [setup and limits](docs/tool-servers.md) before connecting anything that can change something.
+A server that has no token to give and asks you to sign in is signed in to on the service's own pages: the dashboard sends you there and you are brought back. The sign-in is kept in the vault and renews itself, only ever at the service you signed in at. When it can no longer be renewed, agents are told a person has to sign in again, the board says so, and it waits on your desk.
+
+A tool still does whatever its server lets it do, and no person checks each call, so use a narrow token and allow only what the work needs. Servers are reached over HTTP: one that is started as a command on this machine cannot be connected yet. Read the [setup and limits](docs/tool-servers.md) before connecting anything that can change something.
 
 ## Work approaches
 
@@ -651,7 +653,8 @@ src/server/
     managed/     hosted sessions: the saved agents (resources.ts), files in
                  and out (files.ts), and following a session (session.ts)
   access*.ts     encrypted business vault, Gmail/IMAP/SMTP, account browser, GitHub,
-                 tool servers (access-mcp.ts) and the agent tools for all of them
+                 tool servers (access-mcp.ts, and access-mcp-auth.ts for signing in
+                 to one) and the agent tools for all of them
   connections.ts the API keys the server holds
   workspace.ts   the confined file tools agents use
   app.ts         the HTTP API and live event stream
@@ -673,7 +676,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - Gmail, IMAP/SMTP and account-browser integrations have been tested with stand-ins and a real local browser, not a live mailbox or third-party signup. See [email and account limits](docs/email-and-accounts.md).
 - Privileges are per role, and the browser's read-only limit goes by the kind of request: see [what each role may do](#what-each-role-may-do).
 - GitHub is the only code host. Repository work needs agents on this machine, handles text files only, and has not yet been run with a real token: see [the guide](docs/code-repositories.md#what-has-been-checked). Deployment is not built: a person merges, and whatever follows from that is up to your repository.
-- Tool servers are reached over HTTP with a fixed token or none. There is no sign-in through the browser (OAuth), no server started as a command on this machine, and none of it in hosted sessions. A tool's pictures and files are not passed to agents, only its text. No third party's server has been connected yet: see [the guide](docs/tool-servers.md#what-has-been-checked).
+- Tool servers are reached over HTTP, with a token, a sign-in through the browser, or neither. There is no server started as a command on this machine, and none of it in hosted sessions. A tool's pictures and files are not passed to agents, only its text. No third party's server has been connected and no real service signed in to yet: see [the guide](docs/tool-servers.md#what-has-been-checked).
 - Hosted sessions have not been run against the live API (see above), and hold a lead to its allocation of agents by instruction only.
 - No provider's API has been called from this code: not Claude's, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)). The one way to a real model that has been tried is the [Claude Code connection](#claude-code-in-place-of-a-key), on which one small organisation has run one cycle.
 - The Claude Code connection has been tried on Linux only, has no hosted sessions and no web search, and depends on how the `claude` command behaves, which changes from release to release.
