@@ -74,6 +74,50 @@ const MAX_BOARD_MESSAGES = 3000;
 
 export class ValidationError extends Error {}
 
+/**
+ * The version of the saved format this program writes. A new field that has a sensible default needs only its
+ * line in `normaliseLoaded`. Raise this when a change needs more than that, and make the step there depend on
+ * the version the file was saved with. A file saved by a later version is not loaded, and so never written over.
+ */
+export const SCHEMA_VERSION = 1;
+
+/** A saved organisation that cannot be loaded. The message says why, for the person who has to put it right. */
+export class UnreadableOrganisation extends Error {}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const isList = (value: unknown): value is unknown[] => Array.isArray(value);
+
+/**
+ * Check that what was read from disk has the bones of an organisation, before anything leans on them. This is
+ * not a full description of the format: it is what the loader, the scheduler and the dashboard would otherwise
+ * fall over on. Throws UnreadableOrganisation saying what is wrong.
+ */
+export function assertLoadable(raw: unknown): asserts raw is Organisation {
+  if (!isRecord(raw)) throw new UnreadableOrganisation('its saved state is not an organisation.');
+  const version = raw.schemaVersion ?? 0;
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) throw new UnreadableOrganisation('its saved state has no readable format version.');
+  if (version > SCHEMA_VERSION) {
+    throw new UnreadableOrganisation(`it was saved by a later version of this program (format ${version}; this version reads up to format ${SCHEMA_VERSION}). Update the program. The file has been left as it is.`);
+  }
+  const wrong: string[] = [];
+  if (typeof raw.id !== 'string' || !raw.id) wrong.push('no id');
+  if (typeof raw.name !== 'string') wrong.push('no name');
+  if (!isRecord(raw.settings)) wrong.push('no settings');
+  if (!isList(raw.executives) || !raw.executives.every((seat) => isRecord(seat) && typeof seat.id === 'string' && typeof seat.kind === 'string' && isList(seat.phases))) wrong.push('no readable list of seats');
+  else if (!raw.executives.some((seat) => isRecord(seat) && seat.kind === 'ceo')) wrong.push('no chief executive among its seats');
+  if (!isRecord(raw.cycle) || !Number.isInteger(raw.cycle.number) || !['consult', 'direct', 'work'].includes(raw.cycle.stage as string) || !isRecord(raw.cycle.consults)) wrong.push('no readable cycle');
+  const phasesOk = (phases: unknown) => isList(phases) && phases.every((phase) => isRecord(phase) && typeof phase.status === 'string' && isList(phase.tasks) && phase.tasks.every(isRecord));
+  if (!isList(raw.plans) || !raw.plans.every((plan) => isRecord(plan) && typeof plan.id === 'string' && typeof plan.ownerId === 'string' && typeof plan.status === 'string' && phasesOk(plan.phases))) wrong.push('no readable list of plans');
+  for (const key of ['reviewRounds', 'decisions', 'reports', 'board', 'steers', 'history']) {
+    const value = raw[key];
+    if (value !== undefined && !(isList(value) && value.every(isRecord))) wrong.push(`${key} is not a list of records`);
+  }
+  for (const key of ['inbox', 'usageByExec', 'privileges', 'workApproaches', 'business', 'signatory', 'usage']) {
+    if (raw[key] !== undefined && !isRecord(raw[key])) wrong.push(`${key} is not a record`);
+  }
+  if (wrong.length) throw new UnreadableOrganisation(`its saved state is damaged: ${wrong.join('; ')}.`);
+}
+
 function clamp(value: unknown, min: number, max: number, fallback: number): number {
   const n = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
   return Math.min(max, Math.max(min, n));
@@ -287,6 +331,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
 
   const now = new Date().toISOString();
   const org: Organisation = {
+    schemaVersion: SCHEMA_VERSION,
     business: emptyBusiness(),
     id,
     seq: 0,
@@ -387,6 +432,13 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.seq ??= 0;
   org.inbox ??= {};
   org.usageByExec ??= {};
+  org.reviewRounds ??= [];
+  org.decisions ??= [];
+  org.reports ??= [];
+  org.board ??= [];
+  org.steers ??= [];
+  org.history ??= [];
+  repairUsage(org);
   // From before there were privileges: every role stands at the defaults.
   org.privileges ??= {};
   // From before there were work approaches: every plan ran the lead's own profile.
@@ -437,7 +489,40 @@ export function normaliseLoaded(org: Organisation): Organisation {
     org.status = 'paused';
     org.pauseReason = 'restart';
   }
+  org.schemaVersion = SCHEMA_VERSION;
   return org;
+}
+
+/**
+ * Make the spend totals numbers again. An earlier version could add a cost that was not a number to them, after
+ * which they were saved as nothing at all. A total that is not a number never reaches a budget, and what was
+ * really spent can no longer be known, so the budget is counted as spent until a person raises it.
+ */
+function repairUsage(org: Organisation): void {
+  const tidy = (saved: UsageTotals | undefined): UsageTotals => {
+    const totals = emptyUsage();
+    for (const key of Object.keys(totals) as Array<keyof UsageTotals>) {
+      const value = saved?.[key];
+      if (typeof value === 'number' && Number.isFinite(value)) totals[key] = value;
+    }
+    return totals;
+  };
+  const known = typeof org.usage?.costUsd === 'number' && Number.isFinite(org.usage.costUsd);
+  org.usage = tidy(org.usage);
+  for (const seat of Object.keys(org.usageByExec)) org.usageByExec[seat] = tidy(org.usageByExec[seat]);
+  if (known) return;
+  org.usage.costUsd = org.settings.budgetUsd;
+  if (org.status !== 'idle') {
+    org.status = 'paused';
+    org.pauseReason = 'budget';
+  }
+  postToBoard(
+    org,
+    'system',
+    'system',
+    'Recorded spend could not be read',
+    `What this organisation had spent was not saved as a number, so it is no longer known. Its $${org.settings.budgetUsd.toFixed(2)} budget is counted as spent. Check what was charged with your provider, then raise the budget to carry on.`,
+  );
 }
 
 /** What a finished cycle delivered, as the CEO will be told at the start of later cycles. */

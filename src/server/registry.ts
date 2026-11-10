@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
+import { operatingDigest } from '../shared/business';
 import type { CreateOrgRequest, OrgSummary } from '../shared/types';
 import { OrgRunner, type RunnerOptions } from './engine/runner';
-import { ValidationError, assertModelRefs, createOrganisation, normaliseLoaded, summarise } from './engine/state';
+import { UnreadableOrganisation, ValidationError, assertLoadable, assertModelRefs, createOrganisation, normaliseLoaded, summarise, toClientView } from './engine/state';
+import { nextWork } from './engine/work';
 import type { Provider } from './providers/types';
 import type { Store } from './store';
 
@@ -15,15 +17,39 @@ export class Registry {
     private readonly options: RunnerOptions = {},
   ) {}
 
+  /**
+   * Organisations on disk that could not be loaded, and why. One damaged file must not stand between a person
+   * and every other organisation, so it is set aside, said out loud, and left on disk exactly as it was.
+   */
+  readonly unreadable: Array<{ folder: string; reason: string }> = [];
+
   async load(): Promise<void> {
     const resume: OrgRunner[] = [];
-    for (const org of await this.store.loadAll()) {
-      const shouldResume = org.settings.resumeOnRestart && (org.status === 'running' || (org.status === 'paused' && org.pauseReason === 'restart'));
-      const runner = new OrgRunner(normaliseLoaded(org), this.provider, this.store, this.options);
-      await runner.workspace.init();
-      this.runners.set(org.id, runner);
-      if (shouldResume) resume.push(runner);
+    const found = await this.store.scan();
+    this.unreadable.length = 0;
+    this.unreadable.push(...found.unreadable);
+    for (const saved of found.orgs) {
+      const folder = typeof saved?.id === 'string' ? saved.id : '';
+      try {
+        assertLoadable(saved);
+        const shouldResume = saved.settings.resumeOnRestart === true && (saved.status === 'running' || (saved.status === 'paused' && saved.pauseReason === 'restart'));
+        const org = normaliseLoaded(saved);
+        // Everything the dashboard and the scheduler will ask of it, asked once now. What would otherwise throw on
+        // every request, or in the middle of a run, is found here, where it costs one organisation and not the server.
+        summarise(org);
+        toClientView(org);
+        operatingDigest(org);
+        nextWork(org);
+        const runner = new OrgRunner(org, this.provider, this.store, this.options);
+        await runner.workspace.init();
+        this.runners.set(org.id, runner);
+        if (shouldResume) resume.push(runner);
+      } catch (err) {
+        const reason = err instanceof UnreadableOrganisation ? err.message : `its saved state could not be used (${(err as Error).message}).`;
+        this.unreadable.push({ folder, reason });
+      }
     }
+    for (const { folder, reason } of this.unreadable) console.warn(`Organisation ${folder} was not loaded: ${reason}`);
     for (const runner of resume) {
       try { runner.start(); } catch (error) { runner.org.lastError = 'Automatic resume: ' + (error as Error).message; await runner.flush(); }
     }

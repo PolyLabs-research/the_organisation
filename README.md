@@ -560,6 +560,8 @@ A request to the signatory is archived with the cycle in which it was settled, a
 
 A folder is loaded only if its name is the organisation's id, so a copy kept beside it as a backup is ignored rather than mistaken for the original.
 
+`org.json` carries the version of its format. An organisation saved by an earlier version of the program is brought up to date when it is loaded. One whose file is damaged, or was saved by a later version than the one running, is set aside: the server starts without it, says why in its log and in `GET /api/meta` (`unreadable`), and leaves the file exactly as it was. If what an organisation had spent was not saved as a number (an earlier version could do that), its budget is counted as spent until you raise it.
+
 ## Configuration
 
 | Variable | Default | Meaning |

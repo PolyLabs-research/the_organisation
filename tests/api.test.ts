@@ -96,6 +96,14 @@ describe('the API', () => {
     const cto = data.profiles.find((p: any) => p.id === 'engineering');
     expect(cto.phases.map((p: any) => p.name)).toEqual(['Spec', 'Build', 'Test', 'Release']);
     expect(data.defaults.budgetUsd).toBeGreaterThan(0);
+    // Organisations on disk that could not be loaded are named, so that one missing from the list is no mystery.
+    expect(data.unreadable).toEqual([]);
+    registry.unreadable.push({ folder: 'org_cut', reason: 'its saved state is not valid JSON: the file is damaged or was cut short.' });
+    try {
+      expect((await api('GET', '/api/meta')).data.unreadable).toEqual([{ folder: 'org_cut', reason: 'its saved state is not valid JSON: the file is damaged or was cut short.' }]);
+    } finally {
+      registry.unreadable.length = 0;
+    }
   });
 
   it('recommends an executive team for an idea', async () => {

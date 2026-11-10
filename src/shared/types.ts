@@ -545,6 +545,8 @@ export type OrgStatus = 'idle' | 'running' | 'paused';
 export type PauseReason = 'user' | 'budget' | 'error' | 'restart' | 'cycle_limit';
 
 export interface Organisation {
+  /** Which version of the saved format this is. Absent on an organisation saved before formats were numbered. */
+  schemaVersion?: number;
   business: BusinessState;
   /** What each role and its agents may do, as far as the shareholders have said. */
   privileges: OrgPrivileges;

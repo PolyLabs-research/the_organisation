@@ -29,24 +29,44 @@ export class Store {
   }
 
   async loadAll(): Promise<Organisation[]> {
+    return (await this.scan()).orgs;
+  }
+
+  /**
+   * Every organisation on disk as it was saved, and the folders that should hold one but whose file cannot be
+   * read at all. What is read is not yet checked: whoever loads it decides whether it is an organisation.
+   */
+  async scan(): Promise<{ orgs: Organisation[]; unreadable: Array<{ folder: string; reason: string }> }> {
     const entries = await fs.readdir(this.orgsDir(), { withFileTypes: true });
     const orgs: Organisation[] = [];
+    const unreadable: Array<{ folder: string; reason: string }> = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      let text: string;
       try {
-        const org = JSON.parse(await fs.readFile(path.join(this.orgsDir(), entry.name, 'org.json'), 'utf8')) as Organisation;
-        // A copy of an organisation's folder (a backup, say) holds the original's id. Loading it
-        // would have the copy's stale state saved over the original, so it is left alone.
-        if (org.id !== entry.name) {
-          console.warn(`Skipping ${entry.name}: it holds organisation ${org.id}, which belongs in a folder of that name.`);
-          continue;
-        }
-        orgs.push(org);
+        text = await fs.readFile(path.join(this.orgsDir(), entry.name, 'org.json'), 'utf8');
       } catch (err) {
-        console.warn(`Skipping ${entry.name}: ${(err as Error).message}`);
+        // A folder with no organisation in it is not a damaged organisation.
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable.push({ folder: entry.name, reason: `its saved state cannot be read (${(err as NodeJS.ErrnoException).code ?? (err as Error).message}).` });
+        continue;
       }
+      let org: Organisation;
+      try {
+        org = JSON.parse(text) as Organisation;
+      } catch {
+        unreadable.push({ folder: entry.name, reason: 'its saved state is not valid JSON: the file is damaged or was cut short.' });
+        continue;
+      }
+      // A copy of an organisation's folder (a backup, say) holds the original's id. Loading it
+      // would have the copy's stale state saved over the original, so it is left alone.
+      if (org && typeof org === 'object' && typeof org.id === 'string' && org.id !== entry.name) {
+        console.warn(`Skipping ${entry.name}: it holds organisation ${org.id}, which belongs in a folder of that name.`);
+        continue;
+      }
+      // Without an id of its own it is still this folder's, and it is for the loader to say what is wrong with it.
+      orgs.push(org && typeof org === 'object' && !Array.isArray(org) ? org : ({ id: entry.name, damaged: true } as unknown as Organisation));
     }
-    return orgs;
+    return { orgs, unreadable };
   }
 
   /** Write the state to a temporary file and rename it into place, so a crash never leaves half a file. */

@@ -101,6 +101,8 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
       profiles: PROFILES,
       defaults: { ...DEFAULT_SETTINGS, executiveModel: model, workerModel: model },
       limits: { maxAgentsPerLead: MAX_AGENTS_PER_LEAD, maxLeads: MAX_LEADS },
+      // Organisations on disk that could not be loaded, so that one missing from the list is not a mystery.
+      unreadable: registry.unreadable,
       // Whether keys can be added from the interface: not when the server was told to simulate regardless.
       keys: router ? { presets: router.presets(), forcedSimulation: config.provider === 'mock', pricesChecked: PRICES_CHECKED } : null,
     });
