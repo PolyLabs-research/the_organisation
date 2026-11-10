@@ -217,7 +217,7 @@ export class OpenAICompatibleProvider {
       const shaped = asked(mode);
       const format = formatFor(mode);
       try {
-        reply = await this.complete(req.model, shaped, { format }, req.effort, STRUCTURED_MAX_TOKENS, req.signal);
+        reply = await this.complete(req.model, shaped, { format }, req.effort, STRUCTURED_MAX_TOKENS, req.signal, req.onUsage);
         if (unexplained) this.structuredMode.set(req.model, modes.indexOf(mode));
         break;
       } catch (err) {
@@ -257,7 +257,7 @@ export class OpenAICompatibleProvider {
         { role: 'user', content: `That reply does not match the required structure (${result.problem}). Reply again with the corrected JSON object and nothing else.` },
       ];
       try {
-        const second = await this.complete(req.model, repair, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.signal);
+        const second = await this.complete(req.model, repair, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.signal, req.onUsage);
         req.onUsage?.(second.usage);
         this.checkFinish(second);
         result = read(second.content);
@@ -295,7 +295,7 @@ export class OpenAICompatibleProvider {
 
       let reply: Reply;
       try {
-        reply = await this.complete(req.model, messages, { tools, toolChoice: wrapUpSent ? 'none' : undefined }, req.effort, AGENT_MAX_TOKENS, req.signal);
+        reply = await this.complete(req.model, messages, { tools, toolChoice: wrapUpSent ? 'none' : undefined }, req.effort, AGENT_MAX_TOKENS, req.signal, req.onUsage);
       } catch (err) {
         const failure = this.translate(err);
         if (req.signal?.aborted) throw failure;
@@ -376,8 +376,9 @@ export class OpenAICompatibleProvider {
    * One request. Its form is adjusted to what the endpoint has been found to
    * accept; when the endpoint refuses something about the form, the request
    * is reshaped and sent again, and the lesson is kept for later requests.
+   * A reply that breaks off part-way returns nothing, so what it cost is told to `onLost`.
    */
-  private async complete(model: string, messages: Message[], shape: Shape, effort: Effort, wanted: number, signal?: AbortSignal): Promise<Reply> {
+  private async complete(model: string, messages: Message[], shape: Shape, effort: Effort, wanted: number, signal?: AbortSignal, onLost?: (usage: CallUsage) => void): Promise<Reply> {
     type Optional = 'effort' | 'extra' | 'choice' | 'usage';
     // How this request goes out. It starts from what earlier requests learned about the endpoint, and each
     // refusal changes it. A change is kept for later requests only once a request has gone through with it:
@@ -415,7 +416,7 @@ export class OpenAICompatibleProvider {
         ...(shape.format ? { response_format: shape.format } : {}),
       };
       try {
-        const reply = now.streaming ? await this.stream(model, body, usage, signal) : await this.whole(model, body, signal);
+        const reply = now.streaming ? await this.stream(model, body, usage, signal, onLost) : await this.whole(model, body, signal);
         for (const learn of lessons) learn();
         if (without.has('effort')) this.noEffort.add(model);
         if (without.has('extra')) for (const key of now.extra) this.noExtra.add(key);
@@ -489,7 +490,7 @@ export class OpenAICompatibleProvider {
     return nearestEffort(effort, own === undefined ? this.dialect.efforts : own);
   }
 
-  private async stream(model: string, body: Record<string, unknown>, withUsage: boolean, signal?: AbortSignal): Promise<Reply> {
+  private async stream(model: string, body: Record<string, unknown>, withUsage: boolean, signal?: AbortSignal, onLost?: (usage: CallUsage) => void): Promise<Reply> {
     const params = { ...body, stream: true, ...(withUsage ? { stream_options: { include_usage: true } } : {}) } as unknown as CreateParams;
     const stream = await this.client.chat.completions.create(params, { signal });
     let content = '';
@@ -499,7 +500,12 @@ export class OpenAICompatibleProvider {
     let usage: Usage | undefined;
     const kept: Record<string, unknown> = {};
     const calls: ToolCall[] = [];
-    for await (const chunk of stream as AsyncIterable<Chunk>) {
+    // A reply that breaks off once it has started was paid for as far as it got. It is counted as the endpoint
+    // reported it, if it had, and otherwise by its length. A call that was stopped on purpose is not counted.
+    const lost = () => {
+      if (!signal?.aborted) onLost?.(this.price(model, usage, messagesLength(body), content.length + reasoning.length + callsLength(finished(calls))));
+    };
+    for await (const chunk of whileItLasts(stream as AsyncIterable<Chunk>, lost)) {
       if (chunk.usage) usage = chunk.usage;
       const choice = chunk.choices?.[0];
       if (!choice) continue;
@@ -523,7 +529,10 @@ export class OpenAICompatibleProvider {
     }
     // Every reply ends by saying why it ended. A stream that closes without doing so was cut off somewhere
     // on the way, however cleanly, and what arrived is not the whole of it.
-    if (finish === null) throw new ProviderError(`${this.label} ended a reply without saying it was finished.`, 'unavailable', true);
+    if (finish === null) {
+      lost();
+      throw new ProviderError(`${this.label} ended a reply without saying it was finished.`, 'unavailable', true);
+    }
     const made = finished(calls);
     return { content, reasoning, reasoningField, kept, calls: made, finish, usage: this.price(model, usage, messagesLength(body), content.length + reasoning.length + callsLength(made)) };
   }
@@ -626,6 +635,16 @@ export class OpenAICompatibleProvider {
       return new ProviderError(`The connection to ${who} was lost part-way through a reply: ${err.message}`, 'unavailable', true);
     }
     return new ProviderError(err instanceof Error ? err.message : String(err), 'bad_request', false);
+  }
+}
+
+/** The pieces of a streamed reply, as they come. If the stream fails before its end, `lost` is called before the failure is passed on. */
+async function* whileItLasts<T>(stream: AsyncIterable<T>, lost: () => void): AsyncGenerator<T> {
+  try {
+    yield* stream;
+  } catch (err) {
+    lost();
+    throw err;
   }
 }
 

@@ -38,6 +38,8 @@ export interface FakeReply {
   cut?: boolean;
   /** End the stream in good order without ever saying why the reply ended, as a proxy that times out can. */
   unfinished?: boolean;
+  /** Send the words and then say nothing more, with the connection left open. */
+  hold?: boolean;
 }
 
 /** A reply from the Responses API: what the model produced, and how the response ended. */
@@ -189,7 +191,9 @@ export class FakeOpenAI {
       else if (Array.isArray(value)) for (const item of value) send({ [field]: [item] });
       else send({ [field]: value });
     }
-    if (reply.cut) return void res.destroy();
+    // What was written is given time to arrive first: a reply cut off part-way is one that had started.
+    if (reply.cut) return void setTimeout(() => res.destroy(), 5);
+    if (reply.hold) return;
     (reply.calls ?? []).forEach((call, index) => {
       const args = typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments);
       const id = call.id ?? `call_${index}`;

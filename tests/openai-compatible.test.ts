@@ -4,6 +4,7 @@ import type { Dialect, Price } from '../src/server/providers/catalogue';
 import { OpenAICompatibleProvider, UNKNOWN_PRICE } from '../src/server/providers/openai-compatible';
 import { ProviderError, type AgentTool, type CallUsage } from '../src/server/providers/types';
 import { FakeOpenAI } from './fake-openai-api';
+import { waitFor } from './helpers';
 
 // The provider for OpenAI-compatible endpoints, run against a local stand-in
 // (fake-openai-api.ts). These check what is sent and how replies and refusals
@@ -714,7 +715,41 @@ describe('an agent run', () => {
     expect(api.chats).toHaveLength(4);
     expect(api.chats[2].messages).toEqual(api.chats[1].messages);
     expect(api.chats[3].messages).toEqual(api.chats[1].messages);
-    expect(usage).toHaveLength(2);
+    // The request that was refused cost nothing. The reply that was lost part-way did.
+    expect(usage).toHaveLength(3);
+  });
+
+  it('counts a reply that was lost part-way: as the endpoint reported it if it did, and by its length if not', async () => {
+    api.replies = [
+      // The connection drops with 4,000 characters written and nothing said of tokens.
+      { content: 'x'.repeat(4000), cut: true },
+      // The stream closes in good order, token counts and all, without the reply ever being finished.
+      { content: 'I have written half of the rep', unfinished: true },
+      { content: 'Done.' },
+    ];
+    const usage: CallUsage[] = [];
+    expect(await run(provider(), { onUsage: (u) => usage.push(u) })).toEqual({ text: 'Done.', turns: 1, stopped: 'done' });
+    // Each of the three replies is counted once.
+    expect(usage).toHaveLength(3);
+    // About four characters to a token, for what was written and for the prompt it answered.
+    expect(usage[0]!.outputTokens).toBe(1000);
+    expect(usage[0]!.inputTokens).toBe(Math.ceil(JSON.stringify(api.chats[0].messages).length / 4));
+    expect(usage[0]!.costUsd).toBeCloseTo((usage[0]!.inputTokens * 2 + 1000 * 10) / 1e6, 10);
+    expect(usage[1]).toMatchObject({ inputTokens: 1000, outputTokens: 200 });
+    expect(usage[2]).toMatchObject({ inputTokens: 1000, outputTokens: 200 });
+  });
+
+  it('counts nothing for a call that was stopped on purpose', async () => {
+    const stop = new AbortController();
+    api.replies = [{ content: 'x'.repeat(4000), hold: true }];
+    const usage: CallUsage[] = [];
+    const call = run(provider(), { signal: stop.signal, onUsage: (u) => usage.push(u) }).catch((e) => e);
+    // The endpoint is part-way through its reply when the call is cut off.
+    await waitFor(() => api.chats.length === 1, 'the request to arrive');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stop.abort();
+    expect(await call).toBeInstanceOf(ProviderError);
+    expect(usage).toHaveLength(0);
   });
 
   it('reads the endings some endpoints have names of their own for', async () => {
@@ -757,7 +792,8 @@ describe('an agent run', () => {
     const usage: CallUsage[] = [];
     expect(await run(provider(), { onUsage: (u) => usage.push(u) })).toEqual({ text: 'I have written the report.', turns: 1, stopped: 'done' });
     expect(api.chats).toHaveLength(2);
-    expect(usage).toHaveLength(1);
+    // The half that arrived was paid for, and so was the whole that followed.
+    expect(usage).toHaveLength(2);
     // One that never finishes is given up on, as a fault that may pass.
     api.replies = Array.from({ length: 6 }, () => ({ content: 'half', unfinished: true }));
     expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'unavailable', retryable: true, message: expect.stringContaining('without saying it was finished') });
