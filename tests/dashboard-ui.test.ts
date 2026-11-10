@@ -126,6 +126,26 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     }
   });
 
+  it('opens the file a request points to, however the lead wrote its path', async () => {
+    const runner = await organisation('Read first');
+    await runner.workspace.write('sales/quote.md', '# Quote\n\nTen boxes of paperclips at 48 GBP.');
+    // The same file three ways. The server takes all three; it answers with the last.
+    const files = ['/sales/quote.md', './sales/quote.md', 'sales/quote.md'];
+    runner.org.signatory.requests.push({ id: 'q-1', cycle: 1, kind: 'payment', fromId: 'cto', planId: null, phase: null, title: 'Deposit for the supplier', detail: 'The quote is in the file.', amount: '48 GBP', party: 'Acme Supplies', files, status: 'pending', raisedAt: new Date().toISOString(), ruling: null, outcome: null });
+    const page = await open('/#/org/' + runner.org.id);
+    try {
+      for (const written of files) {
+        await page.getByRole('tab', { name: /^Signatory/ }).click();
+        await page.getByTitle('Open ' + written, { exact: true }).click();
+        await page.locator('.file-view').getByText('Ten boxes of paperclips at 48 GBP.').waitFor();
+        expect(await page.locator('.file-tree button.is-on').innerText()).toBe('quote.md');
+        await page.getByRole('tab', { name: 'Board', exact: true }).click();
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
   it('leaves the Help dialog as it is while the organisation changes behind it', async () => {
     const runner = await organisation('Reading the guide');
     const page = await open('/#/org/' + runner.org.id);

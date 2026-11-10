@@ -684,7 +684,13 @@ export function Files({ org, selected, onSelect }: { org: Organisation; selected
     let live = true;
     setError(null);
     api.file(org.id, selected).then(
-      (f) => live && setContent({ path: f.path, text: f.content, truncated: f.truncated }),
+      (f) => {
+        if (!live) return;
+        setContent({ path: f.path, text: f.content, truncated: f.truncated });
+        // The server answers with the path as it keeps it. A lead may have written it another way, "/sales/quote.md" or
+        // "./sales/quote.md", and that spelling is swapped for the server's, so that the file is shown and marked in the list.
+        if (f.path !== selected) onSelect(f.path);
+      },
       (err: Error) => live && setError(err.message),
     );
     return () => {
