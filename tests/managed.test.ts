@@ -601,6 +601,34 @@ describe('what a session asks of the organisation', () => {
     expect(sent(api.session(), 'user.custom_tool_result')).toHaveLength(5);
   });
 
+  it('answers a call once when a look at the quiet session comes upon it while its answer is being prepared', async () => {
+    api.script = wholePlan;
+    const r = recorder();
+    // Bringing the first phase's file home takes longer than the wait before a session that says nothing is looked at.
+    const output = r.hooks.output;
+    let slow = true;
+    r.hooks.output = async (file) => {
+      if (slow) {
+        slow = false;
+        await pause(150);
+      }
+      return output(file);
+    };
+    const taken: string[] = [];
+    const record = r.hooks.phase;
+    r.hooks.phase = (given) => {
+      taken.push(given.phase);
+      return record(given);
+    };
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    expect(api.session().failure).toBeNull();
+    // Each record was taken once, and each call got one answer.
+    expect(taken).toEqual(PHASES);
+    const answers = sent(api.session(), 'user.custom_tool_result').map((e) => e.custom_tool_use_id);
+    expect(answers).toHaveLength(5);
+    expect(new Set(answers).size).toBe(5);
+  });
+
   it('declines a tool call that the platform could not clear and nobody is there to approve', async () => {
     let answer: Record<string, any> | undefined;
     api.script = async (s) => {

@@ -199,6 +199,8 @@ export class PlanSession {
 
   private readonly seen = new Set<string>();
   private readonly answered = new Set<string>();
+  /** Calls whose answer is being prepared or is on its way. */
+  private readonly answering = new Set<string>();
   private readonly pending = new Map<string, PendingCall>();
   private readonly openRuns = new Set<string>();
   private readonly runThreads = new Set<string>();
@@ -941,8 +943,22 @@ export class PlanSession {
     this.hooks.checkpoint(this.cursor, this.latestAt);
   }
 
+  /**
+   * Answer a call, once. The stream, the history and the look at a session that has gone quiet can each come
+   * upon the same call, and preparing an answer takes time (the phase's files are brought home first): whoever
+   * comes second leaves it to the first. Two answers would record the phase with the organisation twice.
+   */
   private async answer(call: PendingCall): Promise<void> {
-    if (this.answered.has(call.id)) return;
+    if (this.answered.has(call.id) || this.answering.has(call.id)) return;
+    this.answering.add(call.id);
+    try {
+      await this.respond(call);
+    } finally {
+      this.answering.delete(call.id);
+    }
+  }
+
+  private async respond(call: PendingCall): Promise<void> {
     const { hooks } = this;
     if (call.kind === 'approval') {
       // The platform could not tell whether the call was safe, and nobody is here to say.
