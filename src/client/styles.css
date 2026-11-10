@@ -2017,6 +2017,60 @@ input[type='radio'] {
   border-top: 0;
 }
 
+/* ---- memory ---- */
+
+.memory {
+  display: grid;
+  gap: 12px;
+}
+
+.memory-ask {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.memory-ask .field {
+  flex: 1;
+}
+
+.memory .chips {
+  margin-bottom: 0;
+}
+
+.memory-about {
+  display: grid;
+  gap: 8px;
+  max-width: 78ch;
+}
+
+/* Where a seat's badge stands on the board, for what came from no seat. */
+.memory-file {
+  display: inline-grid;
+  place-items: center;
+  min-width: 38px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink-3);
+}
+
+.memory-hit header code {
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.memory-hit mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--accent-soft);
+  color: inherit;
+}
+
+.memory-more {
+  font-size: 12.5px;
+}
+
 /* ---- files ---- */
 
 .files {

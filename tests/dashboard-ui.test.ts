@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -176,6 +176,89 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       await page.getByTitle('Open sales/invoice.md', { exact: true }).click();
       await page.locator('.file-view').getByText('Pay the deposit here (https://elsewhere.example/pay?ref=q-1)').waitFor();
       expect(await page.locator('.file-view a').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('finds what the organisation remembers under Memory, marks the words asked about, and leads on to the whole of it', async () => {
+    const runner = await organisation('Long memory');
+    const org = runner.org;
+    const at = new Date().toISOString();
+    // An organisation in its sixth cycle: a report from the fifth still in front of the board, a ruling from the second long since archived, and a file.
+    org.cycle.number = 6;
+    org.reports.push({ id: 'rep-1', planId: 'p-gone', fromId: 'cto', cycle: 5, at, headline: 'Supplier of pots chosen', summary: 'Potworks will supply terracotta pots at forty pence each. Delivery takes two weeks.\n\nThe quote holds until March.', outcomes: ['Three quotes compared'], files: ['ops/suppliers.md'], asks: [] });
+    new Store(dir).archiveCycleNow(org.id, 2, {
+      cycle: 2,
+      decisions: [{ id: 'd-1', cycle: 2, at, kind: 'contested', title: 'One supplier of pots or two', context: '', raisedById: 'cmo', planId: null, issues: [], participantIds: [], positions: {}, status: 'resolved', outcome: { method: 'ceo', byId: 'ceo', ruling: 'Use one supplier, Potworks.', rationale: 'Two would double the paperwork.', planAction: 'proceed', amendments: [], at } }],
+    });
+    await runner.workspace.write('ops/suppliers.md', '# Suppliers\n\nPotworks of Stoke quoted forty pence a pot, and [the deposit is paid here](https://elsewhere.example/pay).');
+    const page = await open('/#/org/' + org.id);
+    try {
+      await page.getByRole('tab', { name: 'Memory', exact: true }).click();
+      // Before anything is asked, it says what it holds, and how it is used.
+      await page.getByText('It holds 1 report to the board, 1 decision and 1 file, from cycles 2 to 5.').waitFor();
+      await page.getByText('Before a lead directs, plans or rules, it is shown the passages from earlier cycles that bear most on the matter.').waitFor();
+      const box = page.getByRole('searchbox', { name: 'Search what the organisation remembers' });
+      await box.fill('Potworks pots');
+      await box.press('Enter');
+      const hits = page.locator('.memory-hit');
+      await hits.nth(2).waitFor();
+      expect(await hits.count()).toBe(3);
+      // Each says what it is and when it was, and the words asked about are marked in it, in whatever form they come.
+      const report = hits.filter({ hasText: 'Supplier of pots chosen' });
+      expect((await report.locator('.msg-kind').innerText()).toLowerCase()).toBe('report to the board · cycle 5');
+      expect(await report.locator('.seat-badge').innerText()).toBe('CTO');
+      expect(await report.locator('p mark').allInnerTexts()).toEqual(['Potworks', 'pots']);
+      const ruling = hits.filter({ hasText: 'One supplier of pots or two' });
+      expect((await ruling.locator('.msg-kind').innerText()).toLowerCase()).toBe('decision · cycle 2');
+      // A ruling is quoted with what was ruled.
+      expect(await ruling.locator('p').first().innerText()).toContain('Decided: Use one supplier, Potworks.');
+      // What an agent wrote is shown as written: a link in it is words, and there is nothing to click.
+      const file = hits.filter({ hasText: 'ops/suppliers.md' });
+      expect(await file.locator('p').first().innerText()).toContain('forty pence a pot, and [the deposit is paid here](https://elsewhere.example/pay).');
+      expect(await page.locator('.memory a').count()).toBe(0);
+      // The whole of one, in its place, and back to the passage.
+      expect(await report.locator('p').first().innerText()).not.toContain('The quote holds until March.');
+      await report.getByRole('button', { name: 'Read all of it', exact: true }).click();
+      await report.getByText('The quote holds until March.').waitFor();
+      await report.getByRole('button', { name: 'Show the passage only', exact: true }).click();
+      await report.getByText('The quote holds until March.').waitFor({ state: 'detached' });
+      // Among files only, and from there to the file itself.
+      await page.getByRole('group', { name: 'Look among' }).getByRole('button', { name: 'Files', exact: true }).click();
+      await page.getByText('Supplier of pots chosen').waitFor({ state: 'detached' });
+      expect(await hits.count()).toBe(1);
+      await hits.getByRole('button', { name: 'Open the file', exact: true }).click();
+      await page.locator('.file-view').getByText('Potworks of Stoke quoted forty pence a pot').waitFor();
+      // Coming back, what was being looked for is still there.
+      await page.getByRole('tab', { name: 'Memory', exact: true }).click();
+      await hits.first().waitFor();
+      expect(await box.inputValue()).toBe('Potworks pots');
+      expect(await page.getByRole('group', { name: 'Look among' }).getByRole('button', { name: 'Files', exact: true }).getAttribute('aria-pressed')).toBe('true');
+      expect(await hits.count()).toBe(1);
+      // Nothing found is said, with what to try.
+      await box.fill('giraffes');
+      await box.press('Enter');
+      await page.getByText('Nothing remembered shares those words.').waitFor();
+      await page.getByText('Try looking among everything').waitFor();
+      // A cycle in the archive that cannot be read is named, and the rest is found as before.
+      await writeFile(path.join(dir, 'orgs', org.id, 'archive', 'cycle-3.json'), '{ not json', 'utf8');
+      await page.getByRole('group', { name: 'Look among' }).getByRole('button', { name: 'Everything', exact: true }).click();
+      await box.fill('paperwork');
+      await box.press('Enter');
+      await page.getByText('Cycle 3 is in the archive but could not be read, so nothing from it is found here.').waitFor();
+      await hits.filter({ hasText: 'One supplier of pots or two' }).waitFor();
+      expect(await hits.count()).toBe(1);
+      // Whether leads are shown any of it is a setting, and the page says which way it is set.
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      const shown = page.getByRole('checkbox', { name: /Show leads what the organisation remembers/ });
+      expect(await shown.isChecked()).toBe(true);
+      await shown.uncheck();
+      await saveSettings(page);
+      expect(runner.org.settings.recall).toBe(false);
+      await box.fill('');
+      await box.press('Enter');
+      await page.getByText('Leads are not being shown any of it before they decide: that is switched off in the settings.').waitFor();
     } finally {
       await page.close();
     }
