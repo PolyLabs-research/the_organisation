@@ -179,6 +179,48 @@ describe('a plan carried out in a hosted session', () => {
     expect(h.org.decisions.filter((d) => d.kind === 'in_remit' && d.title === 'Scope')).toHaveLength(1);
   });
 
+  it('answers a record that is sent again with what became of its requests the first time, and with what the board has since ruled', async () => {
+    const replies: Array<{ ok: boolean; message: string; instructions?: number }> = [];
+    let toldBySending = -1;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks, context }) => {
+        hooks.session({ id: 'sesn_test', consoleUrl: null, budgetUsd: 5 });
+        const phases = (context.phases as Array<{ name: string }>).map((p) => p.name);
+        const record = {
+          phase: phases[0]!,
+          summary: 'Specified.',
+          decisions: [],
+          requests: [
+            { kind: 'payment', title: 'Hosting', detail: 'Needed.', amount: '5 USD', party: 'A host', files: [] },
+            { kind: 'signature', title: 'Terms with the host', detail: 'Sign them.', amount: '', party: 'A host', files: [] },
+            { kind: 'payment', title: '', detail: 'Nothing to call it.', amount: '1 USD', party: 'A host', files: [] },
+          ],
+        };
+        replies.push(hooks.phase(record));
+        // The board rules, and the same record arrives again: the answer to it could not be sent the first time.
+        planOf(h!.org).amendments.push('Keep the first version to one city.');
+        replies.push(hooks.phase(record));
+        // Stating an instruction in an answer is not yet having told it. That is said when the answer has gone.
+        toldBySending = planOf(h!.org).managed!.instructionsSent;
+        hooks.instructed(replies[1]!.instructions!);
+        for (const phase of phases.slice(1)) hooks.phase({ phase, summary: 'Done.', decisions: [] });
+        hooks.report({ headline: 'Done', summary: 'Done.', outcomes: [], asks: [] });
+        return { status: 'reported' };
+      }),
+    });
+    await runToRest(h.runner);
+    expect(replies[0]!.message).toContain('Recorded. 2 requests have gone to the signatory. 1 was not filed');
+    expect(replies[1]!.message).toMatch(/^Spec was already recorded\. 2 requests it asks for went to the signatory when the phase was first recorded\. 1 was not filed\. Build is next\./);
+    expect(replies[1]!.message).toContain('Binding instructions from the board:');
+    expect(replies[1]!.message).toContain('Keep the first version to one city.');
+    expect(replies[1]!.instructions).toBe(1);
+    expect(h.org.signatory.requests.map((r) => r.title)).toEqual(['Hosting', 'Terms with the host']);
+    expect(toldBySending).toBe(0);
+    expect(planOf(h.org).managed!.instructionsSent).toBe(1);
+  });
+
   it('leaves the report to the board to the lead in its session', async () => {
     // Every phase is recorded some time before the lead reports. Nothing else may write the report meanwhile.
     let recorded = false;

@@ -135,6 +135,12 @@ export function raiseRequests(org: Organisation, lead: Executive, plan: Plan, ph
   return filed;
 }
 
+/** How many of these are already on file from this phase of the plan. A phase record that is sent again asks for the same things. */
+export function alreadyRaised(org: Organisation, plan: Plan, phase: string, specs: RequestSpec[]): number {
+  const filed = org.signatory.requests.filter((r) => r.planId === plan.id && r.phase === phase);
+  return (Array.isArray(specs) ? specs : []).filter((spec) => typeof spec === 'object' && spec !== null && filed.some((r) => sameTitle(r.title, line(spec.title, 160)))).length;
+}
+
 /** Record what an AI signatory decided. A request it agrees to then waits for a person to carry it out. */
 export function ruleOnRequest(org: Organisation, request: SignatoryRequest, verdict: 'authorise' | 'decline', reason: string): void {
   if (request.status !== 'pending' || request.ruling) return;

@@ -259,6 +259,7 @@ export class FakeManagedApi {
   /** A reply to give instead of the normal one, once, for the next request that matches. */
   private faults: Array<{ test: (r: Recorded) => boolean; status: number; message: string; times: number }> = [];
   private silences: Array<(r: Recorded) => boolean> = [];
+  private delays: Array<{ test: (r: Recorded) => boolean; ms: number }> = [];
   private server!: http.Server;
   private ids = 0;
   private clock = Date.parse('2026-11-05T10:00:00Z');
@@ -282,6 +283,11 @@ export class FakeManagedApi {
   /** For the next request that matches: carry it out, then drop the connection without replying. */
   dropReplyOnce(test: (r: Recorded) => boolean): void {
     this.silences.push(test);
+  }
+
+  /** For the next request that matches: carry it out at once, and reply only after this long. */
+  lateReplyOnce(test: (r: Recorded) => boolean, ms: number): void {
+    this.delays.push({ test, ms });
   }
 
   failOnce(test: (r: Recorded) => boolean, status: number, message: string): void {
@@ -341,6 +347,7 @@ export class FakeManagedApi {
     this.sessions.clear();
     this.faults = [];
     this.silences = [];
+    this.delays = [];
     this.script = async () => {};
     this.onStream = null;
     this.queueOnly = null;
@@ -359,9 +366,13 @@ export class FakeManagedApi {
     const silence = this.silences.findIndex((test) => test(recorded));
     const silent = silence >= 0;
     if (silent) this.silences.splice(silence, 1);
+    const delay = this.delays.findIndex((d) => d.test(recorded));
+    const late = delay >= 0 ? this.delays.splice(delay, 1)[0]!.ms : 0;
     const send = (status: number, payload: unknown): void => {
       if (silent) return void res.destroy();
-      res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(payload));
+      const reply = () => void res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(payload));
+      if (late) setTimeout(reply, late);
+      else reply();
     };
     const kinds: Record<number, string> = { 403: 'permission_error', 404: 'not_found_error', 409: 'conflict_error', 500: 'api_error' };
     const fail = (status: number, message: string) => send(status, { type: 'error', error: { type: kinds[status] ?? 'invalid_request_error', message } });

@@ -628,6 +628,60 @@ describe('what a session asks of the organisation', () => {
     expect(messages(api.session()).filter((m) => m.startsWith('Binding'))).toEqual(['Binding: Keep it to one city.']);
     expect(r.log.filter((l) => l === 'instructed 1')).toHaveLength(1);
   });
+
+  /** As the engine does: the answer to a phase record states whatever the board has ruled and the lead has not been told. */
+  const answersCarryInstructions = (r: ReturnType<typeof recorder>) => {
+    const record = r.hooks.phase;
+    r.hooks.phase = (given) => {
+      const reply = record(given);
+      const pending = r.hooks.instructions();
+      return pending ? { ...reply, message: `${reply.message}\n\n${pending.message}`, instructions: pending.instructions } : reply;
+    };
+  };
+
+  it('counts the instructions an answer states as told once the answer has been sent, and not before', async () => {
+    const r = recorder();
+    const heard: string[] = [];
+    api.script = async (s) => {
+      s.running();
+      s.delegate('sthr_a', 'Spec: write the document', 'Wrote spec.md.', { name: 'engineering/spec.md', content: '# Spec' });
+      // The board rules just before the lead records Spec, so the ruling goes with the answer to the record.
+      r.state.pending.push('Keep it to one city.');
+      heard.push((await s.call('record_phase', { phase: 'Spec', summary: 'Spec passed its gate.' })).text);
+      for (const name of PHASES.slice(1)) await phase(s, name);
+      await report(s);
+    };
+    answersCarryInstructions(r);
+    // The first answer is lost to a fault on the way.
+    api.failOnce((x) => x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.custom_tool_result', 500, 'internal error');
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    // The answer that did arrive states the instruction, and only then does it count as told.
+    expect(heard).toEqual(['Spec was already recorded. Build is next.\n\nBinding: Keep it to one city.']);
+    expect(r.log.filter((l) => l.startsWith('instructed'))).toEqual(['instructed 1']);
+    expect(r.log.indexOf('instructed 1')).toBeGreaterThan(r.log.indexOf('phase Spec'));
+    expect(r.state.pending).toEqual([]);
+    expect(messages(api.session())).toEqual(['Carry out this plan.']);
+  });
+
+  it('does not send as a message as well the instructions that an answer on its way states', async () => {
+    const r = recorder();
+    api.script = async (s) => {
+      s.running();
+      s.delegate('sthr_a', 'Spec: write the document', 'Wrote spec.md.', { name: 'engineering/spec.md', content: '# Spec' });
+      r.state.pending.push('Keep it to one city.');
+      const reply = await s.call('record_phase', { phase: 'Spec', summary: 'Spec passed its gate.' });
+      if (reply.isError) throw new Error(reply.text);
+      // The lead is at work again, and would take a message, before this side has heard that its answer arrived.
+      await pause(150);
+      for (const name of PHASES.slice(1)) await phase(s, name);
+      await report(s);
+    };
+    answersCarryInstructions(r);
+    api.lateReplyOnce((x) => x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.custom_tool_result', 100);
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    expect(messages(api.session())).toEqual(['Carry out this plan.']);
+    expect(r.log.filter((l) => l.startsWith('instructed'))).toEqual(['instructed 1']);
+  });
 });
 
 describe('workflow runs', () => {
@@ -1761,6 +1815,45 @@ describe('the organisation on hosted sessions, end to end', () => {
     // The lead is told when something it asked for did not go.
     expect(replies[2]).toContain('Recorded. 3 requests have gone to the signatory. 3 were not filed: a request needs a title, is filed once while it is open, and a phase may raise 3. Release is next.');
     expect(replies[3]).toMatch(/^Test was already recorded\. Nothing it asks of the signatory was filed: ask when you record a phase for the first time\. Release is next\./);
+  });
+
+  it('tells the lead what the board has ruled, and what became of its requests, when the answer that said so had to be sent again', async () => {
+    const replies: string[] = [];
+    let armed = false;
+    api.script = async (s) => {
+      await phase(s, 'Spec');
+      s.says('Starting Build.');
+      s.delegate('sthr_a', 'Build: write the document', 'Wrote build.md.', { name: 'engineering/build.md', content: '# Build' });
+      await s.charge(10);
+      // The board rules while Build is under way, so the ruling goes to the lead with the answer to its record.
+      h!.org.plans[0]!.amendments.push('Keep the first version to one city.');
+      armed = true;
+      const asked = await s.call('record_phase', {
+        phase: 'Build',
+        summary: 'Build passed its gate.',
+        requests: [{ kind: 'payment', title: 'A domain name', detail: 'The release needs an address people can reach.', amount: '12 GBP a year', party: 'A registrar' }],
+      });
+      replies.push(asked.text);
+      for (const name of PHASES.slice(2)) await phase(s, name);
+      await report(s);
+    };
+    // That answer is lost to a fault on the way, and is written and sent again.
+    api.failOnce((x) => armed && x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.custom_tool_result', 500, 'internal error');
+    h = await setup();
+    await runToRest(h.runner);
+    const { org } = h;
+    const plan = org.plans[0]!;
+    expect(api.session().failure).toBeNull();
+    expect(org.lastError).toBeNull();
+    expect(plan.status).toBe('done');
+    // The answer the lead got says that Build stands, that its request went (once), and what the board ruled.
+    expect(replies[0]).toMatch(/^Build was already recorded\. 1 request it asks for went to the signatory when the phase was first recorded\. Test is next\./);
+    expect(replies[0]).toContain('Binding instructions from the board:');
+    expect(replies[0]).toContain('Keep the first version to one city.');
+    expect(org.signatory.requests.map((r) => r.title)).toEqual(['A domain name']);
+    // Told once: with the answer, and not again as a message.
+    expect(plan.managed!.instructionsSent).toBe(1);
+    expect(messages(api.session()).filter((m) => m.includes('Keep the first version to one city.'))).toEqual([]);
   });
 
   it('files nothing for a plan that was cancelled while its phase record was on its way', async () => {

@@ -203,7 +203,10 @@ export class PlanSession {
   private readonly openRuns = new Set<string>();
   private readonly runThreads = new Set<string>();
   private readonly unfetchable = new Set<string>();
-  /** Messages sent to the lead, by event id, and the instructions each brings it up to date with once the session takes it up. */
+  /**
+   * Messages sent to the lead, by event id, and the instructions each brings it up to date with once the session
+   * takes it up. An answer that states instructions is here too while it is on its way, under its call's id.
+   */
   private readonly awaiting = new Map<string, number>();
   /** Messages the session has been seen to take up. One can be seen on the stream before the request that sent it has returned. */
   private readonly takenUp = new Set<string>();
@@ -961,7 +964,12 @@ export class PlanSession {
       } else {
         reply = { ok: false, message: `There is no tool named ${call.name}.` };
       }
-      await this.send([{ type: 'user.custom_tool_result', custom_tool_use_id: call.id, content: [{ type: 'text', text: reply.message }], is_error: !reply.ok }], true);
+      // An answer can bring the lead up to date with the board's instructions. They count as told once it has
+      // gone, not when it was written: one that fails to send is asked for again. While it is on its way they
+      // are not sent as a message as well (`tick` sends the next when nothing is waiting to be taken up).
+      if (reply.instructions !== undefined) this.awaiting.set(call.id, reply.instructions);
+      const sent = await this.send([{ type: 'user.custom_tool_result', custom_tool_use_id: call.id, content: [{ type: 'text', text: reply.message }], is_error: !reply.ok }], true).finally(() => this.awaiting.delete(call.id));
+      if (sent && reply.instructions !== undefined) hooks.instructed(reply.instructions);
     }
     this.answered.add(call.id);
     this.pending.delete(call.id);

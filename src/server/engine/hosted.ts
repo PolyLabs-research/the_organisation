@@ -7,7 +7,7 @@ import { WorkspaceError } from '../workspace';
 import type { Commit, EngineContext } from './handlers';
 import * as prompts from './prompts';
 import { MAX_RESULT_CHARS, clean, fileReport, logRemitDecisions, newTask, now } from './records';
-import { MAX_REQUESTS_PER_GATE, raiseRequests } from './signatory';
+import { MAX_REQUESTS_PER_GATE, alreadyRaised, raiseRequests } from './signatory';
 import { execById, isPlanActive, postToBoard, sessionAllowance, teamDir } from './state';
 
 // A plan carried out in a hosted session: the lead and its agents work in a
@@ -201,8 +201,18 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       }
       if (named < index) {
         // A record that is sent twice is the same record. What it asks of the signatory is not filed a second time.
-        const unfiled = record.requests?.length ? ' Nothing it asks of the signatory was filed: ask when you record a phase for the first time.' : '';
-        return { ok: true, message: `${plan.phases[named]!.name} was already recorded.${unfiled} ${current.name} is next.` };
+        // The answer to the first may never have reached the lead (it is written again when it could not be sent),
+        // so this one says what became of what the record asks for, and carries what the board has since ruled.
+        const asked = record.requests?.length ?? 0;
+        const filed = asked ? alreadyRaised(org, plan, plan.phases[named]!.name, record.requests ?? []) : 0;
+        const unfiled = !asked
+          ? ''
+          : !filed
+            ? ' Nothing it asks of the signatory was filed: ask when you record a phase for the first time.'
+            : ` ${filed} request${filed === 1 ? '' : 's'} it asks for went to the signatory when the phase was first recorded.${asked > filed ? ` ${asked - filed} ${asked - filed === 1 ? 'was' : 'were'} not filed.` : ''}`;
+        const pending = pendingInstructions();
+        const binding = pending.length ? `\n\n${prompts.sessionInstructions(pending)}` : '';
+        return { ok: true, message: `${plan.phases[named]!.name} was already recorded.${unfiled} ${current.name} is next.${binding}`, instructions: plan.amendments.length };
       }
       if (named > index) {
         return { ok: false, message: `${plan.phases[named]!.name} cannot be recorded yet: ${current.name} comes before it and has not been recorded.` };
@@ -224,8 +234,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       );
       const next = plan.phases[index + 1];
       // The record's reply is a sure way to reach the lead, so anything the board has since ruled goes with it.
+      // It counts as told when the reply has been sent (`instructed`), not here: a reply can fail on the way.
       const pending = pendingInstructions();
-      managed.instructionsSent = plan.amendments.length;
       changed();
       const binding = pending.length ? `\n\n${prompts.sessionInstructions(pending)}` : '';
       const left = wanted.length - asked.length;
@@ -238,6 +248,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       return {
         ok: true,
         message: `Recorded.${put} ${next ? `${next.name} is next.` : `Every phase is now recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`}${binding}${desk}`,
+        instructions: plan.amendments.length,
       };
     },
 

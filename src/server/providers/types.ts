@@ -145,6 +145,12 @@ export interface SessionSpend {
 export interface HookReply {
   ok: boolean;
   message: string;
+  /**
+   * Set when the message brings the lead up to date with the board's binding instructions: up to this one,
+   * counting from the first. They count as told once the answer has been sent, which the session then says
+   * with `instructed`. An answer that could not be sent is asked for again, and states them again.
+   */
+  instructions?: number;
 }
 
 /** A message for the lead, and how far it brings the lead up to date with the board's binding instructions. */
