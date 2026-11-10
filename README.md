@@ -554,7 +554,7 @@ data/connections.json  the API keys added in the interface, and what each was la
                        (and whether Claude Code is connected, which has no key)
 ```
 
-`connections.json` holds keys in the clear, readable only by your user. Leave it out of anything you share or back up to somewhere others can read; the whole `data/` folder is already ignored by git.
+`connections.json` holds keys in the clear, readable only by your user. Leave it out of anything you share or back up to somewhere others can read; the whole `data/` folder is already ignored by git. Nothing in the data folder is ever served to a browser: with `npm run dev` the client is served from the project folder, which the data folder is inside by default, and requests for anything in it are turned away.
 
 A request to the signatory is archived with the cycle in which it was settled, along with everything said about it. One that is still waiting stays in live state however old it is.
 

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import express from 'express';
 import { createApp } from './app';
+import { serveBuiltClient, serveClientFromSource } from './client';
 import { ROOT_DIR, loadConfig } from './config';
 import { ConnectionStore } from './connections';
 import { ProviderRouter } from './providers/router';
@@ -41,13 +41,10 @@ async function main(): Promise<void> {
     if (!existsSync(path.join(clientDir, 'index.html'))) {
       throw new Error('The client has not been built. Run "npm run build" first, or use "npm run dev".');
     }
-    app.use(express.static(clientDir));
-    app.get('/{*path}', (_req, res) => res.sendFile(path.join(clientDir, 'index.html')));
+    serveBuiltClient(app, clientDir);
   } else {
     // In development Vite serves the client from source, with hot reload, on the same port as the API.
-    const { createServer } = await import('vite');
-    const vite = await createServer({ root: ROOT_DIR, server: { middlewareMode: true }, appType: 'spa' });
-    app.use(vite.middlewares);
+    await serveClientFromSource(app, { root: ROOT_DIR, dataDir: config.dataDir, allowedHosts: config.allowedHosts });
   }
 
   const server = app.listen(config.port, config.host, () => {
