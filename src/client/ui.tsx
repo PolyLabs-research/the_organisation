@@ -1,4 +1,4 @@
-import { Component, type CSSProperties, type ReactNode } from 'react';
+import { Component, memo, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Executive, Organisation, PauseReason, SopPhase } from '../shared/types';
 
@@ -56,7 +56,11 @@ export function Sop({
   );
 }
 
-export function Markdown({ children }: { children: string }) {
+/**
+ * Text an agent wrote, laid out as Markdown. Kept as it was drawn for as long as the text is the same: the server sends
+ * the whole organisation again at every change, and without this every message on the board was parsed again each time.
+ */
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className="md">
       <ReactMarkdown
@@ -77,7 +81,7 @@ export function Markdown({ children }: { children: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 export function money(usd: number): string {
   if (usd > 0 && usd < 0.01) return '<$0.01';
