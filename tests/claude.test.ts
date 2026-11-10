@@ -497,6 +497,22 @@ describe('agent runs', () => {
     expect(messages.map((m: any) => m.role)).toEqual(['user', 'assistant']);
   });
 
+  it('gives up on a turn that keeps pausing, not on a run in which several turns each paused and went on', async () => {
+    const call = (id: string): Reply => ({ content: [{ type: 'tool_use', id, name: 'write_file', input: { path: `${id}.md`, content: 'x' } }], stop_reason: 'tool_use' });
+    const pause: Reply = { content: [{ type: 'text', text: 'Searching…' }], stop_reason: 'pause_turn' };
+    // Six turns, each paused once by the server and then finished.
+    for (let i = 1; i <= 6; i++) replies.push(pause, call(`toolu_${i}`));
+    replies.push({ content: [{ type: 'text', text: 'Six files written.' }] });
+    const result = await provider().agent(agentRequest({ maxTurns: 24 }));
+    expect(result).toMatchObject({ text: 'Six files written.', stopped: 'done' });
+    expect(written).toHaveLength(6);
+    // One turn that is paused six times running is not going to finish.
+    replies.push(pause, pause, pause, pause, pause, pause);
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['unavailable', true]);
+    expect(err.message).toContain('kept pausing');
+  });
+
   it('stops between turns when told to, before spending anything more', async () => {
     replies.push({ content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' });
     let turn = 0;

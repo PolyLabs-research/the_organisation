@@ -297,6 +297,8 @@ export class ClaudeProvider implements Provider {
         messages.push({ role: 'assistant', content: message.content });
         continue;
       }
+      // The turn came to its end: the limit is on one turn being resumed again and again, not on the whole run.
+      pauses = 0;
 
       const { content, calls } = afterFallback(message.content);
       const text = content
