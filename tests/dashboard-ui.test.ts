@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -15,15 +14,13 @@ import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
 import type { BoardMessage } from '../src/shared/types';
 import { plan } from './client-helpers';
-import { QUIET, TEAM } from './helpers';
+import { CHROME, QUIET, TEAM, withoutBrowser } from './helpers';
 
 // The built dashboard in a real browser, against a real server on a simulated provider: what a person sees
 // when something goes wrong, and what the page sends when they act.
 
-const chrome = process.env.CHROME_PATH ?? '/opt/google/chrome/chrome';
-
 // Each test has the time the other browser tests have: a browser shared with the rest of a full run can be slow to answer.
-describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('the dashboard in a browser', { timeout: 40_000 }, () => {
+describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', { timeout: 40_000 }, () => {
   let dir: string;
   let registry: Registry;
   let server: Server;
@@ -41,7 +38,7 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     server = app.listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => server.once('listening', resolve));
     base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
-    browser = await chromium.launch({ executablePath: chrome, headless: true, chromiumSandbox: true });
+    browser = await chromium.launch({ executablePath: CHROME, headless: true, chromiumSandbox: true });
   }, 40_000);
 
   afterAll(async () => {
@@ -305,6 +302,21 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
       await page.locator('.pace-options [aria-checked=true]').filter({ hasText: 'Slow' }).waitFor();
       expect(await guide.locator('[data-marked]').count()).toBe(2);
     } finally {
+      await page.close();
+    }
+  });
+
+  it('names, above the list of organisations, any the server could not load', async () => {
+    // What the server keeps when it starts and finds an organisation on disk that it cannot read.
+    registry.unreadable.push({ folder: 'org_damaged', reason: 'its saved state is damaged: no settings.' });
+    const page = await open('/');
+    try {
+      const note = page.getByRole('alert').filter({ hasText: 'One organisation was not loaded.' });
+      await note.waitFor();
+      expect(await note.innerText()).toContain('org_damaged: its saved state is damaged: no settings.');
+      expect(await note.innerText()).toContain('Nothing on disk was changed');
+    } finally {
+      registry.unreadable.length = 0;
       await page.close();
     }
   });

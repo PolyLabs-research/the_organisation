@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -14,10 +13,9 @@ import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
 import { MockProvider } from '../src/server/providers/mock';
 import { FakeGitHub } from './fake-github-api';
-import { QUIET } from './helpers';
+import { CHROME, QUIET, withoutBrowser } from './helpers';
 
-const chrome = process.env.CHROME_PATH ?? '/opt/google/chrome/chrome';
-it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages business email, passwords and grants through the real dashboard', async () => {
+it.skipIf(withoutBrowser({ build: true }))('manages business email, passwords and grants through the real dashboard', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'access-ui-'));
   const store = new Store(dir); await store.init();
   const mail = { check: vi.fn(async () => {}), list: vi.fn(async () => [{ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', date: '' }]), read: vi.fn(async () => ({ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', text: 'Your fixture verification code is 123456.', date: '', truncated: false })), send: vi.fn(async (_box: unknown, _draft: { subject: string }) => {}) };
@@ -36,7 +34,7 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
-  const browser = await chromium.launch({ executablePath: chrome, headless: true, chromiumSandbox: true });
+  const browser = await chromium.launch({ executablePath: CHROME, headless: true, chromiumSandbox: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   page.setDefaultTimeout(10000);
   const errors: string[] = [];
