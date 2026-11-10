@@ -166,16 +166,21 @@ export class ClaudeProvider implements Provider {
     if (message.stop_reason === 'max_tokens') {
       throw new ProviderError('The reply was cut off before it was complete.', 'truncated', true);
     }
-    const text = message.content
-      .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
-    let data: unknown;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new ProviderError('The reply was not valid JSON.', 'invalid_output', true);
-    }
+    const read = (blocks: Anthropic.Beta.BetaContentBlock[]): unknown => {
+      const text = blocks
+        .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === 'text')
+        .map((block) => block.text)
+        .join('');
+      try {
+        return JSON.parse(text);
+      } catch {
+        return undefined;
+      }
+    };
+    // A fallback model that took over part-way leaves a marker where it began. What follows the marker is the
+    // answer written afresh, or the rest of the one the first model had started: whichever reads as JSON.
+    const data = read(message.content.slice(message.content.findLastIndex((block) => block.type === 'fallback') + 1)) ?? read(message.content);
+    if (data === undefined) throw new ProviderError('The reply was not valid JSON.', 'invalid_output', true);
     // The API enforces the shape; this also enforces whatever the schema could not express to it.
     const parsed = req.schema.safeParse(data);
     if (!parsed.success) {

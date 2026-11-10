@@ -312,6 +312,16 @@ describe('structured calls', () => {
     expect(usage[0]!.costUsd).toBeCloseTo(declined + fallback, 10);
   });
 
+  it('reads the answer of a fallback model that took over after the first model had begun one', async () => {
+    const marker = { type: 'raw' as const, block: { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' }, trigger: { type: 'refusal' } } };
+    // The fallback wrote the answer afresh: what the first model had written of it is not part of it.
+    replies.push({ content: [{ type: 'text', text: '{"verdict":"rew' }, marker, { type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }], model: 'claude-opus-4-8' });
+    expect(await provider().structured(structuredRequest())).toEqual({ verdict: 'pass', summary: 'Good.' });
+    // The fallback carried on from where the first model stopped: the answer is the two together.
+    replies.push({ content: [{ type: 'text', text: '{"verdict":"pa' }, marker, { type: 'text', text: 'ss","summary":"Good."}' }], model: 'claude-opus-4-8' });
+    expect(await provider().structured(structuredRequest())).toEqual({ verdict: 'pass', summary: 'Good.' });
+  });
+
   it('takes the key out of a refusal that quotes it back, before the refusal is shown or kept', async () => {
     replies.push({ status: 401, error: { type: 'authentication_error', message: 'invalid x-api-key: test-key has been revoked' } });
     const err = await failure(provider().structured(structuredRequest()));
