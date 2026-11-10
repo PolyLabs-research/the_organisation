@@ -509,7 +509,7 @@ export async function recallAnswer(memory: OrgMemory, who: (seatId: string) => s
   }
 }
 
-/** The tool an agent searches the memory with. Every role's agents have it: it reads only what the organisation itself has already written, for all to see. */
+/** The tool an agent searches the memory with. Every role's agents have it: it reads the organisation's own record, and nothing from outside it. */
 export function memoryTools(memory: OrgMemory, who: (seatId: string) => string, active: () => boolean): AgentTool[] {
   return [{
     name: 'recall',
