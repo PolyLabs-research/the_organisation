@@ -372,6 +372,14 @@ describe('one call through Claude Code', () => {
     expect([silent.code, silent.retryable]).toEqual(['unavailable', true]);
   });
 
+  it('keeps the answer of a run that gave it and then would not end', async () => {
+    const usage: CallUsage[] = [];
+    const data = await provider({ FAKE_CLAUDE_MODE: 'lingers' }, { idleTimeoutMs: 300 }).structured(ask({ onUsage: (u) => usage.push(u) }));
+    // The run had said everything it had to say. That it then had to be stopped does not make its answer worthless.
+    expect(data).toEqual({ proposal: 'Settled.', priority: 'high' });
+    expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.01, 9);
+  });
+
   it('pauses rather than carry on into paid extra usage, unless told it may', async () => {
     const guarded = provider({ FAKE_CLAUDE_MODE: 'extra-once', FAKE_CLAUDE_EXTRA_WAIT_MS: '3000' });
     // Two runs are in flight when one of them hears that the plan's included usage is spent. Both are ended,

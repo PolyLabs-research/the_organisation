@@ -857,7 +857,9 @@ export class ClaudeCodeProvider implements Provider {
   private settle(outcome: Outcome, model: string, options: { turnLimitIsAnEnd?: boolean } = {}): Json {
     if (outcome.killed === 'abort') throw new ProviderError('The call was stopped.', 'aborted', false);
     if (outcome.killed === 'closed') throw new ProviderError('Claude Code was disconnected while this call was running.', 'auth', false);
-    if (outcome.killed === 'idle') {
+    // A run that had already given its result, and was stopped only because it then would not end, has said all
+    // it had to say: its result stands.
+    if (outcome.killed === 'idle' && !outcome.result) {
       throw new ProviderError(`Claude Code said nothing for ${Math.round(this.idleTimeoutMs / 60_000)} minutes and was stopped.`, 'unavailable', true);
     }
     if (outcome.killed === 'no_tools') throw new ProviderError('The run could not reach the organisation’s tools, so it was stopped before it did anything.', 'unavailable', true);

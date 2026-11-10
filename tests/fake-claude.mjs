@@ -15,7 +15,7 @@
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
 //                        | silent | extra | extra-once | credits | needscredits | loop | stubborn | badloop | parallel | notools
 //                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow | toolong | toolong-words
-//                        | filtered | blocked | fallback | renamed-two
+//                        | filtered | blocked | fallback | renamed-two | lingers
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -309,7 +309,10 @@ async function main() {
     reply([{ type: 'tool_use', id: 'toolu_structured', name: 'StructuredOutput', input: data }], 24);
     emit({ type: 'user', session_id: session, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_structured', content: 'Structured output provided successfully' }] } });
     limits();
-    return finish({ result: JSON.stringify(data), structured_output: data, stop_reason: 'tool_use' });
+    finish({ result: JSON.stringify(data), structured_output: data, stop_reason: 'tool_use' });
+    // The answer is out, and the run's account of itself with it, and then the process does not end.
+    if (MODE === 'lingers') return new Promise(() => setInterval(() => {}, 1000));
+    return;
   }
 
   if (!server) {
