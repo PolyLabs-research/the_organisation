@@ -408,5 +408,10 @@ describe('an agent run through the Responses API', () => {
     expect(usage[0]!.inputTokens).toBeGreaterThan(5);
     expect(usage[0]!.outputTokens).toBeGreaterThan(0);
     expect(usage[0]!.costUsd).toBeGreaterThan(0);
+    // The same when what it reports for them is not a number.
+    api.responses = [{ text: 'Done.', usage: { input_tokens: 'n/a', output_tokens: 'n/a', input_tokens_details: { cached_tokens: 'n/a' } } }];
+    await run(provider(), { onUsage: (u) => usage.push(u) });
+    expect(usage[1]).toMatchObject({ inputTokens: usage[0]!.inputTokens, outputTokens: usage[0]!.outputTokens, cacheReadTokens: 0 });
+    expect(usage[1]!.costUsd).toBeCloseTo(usage[0]!.costUsd, 10);
   });
 });

@@ -405,6 +405,24 @@ describe('fitting a request to the endpoint', () => {
     expect(usage[0]!.costUsd).toBeGreaterThan(0);
   });
 
+  it('counts tokens itself when what the endpoint reports for them is not a number', async () => {
+    api.replies = [{ content: GOOD, usage: { prompt_tokens: 'n/a', completion_tokens: {}, total_tokens: 'n/a' } }];
+    const usage: CallUsage[] = [];
+    await ask(provider(), (u) => usage.push(u));
+    // The same rough count as for an endpoint that reports nothing, and a cost that can be added up.
+    expect(usage[0]!.inputTokens).toBe(Math.ceil(JSON.stringify(api.chats[0].messages).length / 4));
+    expect(usage[0]!.outputTokens).toBe(Math.ceil(GOOD.length / 4));
+    expect(usage[0]!.costUsd).toBeCloseTo((usage[0]!.inputTokens * 2 + usage[0]!.outputTokens * 10) / 1e6, 10);
+    // A count below nothing is no count either, and what is said of the cache is taken only if it is a number.
+    api.replies = [{ content: GOOD, usage: { prompt_tokens: 1000, completion_tokens: -5, prompt_tokens_details: { cached_tokens: 'most of it' } } }];
+    await ask(provider(), (u) => usage.push(u));
+    expect(usage[1]).toMatchObject({ inputTokens: 1000, cacheReadTokens: 0, outputTokens: Math.ceil(GOOD.length / 4) });
+    // So is a gateway's own figure for what the call cost.
+    api.replies = [{ content: GOOD, usage: { prompt_tokens: 1000, completion_tokens: 100, cost: 'a lot' } }];
+    await ask(provider(), (u) => usage.push(u));
+    expect(usage[2]!.costUsd).toBeCloseTo((1000 * 2 + 100 * 10) / 1e6, 10);
+  });
+
   it('asks for the whole reply at once from an endpoint that cannot stream', async () => {
     api.rules = [(b) => (b.stream ? 'Streaming is not supported for this model' : undefined)];
     api.replies = [{ content: GOOD, usage: { prompt_tokens: 50, completion_tokens: 10 } }];

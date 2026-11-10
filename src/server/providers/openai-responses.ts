@@ -10,6 +10,7 @@ import {
   STRUCTURED_MAX_TOKENS,
   TURN_RETRIES,
   WRAP_UP,
+  counted,
   lowerCap,
   overflows,
   refusedForContent,
@@ -321,10 +322,10 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     // A response that failed and reports no tokens is taken to have cost none.
     const usage = (final.usage ?? null) as { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } } | null;
     const spent = this.cost(model, {
-      prompt: usage?.input_tokens ?? sent,
-      cached: usage?.input_tokens_details?.cached_tokens ?? 0,
-      written: usage?.input_tokens_details?.cache_write_tokens ?? 0,
-      output: usage?.output_tokens ?? Math.ceil(JSON.stringify(items).length / 4),
+      prompt: counted(usage?.input_tokens) ?? sent,
+      cached: counted(usage?.input_tokens_details?.cached_tokens) ?? 0,
+      written: counted(usage?.input_tokens_details?.cache_write_tokens) ?? 0,
+      output: counted(usage?.output_tokens) ?? Math.ceil(JSON.stringify(items).length / 4),
       billed: null,
     });
     if (usage || !broken) onUsage?.(spent);

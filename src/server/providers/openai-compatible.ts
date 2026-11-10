@@ -585,13 +585,13 @@ export class OpenAICompatibleProvider {
     const cached = details.cached_tokens ?? more.prompt_cache_hit_tokens;
     return this.cost(model, {
       // Without counts from the endpoint, the request is still charged for, at about four characters to a token.
-      prompt: usage?.prompt_tokens ?? Math.ceil(promptChars / 4),
-      cached: typeof cached === 'number' ? cached : 0,
-      written: typeof details.cache_write_tokens === 'number' ? details.cache_write_tokens : 0,
-      output: usage?.completion_tokens ?? Math.ceil(replyChars / 4),
+      prompt: counted(usage?.prompt_tokens) ?? Math.ceil(promptChars / 4),
+      cached: counted(cached) ?? 0,
+      written: counted(details.cache_write_tokens) ?? 0,
+      output: counted(usage?.completion_tokens) ?? Math.ceil(replyChars / 4),
       // A gateway that bills for others' models says what the request cost; that is taken over an estimate. A
       // cost of nothing is not: an endpoint that fills the field in without meaning it would make every call free.
-      billed: typeof more.cost === 'number' && more.cost > 0 ? more.cost : null,
+      billed: (counted(more.cost) ?? 0) > 0 ? (more.cost as number) : null,
     });
   }
 
@@ -657,6 +657,12 @@ export class OpenAICompatibleProvider {
     return new ProviderError(err instanceof Error ? err.message : String(err), 'bad_request', false);
   }
 }
+
+/**
+ * A count an endpoint reported, if it is one: a number, and not below nothing. Anything else an endpoint may put in
+ * its place is no count at all, and would make a cost that cannot be added to the spend.
+ */
+export const counted = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
 
 /** The pieces of a streamed reply, as they come. If the stream fails before its end, `lost` is called before the failure is passed on. */
 export async function* whileItLasts<T>(stream: AsyncIterable<T>, lost: () => void): AsyncGenerator<T> {
