@@ -480,7 +480,7 @@ If [Claude Code](https://code.claude.com/docs/en/setup) is installed on the mach
 
 ## Spend and limits
 
-An organisation that never stops can spend without limit, so every organisation has a **budget** (default $5). Spend is estimated from token usage at list prices: Claude's are in [`src/server/providers/pricing.ts`](src/server/providers/pricing.ts) and the other providers' in [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts) (see [Prices](#models-and-keys) above). When the estimate reaches the budget the organisation pauses itself and waits for you to raise it. Agents that are mid-task at that moment are told to stop and report what they have, so their work is kept rather than paid for again; the spend can therefore pass the budget by about one more model turn for each agent at work. The estimate is not a bill: check the provider's own console for what was charged. Calls cut off by "Stop now" are not counted, and neither is a team recommendation in the wizard, which belongs to no organisation (the wizard shows what it cost).
+An organisation that never stops can spend without limit, so every organisation has a **budget** (default $5). Spend is estimated from token usage at list prices: Claude's are in [`src/server/providers/pricing.ts`](src/server/providers/pricing.ts) and the other providers' in [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts) (see [Prices](#models-and-keys) above). When the estimate reaches the budget the organisation pauses itself and waits for you to raise it. Agents that are mid-task at that moment are told to stop and report what they have, so their work is kept rather than paid for again; the spend can therefore pass the budget by about one more model turn for each agent at work. The estimate is not a bill: check the provider's own console for what was charged. A reply that fails after it has begun to arrive is counted as far as it got, each time it is tried: what it read as the provider reported it, and what it wrote by its length where the provider had not yet said. Calls cut off by "Stop now" are not counted, and neither is a team recommendation in the wizard, which belongs to no organisation (the wizard shows what it cost).
 
 What drives spend, and where to change it (wizard or settings):
 
@@ -553,7 +553,8 @@ data/orgs/<id>/
 data/claude-code/      for the Claude Code connection: the standing instructions handed to its runs
 data/managed.json      ids of the agents and environments hosted sessions start from
 data/connections.json  the API keys added in the interface, and what each was last seen to offer
-                       (and whether Claude Code is connected, which has no key)
+                       (and whether Claude Code is connected, which has no key), and the name
+                       each key from the environment was first given
 data/server.lock       which server is using this folder, while one is
 ```
 

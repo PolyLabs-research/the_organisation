@@ -388,9 +388,10 @@ async function replyOf(stream: BetaMessageStream, req: Pick<AgentRequest, 'model
       req.onUsage?.(usageOf({ ...started, usage }, req.model));
     }
     // Nothing was sent at all, and it was not the connection that failed: the SDK stops there when it has no key,
-    // token or login to send the request with, or cannot use the one it has.
+    // token or login to send the request with, or cannot use the one it has. That is what this nearly always is,
+    // but not what it must be, so the message says what is known and gives the SDK's own words for the rest.
     if (!stream.response && !(err instanceof Anthropic.APIError) && !req.signal?.aborted) {
-      throw new ProviderError(`No usable Anthropic credentials were found: ${(err as Error).message}`, 'auth', false);
+      throw new ProviderError(`Nothing could be sent to Anthropic, which usually means no usable key, token or login was found: ${(err as Error).message}`, 'auth', false);
     }
     // A stream that just stops, with no error from the API or from the connection, leaves the SDK with no message
     // to give: a reply that was never finished, or an answer with nothing in it. That is a reply lost on the way

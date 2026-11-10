@@ -577,7 +577,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           task.startedAt = null;
           return;
         }
-        const note = result.stopped === 'cut_short' ? '\n\n[The agent was stopped before it had finished: it reached its turn limit or the budget was spent.]' : '';
+        const note = result.stopped === 'cut_short' ? '\n\n[The agent was stopped before it had finished: it reached its turn limit, ran out of room for its reply, or the budget was spent.]' : '';
         task.status = 'done';
         task.result = (result.text.trim() || '(The agent gave no closing report.)').slice(0, MAX_RESULT_CHARS) + note;
         task.files = written;
