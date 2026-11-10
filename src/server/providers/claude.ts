@@ -262,7 +262,10 @@ export class ClaudeProvider implements Provider {
         if (!(err instanceof Anthropic.APIError) && !hasCause(err)) {
           // With eager input streaming, a tool input that is not parseable JSON rejects here.
           if (++badJson <= 2) continue;
-          throw new ProviderError(`The agent’s tool call could not be read: ${(err as Error).message}`, 'invalid_output', false);
+          // The SDK's message ends with the whole of the input it could not read, which may be a file as long as
+          // a megabyte. What went wrong is kept; the input is not, since this is shown to a person and stored.
+          const why = (err as Error).message.replace(/\s*JSON: [\s\S]*$/, '').slice(0, 300);
+          throw new ProviderError(`The agent’s tool call could not be read: ${why}`, 'invalid_output', false);
         }
         throw failure;
       }

@@ -493,6 +493,20 @@ describe('agent runs', () => {
     expect(usage[1]!.outputTokens).toBe(40);
   });
 
+  it('gives up on a tool call that keeps arriving unreadable, without quoting the call in what it says', async () => {
+    const raw = `{"path": "a.md", "content": "${'A line of the file.\n'.repeat(400)}"}`;
+    const unreadable: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {}, rawInput: raw }], stop_reason: 'tool_use' };
+    replies.push(unreadable, unreadable, unreadable);
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['invalid_output', false]);
+    expect(seen).toHaveLength(3);
+    expect(written).toEqual([]);
+    // The failure is shown to a person and kept with the task: it says what went wrong, not the file that was being written.
+    expect(err.message).toContain('could not be read');
+    expect(err.message).not.toContain('A line of the file.');
+    expect(err.message.length).toBeLessThan(400);
+  });
+
   it('sends the same turn again when the API is overloaded', async () => {
     const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
     replies.push(call, { status: 529, error: { type: 'overloaded_error', message: 'Overloaded' } }, { content: [{ type: 'text', text: 'Done.' }] });
