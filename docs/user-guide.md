@@ -189,7 +189,7 @@ Agents on this machine write files. To let a role's agents also run them (tests,
 
 Each command runs in a container that cannot reach the rest of this machine, on a copy of the workspace. The organisation's settings name the image the container is started from, and have a switch, **Let code in a sandbox reach the network**, which is off: with it on, code can install packages, and can also reach any site and send what it can read there.
 
-The board tells you if Docker is not running or the image cannot be fetched. See the [guide to running code](code-execution.md) before you open the network.
+The board tells you if Docker is not running or the image cannot be fetched, and so does the Privileges page. Under **Plans**, each task then lists what it ran and how each command ended, as the system recorded it: go by that where an agent's report says more. See the [guide to running code](code-execution.md) before you open the network.
 
 ## Work on code
 

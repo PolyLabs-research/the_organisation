@@ -349,7 +349,7 @@ A tool still does whatever its server lets it do, and no person checks each call
 On this machine an agent reads and writes files, and whether its code ran or its tests passed used to be whatever it said. A role you allow can now run commands in a **sandbox**: a container on this machine that holds a copy of the workspace. It needs Docker, works with any model provider, and is off for every role until you tick **Run code in a sandbox** under Privileges.
 
 - **A command cannot reach the rest of the machine.** Each one runs in a container of its own, removed when it ends, with no network unless you open it, no capabilities, a system it cannot write to, an ordinary user, and limits on memory, processors, processes, disk and time. No folder of this machine is mounted in it: the workspace goes in as an archive, and a file comes out only when an agent asks for it by name.
-- **The system keeps its own record.** Every command is noted on its task as it ends, with how it ended: the exit code, a time limit reached, a process killed for using too much memory. The lead is shown that record at the phase gate, beside what the agent reported, and is told to go by it.
+- **The system keeps its own record.** Every command is noted on its task as it ends, with how it ended: the exit code, a time limit reached, a process killed for using too much memory. The lead is shown that record at the phase gate, beside what the agent reported, and is told to go by it. You read the same record on each task under **Plans**.
 - **Nothing an agent writes is ever read by a shell on this machine.** Its command is handed to the container as an argument, the folder is checked to be inside the workspace, and a command that contains a saved password or token is refused.
 - **Taking the privilege away stops what is running.**
 
@@ -384,10 +384,10 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
   - **Overseer**: four views for keeping an eye on the whole organisation (see [Overseer](#overseer) below).
   - **Calendar**: persistent commitments in an agenda or month view, with owners, dependencies, dates and verification.
   - **Email & accounts**: connected mailboxes, saved service accounts, team access, drafts for a person to send, access requests and vault controls.
-  - **Privileges**: what each role and its agents may do, and what no role can.
+  - **Privileges**: what each role and its agents may do, and what no role can. Where a role may run code, it says whether anything can be run on this machine, and with what.
   - **Approaches**: the ways of working a lead can choose between.
   - **Business**: the operating digest, customers, scorecard, finances, knowledge, incoming events and revision history.
-  - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report.
+  - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report, and what each task ran in a sandbox, as the system recorded it.
   - **Decisions**: what went to the board, each lead's position and the ruling, plus the decisions leads took in their own remit.
   - **Signatory**: what the organisation has asked to have paid for or signed, and where you tell it what you did. The tab, the dashboard and the home page show how many requests are waiting for you.
   - **Files**: the workspace.

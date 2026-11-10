@@ -1,5 +1,7 @@
 import { EVERY_ROLE_CAN, NO_ROLE_CAN, PRIVILEGES, allows, applies, rolesOf, type PrivilegeSpec } from '../shared/privileges';
+import type { SandboxStatus } from '../shared/sandbox';
 import type { Executive, Organisation, OrgView } from '../shared/types';
+import { useEffect, useState } from 'react';
 import { api, useAction } from './api';
 import { ErrorNote, SeatBadge } from './ui';
 import { HelpLink } from './Guide';
@@ -23,9 +25,25 @@ function Tick({ org, seat, privilege, busy, onChange }: { org: Organisation; sea
 export function Privileges({ org, onView, onSettings }: { org: Organisation; onView: (view: OrgView) => void; onSettings: () => void }) {
   const action = useAction();
   const roles = rolesOf(org);
+  // Code that can reach the network can send what it reads anywhere: with the network open, running it is something done outside.
+  const runsOutside = (seat: Executive) => allows(org, seat.id, 'run_code') && org.settings.sandboxNetwork;
   // A role that reads what anyone can send it, and can also change something outside without a person looking first.
-  const steerable = roles.filter((seat) => allows(org, seat.id, 'read_mail') && (allows(org, seat.id, 'act') || allows(org, seat.id, 'use_tools')));
-  const steeredTo = [steerable.some((seat) => allows(org, seat.id, 'act')) ? 'act on accounts' : '', steerable.some((seat) => allows(org, seat.id, 'use_tools')) ? 'call connected tools' : ''].filter(Boolean).join(' or ');
+  const steerable = roles.filter((seat) => allows(org, seat.id, 'read_mail') && (allows(org, seat.id, 'act') || allows(org, seat.id, 'use_tools') || runsOutside(seat)));
+  const steeredTo = [steerable.some((seat) => allows(org, seat.id, 'act')) ? 'act on accounts' : '', steerable.some((seat) => allows(org, seat.id, 'use_tools')) ? 'call connected tools' : '', steerable.some(runsOutside) ? 'run code that can reach the network' : '']
+    .filter(Boolean)
+    .join(' or ');
+  // Whether code can be run on this server at all is asked whenever a role is first let run it: Docker may have been started since the page was opened.
+  const running = roles.filter((seat) => seat.kind === 'lead' && allows(org, seat.id, 'run_code'));
+  const [sandbox, setSandbox] = useState<SandboxStatus | null>(null);
+  const anyRuns = running.length > 0;
+  useEffect(() => {
+    if (!anyRuns) return;
+    let live = true;
+    api.meta().then((meta) => live && setSandbox(meta.sandbox ?? null), () => {});
+    return () => {
+      live = false;
+    };
+  }, [anyRuns]);
   return (
     <section className="operations privileges-panel">
       <h2>Privileges</h2>
@@ -34,7 +52,7 @@ export function Privileges({ org, onView, onSettings }: { org: Organisation; onV
       {org.settings.execution === 'managed' ? (
         <p className="note note-warn">
           <span>
-            This organisation runs in hosted sessions, which cannot reach email or accounts. Until Execution is set to local, only Search the web, Update business records and Ask the signatory have any effect. <button type="button" className="link" onClick={onSettings}>Open Settings</button>
+            This organisation runs in hosted sessions, which cannot reach email or accounts, and have a sandbox of their own to run code in. Until Execution is set to local, only Search the web, Update business records and Ask the signatory have any effect. <button type="button" className="link" onClick={onSettings}>Open Settings</button>
           </span>
         </p>
       ) : null}
@@ -45,6 +63,26 @@ export function Privileges({ org, onView, onSettings }: { org: Organisation; onV
             <strong>{steerable.map((seat) => seat.short).join(', ')}</strong> can both read mail and {steeredTo}. Anyone can send an email with instructions aimed at an agent, so what it reads could steer what it does.
           </span>
         </p>
+      ) : null}
+      {anyRuns && org.settings.execution !== 'managed' && sandbox ? (
+        sandbox.available ? (
+          <p className={`note ${org.settings.sandboxNetwork ? 'note-warn' : 'note-info'}`}>
+            <span>
+              <strong>{running.map((seat) => seat.short).join(', ')}</strong> can run code, in a sandbox started with {sandbox.runtime} from the image <code>{org.settings.sandboxImage}</code>.{' '}
+              {org.settings.sandboxNetwork
+                ? 'The sandbox can reach the network, so what is run in it can reach any site and this machine’s own network, and send what it can read there.'
+                : 'The sandbox has no network.'}{' '}
+              <button type="button" className="link" onClick={onSettings}>Open Settings</button> <HelpLink guide="code-execution">How a sandbox is confined</HelpLink>
+            </span>
+          </p>
+        ) : (
+          <p className="note note-warn">
+            <span>
+              <strong>{running.map((seat) => seat.short).join(', ')}</strong> may run code, but nothing can be run yet. {sandbox.reason} Until then {running.length === 1 ? 'its' : 'their'} agents are told that they cannot run code.{' '}
+              <HelpLink guide="code-execution">Setting it up</HelpLink>
+            </span>
+          </p>
+        )
       ) : null}
       <ErrorNote onDismiss={action.clearError}>{action.error}</ErrorNote>
       <div className="privileges-scroll">
