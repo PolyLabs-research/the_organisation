@@ -270,8 +270,13 @@ export interface PhaseWait {
   phase: string;
   /** The plan waited on, once pinned. Null before the plan starts, or when the lead had no plan to wait on. */
   planId: string | null;
-  /** The phase of that plan waited on; null to wait for the whole plan. */
+  /** The phase of that plan waited on, by where it stood among the plan's phases when the wait was pinned; null to wait for the whole plan. */
   phaseIndex: number | null;
+  /**
+   * The same phase by its id in that plan's way of working, which is what the wait follows: a plan that is revised
+   * after this can drop a phase or bring one back, and the places shift. Absent on a wait pinned before this was kept.
+   */
+  phaseId?: string | null;
   /** Why the wait was let go before it was met, if it was. */
   released: string | null;
 }

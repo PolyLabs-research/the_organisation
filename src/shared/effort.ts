@@ -1,4 +1,5 @@
 import type { ActivityEntry, Organisation, Plan } from './types';
+import { waitedIndex } from './waits';
 
 /**
  * Effort, not time. Models cannot say how long work will take, but they can say how big it is. Leads rate
@@ -236,7 +237,9 @@ function planForecast(
       if (w.released || !w.planId) continue;
       const target = org.plans.find((p) => p.id === w.planId);
       if (!target || target.status === 'done' || target.status === 'cancelled' || target.status === 'failed') continue;
-      const end = waitEnds.get(`${w.planId}:${w.phaseIndex ?? 'all'}`);
+      const at = waitedIndex(target, w);
+      if (at === 'gone') continue;
+      const end = waitEnds.get(`${w.planId}:${at ?? 'all'}`);
       if (end) cursor = Math.max(cursor, end);
     }
     let end: number | null = null;

@@ -3,7 +3,7 @@ import { PRIVILEGES, allows, applies } from '../../shared/privileges';
 import { describeRequest, isOpen, waitsOnAi } from '../../shared/signatory';
 import type { BoardReport, Decision, Executive, GateEvidence, Organisation, PhaseGate, Plan, PlanPhase, ReviewRound, SignatoryRequest, Task, WorkspaceFile } from '../../shared/types';
 import { PLAN_TOOLS, type SystemPrompt } from '../providers/types';
-import { describeWait, waitMet } from '../../shared/waits';
+import { describeWait, waitMet, waitedIndex } from '../../shared/waits';
 import { effortScaleText } from '../../shared/effort';
 import { oneLine } from './records';
 import { CEO_QUESTION, arbiterOf, execById, leadsOf, teamDir } from './state';
@@ -517,7 +517,9 @@ function waitedBlock(org: Organisation, phase: PlanPhase): string {
       const label = describeWait(org, w);
       if (!target) return `## ${label}\nThat plan is no longer on record.`;
       if (w.released) return `## ${label}\nNot waited for: ${w.released}`;
-      const phases = w.phaseIndex === null ? target.phases : target.phases.slice(0, w.phaseIndex + 1);
+      const at = waitedIndex(target, w);
+      if (at === 'gone') return `## ${label}\nNot waited for: their plan was revised and no longer includes that phase.`;
+      const phases = at === null ? target.phases : target.phases.slice(0, at + 1);
       const ended = target.status === 'cancelled' || target.status === 'failed' ? `\nTheir plan ${target.status === 'cancelled' ? 'was cancelled' : 'failed'} before finishing${target.cancelReason ? `: ${target.cancelReason}` : ''}. Do not count on what it did not produce.` : '';
       const done = phases
         .filter((p) => p.status === 'done')

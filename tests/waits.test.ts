@@ -3,7 +3,8 @@ import { createOrganisation } from '../src/server/engine/state';
 import { nextWork, settle } from '../src/server/engine/work';
 import * as prompts from '../src/server/engine/prompts';
 import type { Organisation, Plan } from '../src/shared/types';
-import { breakWaitRing, heldBy, namedWaits, pinWaits, waitMet } from '../src/shared/waits';
+import { shapePhases } from '../src/server/engine/handlers';
+import { breakWaitRing, describeWait, heldBy, namedWaits, pinWaits, waitMet } from '../src/shared/waits';
 import { harness, runToRest } from './helpers';
 
 function organisation(): Organisation {
@@ -105,6 +106,71 @@ describe('waiting on another lead’s work', () => {
     cto.cancelReason = 'Steer changed.';
     expect(heldBy(org, cmo)).toHaveLength(0);
     expect(prompts.kickoffPrompt(org, org.executives.find((e) => e.id === 'cmo')!, cmo, 0, [])).toContain('was cancelled before finishing: Steer changed.');
+  });
+
+  it('follows the phase it waits on when the other plan is revised and its phases move', () => {
+    const org = organisation();
+    const cmoSeat = org.executives.find((e) => e.id === 'cmo')!;
+    const ctoSeat = org.executives.find((e) => e.id === 'cto')!;
+    // The CMO's plan is still contested when the CTO's is cleared and starts: its phases are not settled yet.
+    const cmo = plan(org, 'cmo', { status: 'contested' });
+    const cto = plan(org, 'cto');
+    cto.phases[1]!.waitsFor = wait(org, 'cto', 'cmo', 'Create');
+    settle(org);
+    const waited = cto.phases[1]!.waitsFor[0]!;
+    expect(waited).toMatchObject({ planId: cmo.id, phaseIndex: 2, phaseId: 'create' });
+    expect(describeWait(org, waited)).toBe('CMO: Create');
+
+    // The ruling has the CMO revise, and the revision leaves Position out: Create is now the second phase, not the third.
+    cmo.status = 'revising';
+    shapePhases(org, cmoSeat, cmo, cmoSeat.phases.map((p) => ({ phase: p.id, intent: 'As before.', skip: p.id === 'position' })));
+    cmo.status = 'executing';
+    expect(cmo.phases.map((p) => p.name)).toEqual(['Research', 'Create', 'Launch']);
+    expect(describeWait(org, waited)).toBe('CMO: Create');
+
+    cto.phases[0]!.status = 'done';
+    cmo.phases[0]!.status = 'done';
+    expect(heldBy(org, cto)).toHaveLength(1);
+    cmo.phases[1]!.status = 'done';
+    // Create is done. Launch, which now stands where Create stood, is not, and is not what was asked for.
+    expect(waitMet(org, waited)).toBe(true);
+    expect(heldBy(org, cto)).toHaveLength(0);
+    expect(prompts.kickoffPrompt(org, ctoSeat, cto, 1, [])).toMatch(/## CMO: Create\nResearch: .*\n\nCreate: /s);
+  });
+
+  it('lets a phase go when the plan it waits on is revised to leave that phase out', () => {
+    const org = organisation();
+    const cmoSeat = org.executives.find((e) => e.id === 'cmo')!;
+    const cmo = plan(org, 'cmo', { status: 'contested' });
+    const cto = plan(org, 'cto');
+    cto.phases[0]!.waitsFor = wait(org, 'cto', 'cmo', 'Position');
+    settle(org);
+    expect(heldBy(org, cto)).toHaveLength(1);
+    cmo.status = 'revising';
+    shapePhases(org, cmoSeat, cmo, cmoSeat.phases.map((p) => ({ phase: p.id, intent: 'As before.', skip: p.id === 'position' })));
+    cmo.status = 'executing';
+    // A phase that will not be run will never finish: there is nothing left to wait for, and the lead is told why.
+    expect(heldBy(org, cto)).toHaveLength(0);
+    expect(prompts.kickoffPrompt(org, org.executives.find((e) => e.id === 'cto')!, cto, 0, [])).toContain('their plan was revised and no longer includes that phase');
+    // Brought back by a later revision, it is waited for again.
+    cmo.status = 'revising';
+    shapePhases(org, cmoSeat, cmo, cmoSeat.phases.map((p) => ({ phase: p.id, intent: 'As before.', skip: false })));
+    cmo.status = 'executing';
+    expect(heldBy(org, cto)).toHaveLength(1);
+  });
+
+  it('still reads a wait that was pinned before phases were kept by id', () => {
+    const org = organisation();
+    const cto = plan(org, 'cto');
+    const cmo = plan(org, 'cmo');
+    cmo.phases[0]!.waitsFor = [{ leadId: 'cto', phase: 'Build', planId: cto.id, phaseIndex: 1, released: null }];
+    cmo.status = 'executing';
+    cto.status = 'executing';
+    expect(waitMet(org, cmo.phases[0]!.waitsFor[0]!)).toBe(false);
+    expect(describeWait(org, cmo.phases[0]!.waitsFor[0]!)).toBe('CTO: Build');
+    cto.phases[0]!.status = 'done';
+    cto.phases[1]!.status = 'done';
+    expect(waitMet(org, cmo.phases[0]!.waitsFor[0]!)).toBe(true);
   });
 
   it('is not held up by a plan the other lead takes on after this one started', () => {

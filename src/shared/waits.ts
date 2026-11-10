@@ -47,8 +47,22 @@ export function pinWaits(org: Organisation, plan: Plan): void {
       wait.planId = target.id;
       const index = matchPhase(target, wait.phase);
       wait.phaseIndex = index >= 0 ? index : null;
+      // The plan waited on may not have settled which phases it runs: one that is contested is revised after this,
+      // and a revision can drop a phase or bring one back. So the phase is kept by what it is, not by where it stood.
+      wait.phaseId = index >= 0 ? target.phases[index]!.sopPhaseId : null;
     }
   }
+}
+
+/**
+ * Where in the plan it waits on a wait points now: the phase's place among that plan's phases, null for the whole
+ * plan, or 'gone' when the plan has been reshaped and no longer runs that phase.
+ */
+export function waitedIndex(target: Plan, wait: PhaseWait): number | null | 'gone' {
+  // A wait pinned before phases were kept by id has only the place the phase stood in.
+  if (!wait.phaseId) return wait.phaseIndex;
+  const index = target.phases.findIndex((p) => p.sopPhaseId === wait.phaseId);
+  return index >= 0 ? index : 'gone';
 }
 
 /** True when a wait no longer holds anything up: what it waited on is finished, or can no longer be. */
@@ -56,8 +70,11 @@ export function waitMet(org: Organisation, wait: PhaseWait): boolean {
   if (wait.released || !wait.planId) return true;
   const target = org.plans.find((p) => p.id === wait.planId);
   if (!target || !live(target)) return true;
-  if (wait.phaseIndex === null) return false;
-  return (target.phases[wait.phaseIndex]?.status ?? 'done') === 'done';
+  const at = waitedIndex(target, wait);
+  // A phase the plan no longer runs will never finish, so there is nothing left to wait for.
+  if (at === 'gone') return true;
+  if (at === null) return false;
+  return (target.phases[at]?.status ?? 'done') === 'done';
 }
 
 /**
@@ -120,6 +137,7 @@ export function breakWaitRing(org: Organisation): Plan | null {
 export function describeWait(org: Organisation, wait: PhaseWait): string {
   const lead = org.executives.find((e) => e.id === wait.leadId)?.short ?? wait.leadId;
   const target = wait.planId ? org.plans.find((p) => p.id === wait.planId) : undefined;
-  const phase = target && wait.phaseIndex !== null ? target.phases[wait.phaseIndex]?.name ?? wait.phase : target ? 'their whole plan' : wait.phase;
+  const at = target ? waitedIndex(target, wait) : null;
+  const phase = target && typeof at === 'number' ? target.phases[at]?.name ?? wait.phase : target && at === null ? 'their whole plan' : wait.phase;
   return `${lead}: ${phase}`;
 }
