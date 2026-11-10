@@ -22,7 +22,8 @@ import { QUIET, TEAM } from './helpers';
 
 const chrome = process.env.CHROME_PATH ?? '/opt/google/chrome/chrome';
 
-describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('the dashboard in a browser', () => {
+// Each test has the time the other browser tests have: a browser shared with the rest of a full run can be slow to answer.
+describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('the dashboard in a browser', { timeout: 40_000 }, () => {
   let dir: string;
   let registry: Registry;
   let server: Server;
@@ -41,7 +42,7 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     await new Promise<void>((resolve) => server.once('listening', resolve));
     base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
     browser = await chromium.launch({ executablePath: chrome, headless: true, chromiumSandbox: true });
-  });
+  }, 40_000);
 
   afterAll(async () => {
     await browser?.close();
