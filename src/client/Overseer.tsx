@@ -38,25 +38,32 @@ const CATEGORY_LABEL: Record<Category, string> = {
   board: 'Board work: consulting, direction, reviews, positions, rulings',
 };
 
-/** The whole log from disk, kept current with what arrives live. */
-function useHistory(orgId: string, live: ActivityEntry[]): { entries: ActivityEntry[]; loading: boolean; failed: string | null } {
+/**
+ * The whole log from disk, kept current with what arrives live. It is read again whenever the page has been out of view
+ * (`resumed` counts those returns): nothing arrives live in that time, and more can have happened than the live list holds.
+ */
+function useHistory(orgId: string, live: ActivityEntry[], resumed: number): { entries: ActivityEntry[]; loading: boolean; failed: string | null } {
   const [history, setHistory] = useState<ActivityEntry[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
     let gone = false;
     api.history(orgId).then(
-      (entries) => !gone && setHistory(entries),
+      (entries) => {
+        if (gone) return;
+        setHistory(entries);
+        setFailed(null);
+      },
       (err: Error) => {
         if (gone) return;
         // The views are still drawn, from the calls the page has: but they are not the whole record, and say so.
-        setHistory([]);
+        setHistory((had) => had ?? []);
         setFailed(err.message);
       },
     );
     return () => {
       gone = true;
     };
-  }, [orgId]);
+  }, [orgId, resumed]);
   const entries = useMemo(() => {
     const base = history ?? [];
     const seen = new Set(base.map((e) => `${e.at}|${e.id}`));
@@ -126,9 +133,9 @@ function Segmented<T extends string>({ value, options, onChange, label }: { valu
 
 type View = 'timeline' | 'effort' | 'spend' | 'bottlenecks';
 
-export function Overseer({ view, activity }: { view: OrgView; activity: ActivityEntry[] }) {
+export function Overseer({ view, activity, resumed = 0 }: { view: OrgView; activity: ActivityEntry[]; resumed?: number }) {
   const { org } = view;
-  const { entries, loading, failed } = useHistory(org.id, activity);
+  const { entries, loading, failed } = useHistory(org.id, activity, resumed);
   const [shown, setShown] = useState<View>('timeline');
   // A clock for the "now" line and the forecast, moved on while the organisation runs.
   const [now, setNow] = useState(() => Date.now());

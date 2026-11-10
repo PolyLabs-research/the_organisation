@@ -92,16 +92,24 @@ export const api = {
     request<{ path: string; content: string; truncated: boolean }>('GET', `/api/orgs/${id}/file?path=${encodeURIComponent(path)}`),
 };
 
+/** How long a dashboard may be out of view before it gives its stream up. Long enough that a glance at another tab costs nothing. */
+const REST_AFTER_MS = 2000;
+
 /**
  * Keeps a live view of one organisation. The server pushes a fresh view on
  * every change; the browser reconnects by itself if the stream drops, and a
  * stream it has given up on is opened again from here.
+ *
+ * A dashboard that is out of view gives its stream up, and opens it again when
+ * it is looked at: `resumed` counts those returns, for whatever must then ask
+ * again for what it missed.
  */
 export function useOrgStream(id: string) {
   const [view, setView] = useState<OrgView | null>(null);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [missing, setMissing] = useState(false);
+  const [resumed, setResumed] = useState(0);
   const seen = useRef(new Set<string>());
 
   useEffect(() => {
@@ -111,14 +119,19 @@ export function useOrgStream(id: string) {
     seen.current = new Set();
     let closed = false;
 
-    api
-      .activity(id)
-      .then((entries) => {
-        if (closed) return;
-        for (const e of entries) seen.current.add(e.id + e.at);
-        setActivity(entries);
-      })
-      .catch(() => {});
+    // The most recent calls, asked for when the page opens and again after a spell out of view. What the stream has
+    // already brought is kept, and what it brought while the answer was on its way is not lost to it.
+    const recent = () =>
+      api
+        .activity(id)
+        .then((entries) => {
+          if (closed) return;
+          const fresh = entries.filter((e) => !seen.current.has(e.id + e.at));
+          for (const e of fresh) seen.current.add(e.id + e.at);
+          if (fresh.length) setActivity((list) => [...list, ...fresh].sort((a, b) => a.at.localeCompare(b.at)).slice(-300));
+        })
+        .catch(() => {});
+    void recent();
 
     let source: EventSource;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -158,14 +171,43 @@ export function useOrgStream(id: string) {
       });
     };
     open();
+
+    // A browser keeps at most six connections to one server, and a stream holds one for as long as it is open. With six
+    // dashboards open, nothing more could be asked of the server from any of them: every button waited, without a word.
+    // So a dashboard nobody is looking at lets its stream go, and one that is looked at again opens it and is sent the
+    // organisation as it then is.
+    let resting = false;
+    let rest: ReturnType<typeof setTimeout> | undefined;
+    const onVisibility = () => {
+      clearTimeout(rest);
+      if (closed) return;
+      if (document.visibilityState === 'hidden') {
+        rest = setTimeout(() => {
+          resting = true;
+          clearTimeout(retry);
+          source.close();
+        }, REST_AFTER_MS);
+      } else if (resting) {
+        resting = false;
+        failures = 0;
+        setResumed((n) => n + 1);
+        void recent();
+        open();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    onVisibility();
+
     return () => {
       closed = true;
       clearTimeout(retry);
+      clearTimeout(rest);
+      document.removeEventListener('visibilitychange', onVisibility);
       source.close();
     };
   }, [id]);
 
-  return { view, setView, activity, connected, missing };
+  return { view, setView, activity, connected, missing, resumed };
 }
 
 /** Run an action, tracking whether it is in progress and what went wrong. */

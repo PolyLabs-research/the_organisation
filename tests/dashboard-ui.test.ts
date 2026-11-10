@@ -313,6 +313,43 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     }
   });
 
+  it('opens a seventh dashboard while six others are open in tabs out of view', async () => {
+    const runner = await organisation('Many tabs');
+    // One browser, as a person has: its tabs share the six connections it will keep to one server.
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const seen = (tab: Page, state: 'hidden' | 'visible') =>
+      tab.evaluate((to) => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => to });
+        document.dispatchEvent(new Event('visibilitychange'));
+      }, state);
+    try {
+      const tabs: Page[] = [];
+      for (let i = 0; i < 6; i++) {
+        const tab = await context.newPage();
+        tab.setDefaultTimeout(10_000);
+        await tab.goto(base + '/#/org/' + runner.org.id);
+        await tab.getByRole('heading', { name: 'Many tabs', exact: true }).waitFor();
+        tabs.push(tab);
+      }
+      // Each has gone to the background, as a tab does when another is chosen.
+      for (const tab of tabs) await seen(tab, 'hidden');
+      const seventh = await context.newPage();
+      seventh.setDefaultTimeout(10_000);
+      await seventh.goto(base + '/#/org/' + runner.org.id);
+      await seventh.getByRole('heading', { name: 'Many tabs', exact: true }).waitFor();
+      // Its controls are answered, which takes a connection of their own.
+      await seventh.getByRole('button', { name: 'Start', exact: true }).click();
+      await seventh.getByRole('button', { name: 'Pause', exact: true }).click();
+      await seventh.getByRole('button', { name: 'Resume', exact: true }).waitFor();
+      // A tab that was out of view is looked at again once the seventh is not, and shows the organisation as it now is.
+      await seen(seventh, 'hidden');
+      await seen(tabs[0]!, 'visible');
+      await tabs[0]!.getByRole('button', { name: 'Resume', exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it('names, above the list of organisations, any the server could not load', async () => {
     // What the server keeps when it starts and finds an organisation on disk that it cannot read.
     registry.unreadable.push({ folder: 'org_damaged', reason: 'its saved state is damaged: no settings.' });

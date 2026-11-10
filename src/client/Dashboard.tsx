@@ -50,7 +50,7 @@ function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void })
 }
 
 export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
-  const { view, setView, activity, connected, missing } = useOrgStream(id);
+  const { view, setView, activity, connected, missing, resumed } = useOrgStream(id);
   const control = useAction();
   const [tab, setTab] = useState<Tab>(new URLSearchParams(window.location.search).get('access') === 'connected' ? 'access' : 'board');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -226,7 +226,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
               {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
               {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
               {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
-              {tab === 'overseer' ? <Suspense fallback={<p className="muted">Loading the overseer…</p>}><Overseer view={view} activity={activity} /></Suspense> : null}
+              {tab === 'overseer' ? <Suspense fallback={<p className="muted">Loading the overseer…</p>}><Overseer view={view} activity={activity} resumed={resumed} /></Suspense> : null}
               {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
             </ErrorBoundary>
             {/* Kept in place while another tab is shown, so that an answer half typed is still there after reading the file a request points to. */}

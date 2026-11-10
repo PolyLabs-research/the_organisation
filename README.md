@@ -328,6 +328,8 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
 
 Start, pause, stop and settings are at the top of the dashboard. Pause lets calls in flight finish; stop cuts them off and puts the interrupted work back in the queue. Either one holds hosted sessions where they are.
 
+The dashboard follows the organisation over one connection that stays open, and a browser keeps at most six to one server. A dashboard in a tab that is out of view lets its connection go after two seconds and opens it again when you come back to it, so any number can be open in tabs. More than five in windows that are all in view at once is too many: the sixth takes the last connection, and nothing more can be asked of the server from any of them until one is closed.
+
 ### Overseer
 
 Models cannot say how long work will take, but they can say how big it is. Every lead rates each plan, phase and task it sets on a 1 to 10 effort scale. The anchors are in [`src/shared/effort.ts`](src/shared/effort.ts):
