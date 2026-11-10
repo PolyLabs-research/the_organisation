@@ -65,6 +65,11 @@ const MAX_ATTEMPTS = 3;
 export const SLOW_PACE_GAP_MS = 20_000;
 const MAX_ACTIVITY = 300;
 const MAX_HISTORY = 60;
+/** How much of the business records' edit history stays in live state, and how far past that it may run before the oldest are moved out. */
+export const AUDIT_KEPT_LIVE = 100;
+export const AUDIT_SPILL_AT = 100;
+/** How many of the most recent model calls the whole-life views are given. An organisation can make far more than a page can draw. */
+export const MAX_HISTORY_ENTRIES = 20_000;
 /** Failures that say something about one task rather than about the provider. */
 const TASK_LEVEL_ERRORS = new Set(['refusal', 'truncated', 'too_long', 'invalid_output']);
 
@@ -114,6 +119,7 @@ export class OrgRunner {
   private saveTimer: NodeJS.Timeout | null = null;
   private saving: Promise<void> = Promise.resolve();
   private saveError: Error | null = null;
+  private auditWarned = false;
   private activitySeq = 0;
   private readonly retryDelayMs: number;
   private readonly emitIntervalMs: number;
@@ -145,9 +151,9 @@ export class OrgRunner {
     };
   }
 
-  /** Every model call this organisation has made, from its log on disk: for views that span its whole life. */
+  /** The model calls this organisation has made, from its log on disk, for views that span its whole life: the most recent, where there are more than a page can use. */
   history(): Promise<ActivityEntry[]> {
-    return this.store.readActivity(this.org.id);
+    return this.store.readActivity(this.org.id, MAX_HISTORY_ENTRIES);
   }
 
   subscribe(listener: Listener): () => void {
@@ -919,7 +925,7 @@ export class OrgRunner {
   private queueSave(): void {
     if (this.disposed) return;
     this.saving = this.saving
-      .then(async () => { await this.store.save(this.org); this.saveError = null; })
+      .then(async () => { await this.spillAudit(); await this.store.save(this.org); this.saveError = null; })
       .catch((err) => {
         this.saveError = err as Error;
         const message = 'Could not save the organisation: ' + this.saveError.message + '. Restore storage before resuming.';
@@ -934,6 +940,28 @@ export class OrgRunner {
           for (const listener of this.listeners) listener({ type: 'view', view: this.view() });
         }
       });
+  }
+
+  /**
+   * Keep the edit history of the business records from growing inside the saved state, which is written out whole
+   * on every change. The oldest entries move to a file of their own once there are enough of them. They leave live
+   * state only after they have been written there; if the process stops between the two, they are written again
+   * next time, so the file can hold an entry twice but never lose one. If the file cannot be written they stay.
+   */
+  private async spillAudit(): Promise<void> {
+    const over = this.org.business.audit.length - (AUDIT_KEPT_LIVE + AUDIT_SPILL_AT);
+    if (over < 0) return;
+    const leaving = this.org.business.audit.slice(0, over + AUDIT_SPILL_AT);
+    try {
+      await this.store.appendAudit(this.org.id, leaving);
+    } catch (err) {
+      if (!this.auditWarned) console.warn(`Could not move older edit history of ${this.org.id} to its own file: ${(err as Error).message}. It stays in the organisation's state.`);
+      this.auditWarned = true;
+      return;
+    }
+    this.auditWarned = false;
+    // Entries are only ever added at the end, so the ones written are still the first ones, whatever happened meanwhile.
+    this.org.business.audit.splice(0, leaving.length);
   }
 
   /** Cancel timers and let go of subscribers. The state must already be flushed; nothing is written after this. */

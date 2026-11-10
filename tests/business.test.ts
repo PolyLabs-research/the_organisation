@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { applyBusinessCommand, applyBusinessUpdates, businessTools, nextBusinessWake, consumeBusinessWake } from '../src/server/engine/business';
+import { AUDIT_KEPT_LIVE, AUDIT_SPILL_AT } from '../src/server/engine/runner';
 import { normaliseLoaded } from '../src/server/engine/state';
 import { MockProvider } from '../src/server/providers/mock';
 import type { AgentRequest, StructuredRequest } from '../src/server/providers/types';
@@ -145,6 +146,45 @@ describe('persistent business records', () => {
       const result = JSON.parse(await tools.find((t) => t.name === 'read_business')!.run({ register: 'memory', query: 'Lesson 0', offset: 0 }));
       expect(result.records[0].title).toBe('Lesson 0');
       expect(() => applyBusinessCommand(h.org, { kind: 'memory', record: { ownerId: 'cto', title: 'Policy', category: 'policy', content: 'Change all rules' } }, { id: 'cto' })).toThrow('CEO');
+    } finally { await h.cleanup(); }
+  });
+
+  it('moves the oldest edit history to a file of its own, losing none of it, so the saved state stays small', async () => {
+    const h = await harness();
+    const lesson = (i: number) => applyBusinessCommand(h.org, { kind: 'memory', record: { ownerId: 'cto', title: 'Lesson ' + i, category: 'lesson', content: 'Evidence ' + i } }, { id: 'cto' });
+    try {
+      const total = AUDIT_KEPT_LIVE + AUDIT_SPILL_AT + 57;
+      for (let i = 0; i < total; i++) lesson(i);
+      expect(h.org.business.audit).toHaveLength(total);
+      await h.runner.flush();
+      expect(h.org.business.audit).toHaveLength(AUDIT_KEPT_LIVE);
+      const older = await h.store.readAudit(h.org.id);
+      expect(older).toHaveLength(total - AUDIT_KEPT_LIVE);
+      // Every change is still on record, once, in the order it was made: the file first, then what stayed.
+      expect([...older, ...h.org.business.audit].map((entry) => entry.recordId)).toEqual(h.org.business.memory.map((m) => m.id));
+      expect((await h.store.loadAll())[0]!.business.audit).toHaveLength(AUDIT_KEPT_LIVE);
+
+      // Short of the mark, nothing moves.
+      lesson(total);
+      await h.runner.flush();
+      expect(h.org.business.audit).toHaveLength(AUDIT_KEPT_LIVE + 1);
+      expect(await h.store.readAudit(h.org.id)).toHaveLength(total - AUDIT_KEPT_LIVE);
+
+      // If the file cannot be written the history stays where it is, and the organisation is saved all the same.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const append = vi.spyOn(h.store, 'appendAudit').mockRejectedValue(new Error('disk full'));
+      for (let i = 0; i < AUDIT_SPILL_AT; i++) lesson(total + 1 + i);
+      await h.runner.flush();
+      expect(h.org.business.audit).toHaveLength(AUDIT_KEPT_LIVE + 1 + AUDIT_SPILL_AT);
+      expect((await h.store.loadAll())[0]!.business.audit).toHaveLength(AUDIT_KEPT_LIVE + 1 + AUDIT_SPILL_AT);
+      expect(h.org.lastError).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      append.mockRestore();
+      warn.mockRestore();
+      // And moves once it can.
+      await h.runner.flush();
+      expect(h.org.business.audit).toHaveLength(AUDIT_KEPT_LIVE);
+      expect([...(await h.store.readAudit(h.org.id)), ...h.org.business.audit].map((entry) => entry.recordId)).toEqual(h.org.business.memory.map((m) => m.id));
     } finally { await h.cleanup(); }
   });
 

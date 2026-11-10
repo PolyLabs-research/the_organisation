@@ -345,7 +345,7 @@ Models cannot say how long work will take, but they can say how big it is. Every
 | 9 | A spec, a plan for many agents, and a campaign to carry it out across several leads. |
 | 10 | A full programme: several parts, each a 7 or 8 in its own right, built over many cycles. |
 
-The organisation learns what each level takes, in minutes and dollars, from the rated work it finishes, separately for each model. That turns ratings into a forecast.
+The organisation learns what each level takes, in minutes and dollars, from the rated work it finishes, separately for each model. That turns ratings into a forecast. These views read the organisation's log of model calls: the most recent 20,000 of them, once it has made more than that.
 
 - **Timeline**: a Gantt chart with a swim lane per seat, and a row for each of a lead's agents beneath it. Every call is a bar, coloured by kind of work: agent tasks, a lead's own planning and reviews, and board work. Unfinished rated work is drawn ahead as hatched forecast bars, respecting phases that wait on other leads. While the organisation is paused, the forecast runs from where the work stopped.
 - **Effort**: how long and how much each effort level has actually taken, by model, for tasks and for phases. It shows whether the ratings mean anything, and how the models differ.
@@ -545,6 +545,8 @@ data/orgs/<id>/
   org.json         live state: seats, cycle, plans, decisions, board feed, the signatory's
                    requests and conversation, business registers and history, scheduling state, usage
   activity.jsonl   one line per unit of work
+  business-audit.jsonl  the edit history of the business records, once it is older than the
+                   most recent hundred or two changes, which stay in org.json
   archive/         cycles that have left live state (the three most recent stay live)
   workspace/       the files the agents produce
   managed/         which workspace files have been uploaded for hosted sessions

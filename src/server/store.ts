@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import type { BusinessAudit } from '../shared/business';
 import type { ActivityEntry, Organisation } from '../shared/types';
 
 /**
@@ -86,25 +87,47 @@ export class Store {
     await fs.appendFile(path.join(this.orgDir(id), 'activity.jsonl'), JSON.stringify(entry) + '\n', 'utf8');
   }
 
-  /** Every entry in an organisation's activity log, oldest first. A line that cannot be read is skipped. */
-  async readActivity(id: string): Promise<ActivityEntry[]> {
+  /** Add entries to the file that holds the older edit history of an organisation's business records, one line each. */
+  async appendAudit(id: string, entries: BusinessAudit[]): Promise<void> {
+    if (!entries.length) return;
+    await fs.appendFile(path.join(this.orgDir(id), 'business-audit.jsonl'), entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n', 'utf8');
+  }
+
+  /** The older edit history of an organisation's business records, oldest first. What is still in live state is not in here. */
+  async readAudit(id: string): Promise<BusinessAudit[]> {
+    return this.lines<BusinessAudit>(path.join(this.orgDir(id), 'business-audit.jsonl'));
+  }
+
+  /**
+   * The entries in an organisation's activity log, oldest first: all of them, or with `limit` the most recent
+   * that many. A line that cannot be read is skipped.
+   */
+  async readActivity(id: string, limit?: number): Promise<ActivityEntry[]> {
+    return this.lines<ActivityEntry>(path.join(this.orgDir(id), 'activity.jsonl'), limit);
+  }
+
+  /** The records in a file of one JSON record per line, or the last `limit` of them. No file is no records. */
+  private async lines<T>(file: string, limit?: number): Promise<T[]> {
     let text: string;
     try {
-      text = await fs.readFile(path.join(this.orgDir(id), 'activity.jsonl'), 'utf8');
+      text = await fs.readFile(file, 'utf8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
     }
-    const entries: ActivityEntry[] = [];
-    for (const line of text.split('\n')) {
+    let lines = text.split('\n');
+    // Only the lines that will be kept are parsed: a long log is mostly lines nobody asked for.
+    if (limit !== undefined && lines.length > limit + 1) lines = lines.slice(-(limit + 1));
+    const entries: T[] = [];
+    for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        entries.push(JSON.parse(line) as ActivityEntry);
+        entries.push(JSON.parse(line) as T);
       } catch {
         // A line cut short by a crash mid-write.
       }
     }
-    return entries;
+    return limit !== undefined && entries.length > limit ? entries.slice(-limit) : entries;
   }
 
   async archiveCycle(id: string, cycle: number, data: unknown): Promise<void> {

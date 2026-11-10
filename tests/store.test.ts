@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -48,6 +48,22 @@ describe('organisations on disk', () => {
     await third.load();
     expect(third.get(id)!.org.usage.calls).toBe(calls);
     third.get(id)!.dispose();
+  });
+
+  it('reads the most recent calls from a long activity log, skipping a line cut short', async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-store-'));
+    const store = new Store(dir);
+    await store.init();
+    await mkdir(store.orgDir('org_log'), { recursive: true });
+    const entry = (n: number) => ({ id: `a${n}`, at: new Date(1_700_000_000_000 + n * 1000).toISOString(), kind: 'task' as const, execId: 'cto', label: `Call ${n}`, model: 'claude-opus-5-5', ms: 10, ok: true, error: null, inputTokens: 1, outputTokens: 1, costUsd: 0.01 });
+    for (let n = 1; n <= 30; n++) await store.appendActivity('org_log', entry(n));
+    expect((await store.readActivity('org_log')).map((e) => e.id)).toEqual(Array.from({ length: 30 }, (_, i) => `a${i + 1}`));
+    expect((await store.readActivity('org_log', 10)).map((e) => e.id)).toEqual(Array.from({ length: 10 }, (_, i) => `a${i + 21}`));
+    expect(await store.readActivity('org_log', 100)).toHaveLength(30);
+    // A crash in the middle of a write leaves half a line at the end.
+    await appendFile(path.join(store.orgDir('org_log'), 'activity.jsonl'), '{"id":"a31","at":"2023-11-14T22:1');
+    expect((await store.readActivity('org_log', 10)).map((e) => e.id)).toEqual(Array.from({ length: 10 }, (_, i) => `a${i + 21}`));
+    expect(await store.readActivity('org_none')).toEqual([]);
   });
 
   it('sets a damaged organisation aside, says why, leaves its file alone, and loads the rest', async () => {
