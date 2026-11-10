@@ -36,6 +36,8 @@ const TURN_RETRIES = 3;
 export interface ClaudeProviderOptions {
   apiKey?: string;
   baseURL?: string;
+  /** Headers for every request, over the client's own. One set to null is left out. */
+  defaultHeaders?: Record<string, string | null>;
   maxRetries?: number;
   /** Delay before a failed agent turn is sent again; doubles each time. */
   turnRetryDelayMs?: number;

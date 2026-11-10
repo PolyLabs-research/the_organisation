@@ -176,6 +176,31 @@ describe('adding an Anthropic key', () => {
     expect(router.info().simulated).toBe(true);
   });
 
+  it('sends a key added in the interface with nothing the environment says to send with a key of its own', async () => {
+    const before = process.env.ANTHROPIC_CUSTOM_HEADERS;
+    // As a gateway in front of Anthropic is set up for: something to say who is calling, and what to sign in with.
+    process.env.ANTHROPIC_CUSTOM_HEADERS = 'x-gateway-secret: for-the-gateway-only\nAuthorization: Bearer the-gateway-s-own-token';
+    try {
+      const { router } = await setup();
+      // The key is checked when it is added. It is the key that goes out, and nothing meant for the gateway.
+      await router.connect({ presetId: 'anthropic', apiKey: 'sk-ant-good-key-7777', baseURL: address });
+      expect(seen.at(-1)!.authorization).toBe('Bearer sk-ant-good-key-7777');
+      expect(seen.at(-1)).not.toHaveProperty('x-gateway-secret');
+      // The same when a model is called. The stand-in has no model to call, but it sees what the call came with.
+      await ask(router, 'claude-opus-5-5').catch(() => {});
+      expect(seen.at(-1)!.authorization).toBe('Bearer sk-ant-good-key-7777');
+      expect(seen.at(-1)).not.toHaveProperty('x-gateway-secret');
+
+      // A key that comes from the environment is the one those headers were written for, and still goes out with them.
+      const beside = await setup({ ANTHROPIC_API_KEY: 'sk-ant-good-key-7777', ANTHROPIC_BASE_URL: address });
+      await beside.router.refresh('anthropic-env');
+      expect(seen.at(-1)).toMatchObject({ 'x-gateway-secret': 'for-the-gateway-only', authorization: 'Bearer the-gateway-s-own-token' });
+    } finally {
+      if (before === undefined) delete process.env.ANTHROPIC_CUSTOM_HEADERS;
+      else process.env.ANTHROPIC_CUSTOM_HEADERS = before;
+    }
+  });
+
   it('offers Claude\'s models under their plain names, with hosted sessions and web search, once the key is good', async () => {
     const { router } = await setup();
     const connection = await router.connect({ presetId: 'anthropic', apiKey: 'sk-ant-good-key-7777', baseURL: address });
