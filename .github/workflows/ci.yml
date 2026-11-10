@@ -5,8 +5,7 @@ name: CI
 on:
   pull_request:
   push:
-    # The second branch is here only until these checks have been seen to run once, and comes out again.
-    branches: [main, claude/happy-einstein-rpizch]
+    branches: [main]
 
 permissions:
   contents: read
