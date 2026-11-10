@@ -437,6 +437,43 @@ describe('a hosted session and money', () => {
     expect(h.org.usage.costUsd).toBeLessThan(2);
   });
 
+  it('caps a session that takes over from a lost one at what the budget has left, not at that and what the lost one spent', async () => {
+    const none = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 };
+    const caps: number[] = [];
+    let sessions = 0;
+    let left = 0;
+    let forAnother: number | null = 0;
+    h = await harness({
+      settings: { ...HOSTED, budgetUsd: 4 },
+      executives: ONE_LEAD,
+      provider: new Scripted(async (job) => {
+        sessions += 1;
+        caps.push(job.budgetUsd);
+        if (sessions === 1) {
+          job.hooks.session({ id: 'sesn_1', consoleUrl: null, budgetUsd: job.budgetUsd });
+          job.hooks.spend({ costUsd: 1, ...none });
+          return { status: 'lost', reason: 'the sandbox was shut down.' };
+        }
+        // The second session is about to be created. What is left is all promised to it, so another plan gets nothing.
+        left = h!.org.settings.budgetUsd - h!.org.usage.costUsd;
+        forAnother = sessionAllowance(h!.org, { id: 'another' } as Plan, 0);
+        job.hooks.session({ id: 'sesn_2', consoleUrl: null, budgetUsd: job.budgetUsd });
+        for (const phase of job.context.phases as Array<{ name: string }>) job.hooks.phase({ phase: phase.name, summary: 'Done.', decisions: [] });
+        job.hooks.report({ headline: 'Done', summary: 'Done.', outcomes: [], asks: [] });
+        return { status: 'reported' };
+      }),
+    });
+    await runToRest(h.runner);
+    expect(planOf(h.org).status).toBe('done');
+    expect(caps).toHaveLength(2);
+    // The dollar the first session spent is spent. The second may spend what is left, and no more.
+    expect(left).toBeLessThan(3);
+    expect(caps[1]).toBeGreaterThan(0);
+    expect(caps[1]).toBeLessThanOrEqual(left + 0.005);
+    expect(forAnother).toBeNull();
+    expect(h.org.usage.costUsd).toBeGreaterThanOrEqual(1);
+  });
+
   it('shares what is left between the plans that will want a session', () => {
     const plan = (id: string, managed: Partial<NonNullable<Plan['managed']>> | null, status: Plan['status'] = 'executing') =>
       ({ id, status, execution: 'managed', managed }) as unknown as Plan;

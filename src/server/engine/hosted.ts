@@ -507,7 +507,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       worker: { name: prompts.TEAM_AGENT_NAME, system: prompts.teamAgentSystem(web) },
       web,
       workflows: org.settings.workflowRuns,
-      budgetUsd: cap,
+      // A session that takes over from one that was lost starts from nothing. What the lost one spent is in the
+      // organisation's totals, and is not the new one's to spend again: its cap is the plan's share and no more.
+      budgetUsd: managed.sessionId ? cap : Math.round((cap - managed.spentUsd) * 100) / 100,
       session: managed.sessionId
         ? {
             id: managed.sessionId,
