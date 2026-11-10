@@ -27,6 +27,7 @@ It runs on **Claude, GPT, Gemini, DeepSeek, Qwen, Kimi and anything on OpenRoute
 - **A person holds the purse.** Agents can draft a contract and choose a supplier, but paying and signing are for the Authorised Signatory, and a person does those, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
 - **Each role gets only what you give it.** A Privileges panel sets what each role and its agents may do: search, change records, ask the signatory, read mail, draft mail, sign in, act on accounts, create accounts. Each switch is enforced in code where the thing is done, not by asking the model, and acting on an outside service is off until you turn it on for a role.
 - **It can work on real code.** Connect a GitHub repository and agents get a branch of their own for each plan. They commit, start builds on GitHub's machines, read the results and open a pull request. A gate reads the checks itself and will not pass on an agent's say-so. A person merges.
+- **It can use the tools you already have.** Connect a server that speaks the Model Context Protocol (MCP), such as an issue tracker's, a database's or one of your own, and choose which of its tools a team's agents may call. Nothing is allowed until you tick it, the token stays in the vault, and agents are only ever shown a tool as it was described when you allowed it.
 - **Use the models you have, or none.** Claude, GPT, Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, and anything on OpenRouter, with executives on one model and agents on another if you like. Any OpenAI-compatible endpoint works too, so a model on your own machine (llama.cpp, Ollama, LM Studio, vLLM) can do the work. And with no API key at all it can run on the Claude Code you already have, on your own subscription login.
 - **Try it in a minute, for nothing.** With nothing connected it runs in simulation: every seat gives a scripted answer, the whole loop turns, and every control works.
 - **Go at your own pace.** Run it at full speed, one call at a time, with a pause after each to read what happened, or one step at a time on a **Next step** button, and change pace while it runs.
@@ -134,7 +135,8 @@ This is early software, and the README says plainly what has been run for real a
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
 | Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
 | GitHub repositories | Reads checked against the real API on a public repository, without a token. Commits, pull requests and workflows tested against a local stand-in only. Nothing has been written to a real repository. |
-| Tests | More than 850, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
+| Tool servers (MCP) | Tested with the protocol's official client against a real server of the protocol on the same machine. No third party's server has been connected. |
+| Tests | More than 900, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
@@ -145,7 +147,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 - [How an organisation works](#how-an-organisation-works)
 - [Shared calendar and business operations](#shared-calendar-and-business-operations)
 - [Business email and service accounts](#business-email-and-service-accounts), and [what each role may do](#what-each-role-may-do)
-- [GitHub repositories](#github-repositories) and [work approaches](#work-approaches)
+- [GitHub repositories](#github-repositories), [tool servers](#tool-servers-mcp) and [work approaches](#work-approaches)
 - [The interface](#the-interface)
 - [Signing and paying](#signing-and-paying)
 - [Models and keys](#models-and-keys), and [Claude Code in place of a key](#claude-code-in-place-of-a-key)
@@ -252,7 +254,7 @@ The vault normally locks after 30 minutes without use. For scheduled unattended 
 
 ## What each role may do
 
-**Privileges** is one grid: a column for each role, a row for each thing a role and its agents can do, and below it what no setting changes. A mailbox or account also has to be assigned to the team under **Email & accounts**: the assignment says with what, the privilege says what.
+**Privileges** is one grid: a column for each role, a row for each thing a role and its agents can do, and below it what no setting changes. A mailbox, account, repository or tool server also has to be assigned to the team under **Email & accounts**: the assignment says with what, the privilege says what.
 
 | Privilege | At the start | What enforces it |
 | --- | --- | --- |
@@ -268,8 +270,9 @@ The vault normally locks after 30 minutes without use. For scheduled unattended 
 | Push branches and open pull requests | **Off** | The tool is not given, and the access service refuses. Only the plan's own branch can be written to. |
 | Start build workflows | **Off** | The tool is not given, and the access service refuses anything not on the repository's list. |
 | Change build pipelines | **Off** | Anything under `.github` is refused in a commit. |
+| Use connected tools | **Off** | The tools are not given, and the access service refuses a call to any tool a person has not allowed as it is described. |
 
-Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account or a repository is stopped and its browser closed. The one thing a change cannot reach is the web access of a hosted session that has already started: a session is given its tools and its network when it starts and keeps them until its plan is over. The board says so when that happens, and pausing the organisation holds the session. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
+Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account, a repository or a connected tool is stopped and its browser closed. The one thing a change cannot reach is the web access of a hosted session that has already started: a session is given its tools and its network when it starts and keeps them until its plan is over. The board says so when that happens, and pausing the organisation holds the session. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
 
 **Without Act on accounts**, a session gets one sign-in, on the page it opened, and from then on the browser refuses any request but GET, HEAD and OPTIONS. That is a limit on the network, so it holds whichever element an agent presses and whatever a page's own scripts try to send. Nothing leaves. The agent is told, and can read on or ask a person for help.
 
@@ -280,7 +283,7 @@ The limits of this are worth knowing:
 - Create accounts opens the sign-up page. A role with Act can still submit a sign-up form it finds on the site by following links, because Act lets it submit any form there.
 - Privileges are per role, not per agent or per connection. Every agent on a team has the same, and a role with Act can act on every account assigned to it.
 
-A role that can both read mail and act on accounts is shown a warning, because anyone can send an email with instructions aimed at an agent, and what it reads could steer what it does.
+A role that can read mail and also act on accounts or call connected tools is shown a warning, because anyone can send an email with instructions aimed at an agent, and what it reads could steer what it does.
 
 ![Only Paperclips privileges, with one role allowed to act on accounts and the warning that goes with it](docs/only-paperclips-privileges.png)
 
@@ -289,6 +292,19 @@ A role that can both read mail and act on accounts is shown a warning, because a
 Connect a repository under **Email & accounts** with a fine-grained token, and assign it to a team. The token goes in the vault, and only ever to GitHub. Each plan gets one branch, which the engine names, so no agent can write anywhere else. There is no way for an agent to merge. Local agents cannot run code, but they can push to that branch and have GitHub Actions build and test it, on any model, and read the result. That is how work gets done outside this machine without giving agents a cloud account.
 
 Before relying on it, read the [setup and limits](docs/code-repositories.md). In short: protect the main branch on GitHub as well, and remember that code an agent pushes runs in your checks with whatever those checks can reach.
+
+## Tool servers (MCP)
+
+Agents can call tools that live in other programs and services, through servers that speak the [Model Context Protocol](https://modelcontextprotocol.io): an issue tracker, a database, a payments dashboard, something you run yourself. Connect a server under **Email & accounts** with its address and, if it asks for one, a token, and assign it to a team. The server is asked what it offers, and you tick the tools that team's agents may call. The role also needs **Use connected tools** under Privileges, which is off to begin with.
+
+What keeps this in hand:
+
+- **Nothing is allowed until a person allows it**, tool by tool, and each call checks again that the tool, the assignment and the privilege still stand.
+- **You see everything a model is shown about a tool before you allow it**, with any character you could not see on the page taken out, and agents see the tool exactly as it was then. A server that later rewrites a description, to slip in instructions or to make a tool do more, changes nothing an agent is shown. When you read the server's tools again, a tool that is described differently is kept back until you allow it again.
+- **The token stays in the vault** and goes only to the site you gave. A saved password or token is blanked out of what a tool returns, and a call that contains one is refused.
+- **Every call is recorded** under Access history, and what a tool returns reaches the agent as text marked as untrusted.
+
+A tool still does whatever its server lets it do, and no person checks each call, so use a narrow token and allow only what the work needs. Servers are reached over HTTP with a fixed token or none: one that needs a sign-in in the browser, or is started as a command on this machine, cannot be connected yet. Read the [setup and limits](docs/tool-servers.md) before connecting anything that can change something.
 
 ## Work approaches
 
@@ -511,7 +527,7 @@ On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is wh
 
 ## What agents can and cannot do
 
-**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts and repositories are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach any other system, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
+**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts, repositories and the tools on [connected servers](#tool-servers-mcp) are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach anything else, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
 
 **In hosted sessions** (Claude models only), agents have a shell and file tools in a sandbox on Anthropic's side. They can install packages, build, run and test, and are told to report what actually happened.
 
@@ -614,7 +630,7 @@ npm run test:browser # real UI smoke test; requires installed Chrome (CHROME_PAT
 npm run docs:screenshots # refresh Only Paperclips screenshots after a build
 ```
 
-The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against local stand-ins for the Messages API and the Managed Agents API that speak their protocols, the providers for everyone else against a stand-in for Chat Completions and OpenAI's Responses API, and the Claude Code connection against a stand-in for the `claude` command; whole organisations are also run end to end on the last two. That checks what is sent and how replies are handled, not that the live APIs accept it or behave as the stand-ins do.
+The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against local stand-ins for the Messages API and the Managed Agents API that speak their protocols, the providers for everyone else against a stand-in for Chat Completions and OpenAI's Responses API, and the Claude Code connection against a stand-in for the `claude` command; whole organisations are also run end to end on the last two. Tool servers are tested with the protocol's own client against a server built from the protocol's own server classes, on this machine. All of that checks what is sent and how replies are handled, not that the live APIs accept it or behave as the stand-ins do.
 
 Some tests drive the built dashboard, and the account browser, in a real Chrome. On your own machine they are left out when Chrome is not at `/opt/google/chrome/chrome` (set `CHROME_PATH` to where it is) or the client has not been built. With `REQUIRE_BROWSER=1` a missing browser or build stops the run and says what is missing, since a test that was skipped has checked nothing.
 
@@ -634,7 +650,8 @@ src/server/
                  catalogue of providers, models and prices (catalogue.ts)
     managed/     hosted sessions: the saved agents (resources.ts), files in
                  and out (files.ts), and following a session (session.ts)
-  access*.ts     encrypted business vault, Gmail/IMAP/SMTP, account browser and agent tools
+  access*.ts     encrypted business vault, Gmail/IMAP/SMTP, account browser, GitHub,
+                 tool servers (access-mcp.ts) and the agent tools for all of them
   connections.ts the API keys the server holds
   workspace.ts   the confined file tools agents use
   app.ts         the HTTP API and live event stream
@@ -656,6 +673,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - Gmail, IMAP/SMTP and account-browser integrations have been tested with stand-ins and a real local browser, not a live mailbox or third-party signup. See [email and account limits](docs/email-and-accounts.md).
 - Privileges are per role, and the browser's read-only limit goes by the kind of request: see [what each role may do](#what-each-role-may-do).
 - GitHub is the only code host. Repository work needs agents on this machine, handles text files only, and has not yet been run with a real token: see [the guide](docs/code-repositories.md#what-has-been-checked). Deployment is not built: a person merges, and whatever follows from that is up to your repository.
+- Tool servers are reached over HTTP with a fixed token or none. There is no sign-in through the browser (OAuth), no server started as a command on this machine, and none of it in hosted sessions. A tool's pictures and files are not passed to agents, only its text. No third party's server has been connected yet: see [the guide](docs/tool-servers.md#what-has-been-checked).
 - Hosted sessions have not been run against the live API (see above), and hold a lead to its allocation of agents by instruction only.
 - No provider's API has been called from this code: not Claude's, and none of the others. Everything about them was read from documentation (see [Models and keys](#models-and-keys)). The one way to a real model that has been tried is the [Claude Code connection](#claude-code-in-place-of-a-key), on which one small organisation has run one cycle.
 - The Claude Code connection has been tried on Linux only, has no hosted sessions and no web search, and depends on how the `claude` command behaves, which changes from release to release.

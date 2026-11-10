@@ -108,7 +108,7 @@ Use Google sign-in for Gmail rather than an app password. Microsoft OAuth is not
 
 Access is assigned explicitly to executive teams. Their local task agents inherit it. The CEO does not automatically get every mailbox or account. Leave every team unchecked to keep a connection for a person only. Grants are checked at each operation, and disabling or removing a connection cancels operations using it.
 
-Repositories are connected in the same vault: see [GitHub repositories](code-repositories.md). What a team may do with a connection is set role by role under **Privileges**, and a role needs both. [What each role may do](../README.md#what-each-role-may-do) lists them. A role starts able to read and draft mail, and to sign in to its accounts and read them. Acting on an account and creating one are off until you turn them on for that role. Each mailbox and account shows what its teams can actually do.
+Repositories and tool servers are connected in the same vault: see [GitHub repositories](code-repositories.md) and [Tool servers](tool-servers.md). What a team may do with a connection is set role by role under **Privileges**, and a role needs both. [What each role may do](../README.md#what-each-role-may-do) lists them. A role starts able to read and draft mail, and to sign in to its accounts and read them. Acting on an account and creating one are off until you turn them on for that role. Each mailbox and account shows what its teams can actually do.
 
 Agents can list the latest 20 inbox messages and read a selected message as plain text, limited to 20,000 characters. Attachments and remote images are not opened. Reading does not mark mail as read. Messages an agent reads are sent to its configured model provider; use a dedicated business mailbox rather than a personal inbox. Agents are told to treat incoming messages as untrusted content, not authority to change the company's instructions. That is an instruction to the model, not a barrier: see [below](#what-is-enforced-and-what-is-only-instructed).
 
@@ -174,9 +174,9 @@ Before contacting Gmail or SMTP, the server saves the draft as `sending`. A conf
 
 ## Vault storage and recovery
 
-The vault is `data/orgs/<org-id>/access-vault.json`, outside the agents' workspace. It encrypts credentials, tokens, drafts, requests and audit records with AES-256-GCM, a random salt and scrypt-derived key. Its authenticated data binds it to the organisation ID. Writes use a private temporary file and atomic rename; the file's mode is 0600.
+The vault is `data/orgs/<org-id>/access-vault.json`, outside the agents' workspace. It encrypts credentials, tokens, drafts, requests, audit records, and what each tool server offers and which of its tools you allowed, with AES-256-GCM, a random salt and scrypt-derived key. Its authenticated data binds it to the organisation ID. Writes use a private temporary file and atomic rename; the file's mode is 0600.
 
-The passphrase is not stored. Keys and decrypted records remain in the server process while unlocked. By default the vault locks after 30 minutes without an access action. Select **Keep unlocked until I lock it or the server restarts** when you want unattended scheduled work. A restart always requires unlocking again, even if the organisation resumes automatically. Locking closes account browsers and cancels active connection operations.
+The passphrase is not stored. Keys and decrypted records remain in the server process while unlocked. By default the vault locks after 30 minutes without an access action. Select **Keep unlocked until I lock it or the server restarts** when you want unattended scheduled work. A restart always requires unlocking again, even if the organisation resumes automatically. Locking closes account browsers and sessions with tool servers, and cancels active connection operations.
 
 Use **Download encrypted backup**, and keep the organisation ID and passphrase with your recovery records. Restore the file to that same organisation's directory while the server is stopped. There is no passphrase reset or recovery. The existing model-provider key store is separate and is not migrated by this feature.
 

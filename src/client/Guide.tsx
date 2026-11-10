@@ -6,6 +6,7 @@ import readme from '../../README.md?raw';
 import businessOperations from '../../docs/business-operations.md?raw';
 import codeRepositories from '../../docs/code-repositories.md?raw';
 import emailAndAccounts from '../../docs/email-and-accounts.md?raw';
+import toolServers from '../../docs/tool-servers.md?raw';
 import userGuide from '../../docs/user-guide.md?raw';
 
 // The guides are the repository's own docs, so what the app shows cannot drift from what the docs say.
@@ -13,6 +14,7 @@ export const GUIDES = {
   'user-guide': { title: 'Using the dashboard', file: 'user-guide.md', text: userGuide },
   'email-and-accounts': { title: 'Email & accounts', file: 'email-and-accounts.md', text: emailAndAccounts },
   'code-repositories': { title: 'GitHub repositories', file: 'code-repositories.md', text: codeRepositories },
+  'tool-servers': { title: 'Tool servers', file: 'tool-servers.md', text: toolServers },
   'business-operations': { title: 'Calendar & business', file: 'business-operations.md', text: businessOperations },
   reference: { title: 'Full reference', file: 'README.md', text: readme },
 } as const;

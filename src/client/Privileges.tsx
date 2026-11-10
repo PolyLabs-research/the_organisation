@@ -23,12 +23,14 @@ function Tick({ org, seat, privilege, busy, onChange }: { org: Organisation; sea
 export function Privileges({ org, onView, onSettings }: { org: Organisation; onView: (view: OrgView) => void; onSettings: () => void }) {
   const action = useAction();
   const roles = rolesOf(org);
-  const steerable = roles.filter((seat) => allows(org, seat.id, 'read_mail') && allows(org, seat.id, 'act')).map((seat) => seat.short);
+  // A role that reads what anyone can send it, and can also change something outside without a person looking first.
+  const steerable = roles.filter((seat) => allows(org, seat.id, 'read_mail') && (allows(org, seat.id, 'act') || allows(org, seat.id, 'use_tools')));
+  const steeredTo = [steerable.some((seat) => allows(org, seat.id, 'act')) ? 'act on accounts' : '', steerable.some((seat) => allows(org, seat.id, 'use_tools')) ? 'call connected tools' : ''].filter(Boolean).join(' or ');
   return (
     <section className="operations privileges-panel">
       <h2>Privileges</h2>
       <p>What each role and its agents may do. Each tick is checked where the thing is done, so an agent cannot talk its way past one. A change holds at once, and what a role is doing with something it has just lost stops. <HelpLink guide="reference" section="what-each-role-may-do">What each privilege means</HelpLink></p>
-      <p className="muted">Mailboxes and accounts are assigned to teams under Email &amp; accounts. A role needs both: the assignment there, and the privilege here.</p>
+      <p className="muted">Mailboxes, accounts, repositories and tool servers are assigned to teams under Email &amp; accounts. A role needs both: the assignment there, and the privilege here.</p>
       {org.settings.execution === 'managed' ? (
         <p className="note note-warn">
           <span>
@@ -40,7 +42,7 @@ export function Privileges({ org, onView, onSettings }: { org: Organisation; onV
       {steerable.length ? (
         <p className="note note-warn">
           <span>
-            <strong>{steerable.join(', ')}</strong> can both read mail and act on accounts. Anyone can send an email with instructions aimed at an agent, so what it reads could steer what it does.
+            <strong>{steerable.map((seat) => seat.short).join(', ')}</strong> can both read mail and {steeredTo}. Anyone can send an email with instructions aimed at an agent, so what it reads could steer what it does.
           </span>
         </p>
       ) : null}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Organisation } from '../shared/types';
-import type { AccessView, AccountPage, AccountView, MailboxView, MailMessage, MailSummary, RepositoryView } from '../shared/access';
+import { MAX_OFFERED_TOOLS, type AccessView, type AccountPage, type AccountView, type MailboxView, type MailMessage, type MailSummary, type RepositoryView, type ToolServerView, type ToolView } from '../shared/access';
 import { allows } from '../shared/privileges';
 import { request, useAction } from './api';
 import { HelpLink } from './Guide';
@@ -24,20 +24,21 @@ const canRead = (org: Organisation, id: string) => allows(org, id, 'read_mail'),
 const mailReach = (org: Organisation) => (id: string) => canRead(org, id) && canDraft(org, id) ? 'reads and drafts' : canRead(org, id) ? 'reads only' : canDraft(org, id) ? 'drafts only' : 'no access, see Privileges';
 const codeReach = (org: Organisation) => (id: string) => allows(org, id, 'push_code') ? (allows(org, id, 'run_workflows') ? 'pushes and starts builds' : 'pushes branches') : allows(org, id, 'read_code') ? (allows(org, id, 'run_workflows') ? 'reads and starts builds' : 'reads only') : 'no access, see Privileges';
 const accountReach = (org: Organisation) => (id: string) => allows(org, id, 'act') ? 'can act' : allows(org, id, 'sign_in') ? 'signs in and reads only' : 'no access, see Privileges';
-type Kind = 'accounts' | 'mailboxes' | 'repositories';
+const toolReach = (org: Organisation) => (id: string) => allows(org, id, 'use_tools') ? 'calls the tools allowed here' : 'no access, see Privileges';
+type Kind = 'accounts' | 'mailboxes' | 'repositories' | 'toolServers';
 function PasswordUpdate({ orgId, kind, id, onView }: { orgId: string; kind: Kind; id: string; onView: Update }) {
   const action = useAction();
   const [password, setPassword] = useState('');
-  const token = kind === 'repositories';
+  const token = kind === 'repositories' || kind === 'toolServers';
   return <details className="access-details"><summary>{token ? 'Replace token' : 'Update saved password'}</summary>
     <form onSubmit={event => { event.preventDefault(); void action.run(async () => { try { onView(await call(orgId, 'POST', '/' + kind + '/' + id + '/password', { password })); } finally { setPassword(''); } }); }}>
-      <p className="muted">{token ? 'GitHub is asked whether the new token works before it is saved.' : 'Save a password you have already changed at the service. This updates the vault only.'}</p>
+      <p className="muted">{kind === 'toolServers' ? 'The server is asked for its tools with the new token before it is saved.' : token ? 'GitHub is asked whether the new token works before it is saved.' : 'Save a password you have already changed at the service. This updates the vault only.'}</p>
       <Field label={token ? 'New token' : 'New saved password'}><input type="password" autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} required maxLength={2048} /></Field>
       <ErrorNote>{action.error}</ErrorNote><button className="button" disabled={action.busy}>{token ? 'Save token' : 'Save password'}</button>
     </form>
   </details>;
 }
-function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: Kind; record: AccountView | MailboxView | RepositoryView; onView: Update }) {
+function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: Kind; record: AccountView | MailboxView | RepositoryView | ToolServerView; onView: Update }) {
   const action = useAction();
   const [owners, setOwners] = useState(record.ownerIds);
   // Removing takes two presses: what is saved here goes for good, and for a password generated here there is no other copy.
@@ -45,7 +46,7 @@ function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: K
   useEffect(() => setOwners(record.ownerIds), [record.ownerIds.join(',')]);
   // Ticks are saved by "Save team access" and by nothing else. Disabling or enabling keeps the teams already saved: a press that says nothing of teams must not give one access.
   const update = (ownerIds: string[], enabled: boolean) => void action.run(async () => onView(await call(org.id, 'PATCH', '/' + kind + '/' + record.id, { ownerIds, enabled })));
-  const lost = kind === 'repositories' ? 'Its saved token is deleted for good.' : kind === 'accounts' ? 'Its saved password is deleted for good. If that is its only copy, reveal it and note it first.' : 'Its saved password or Google sign-in is deleted for good, and so are the drafts prepared from it.';
+  const lost = kind === 'toolServers' ? 'Its saved token is deleted for good, and so is your choice of which tools agents may call.' : kind === 'repositories' ? 'Its saved token is deleted for good.' : kind === 'accounts' ? 'Its saved password is deleted for good. If that is its only copy, reveal it and note it first.' : 'Its saved password or Google sign-in is deleted for good, and so are the drafts prepared from it.';
   return <details className="access-details"><summary>Manage access</summary>
     <TeamPicker org={org} value={owners} onChange={setOwners} />
     <div className="access-actions">
@@ -180,6 +181,85 @@ function RepositoryCard({ org, repository, onView }: { org: Organisation; reposi
     <PasswordUpdate orgId={org.id} kind="repositories" id={repository.id} onView={onView} />
   </article>;
 }
+function ToolServerConnect({ org, onView }: { org: Organisation; onView: Update }) {
+  const action = useAction();
+  const [label, setLabel] = useState('');
+  const [url, setUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [header, setHeader] = useState('');
+  const [owners, setOwners] = useState<string[]>([]);
+  return <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => {
+    try {
+      onView(await call(org.id, 'POST', '/toolServers', { label, url, token, header: header.trim() || 'Authorization', ownerIds: owners }));
+      setLabel(''); setUrl(''); setHeader('');
+    } finally { setToken(''); }
+  }); }}>
+    <div className="row"><h3>Connect a tool server</h3><HelpLink guide="tool-servers" section="connect-a-tool-server" /></div>
+    <p>A tool server gives agents tools from another program or service, over the Model Context Protocol (MCP). The server is asked what it offers, and you choose which of its tools agents may call. None is allowed until you tick it.</p>
+    <p className="note note-warn">Connect only a server you trust with what agents send it, and with what its tools can do. Where the service offers a token limited to reading, or to one project, use that one.</p>
+    <div className="grid-2">
+      <Field label="Name"><input value={label} onChange={e => setLabel(e.target.value)} required maxLength={160} /></Field>
+      <Field label="Address" hint="HTTPS, or http://localhost for a server on this machine."><input type="url" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://tools.example.com/mcp" required maxLength={2000} autoComplete="off" /></Field>
+      <Field label="Token (optional)" hint="Leave empty for a server that asks for none."><input type="password" value={token} onChange={e => setToken(e.target.value)} maxLength={2048} autoComplete="new-password" /></Field>
+      <Field label="Header for the token (optional)" hint="Leave empty to send it as a bearer token, which most servers take. Otherwise the header the service names for its key, such as X-API-Key."><input value={header} onChange={e => setHeader(e.target.value)} placeholder="Authorization" maxLength={64} autoComplete="off" /></Field>
+    </div>
+    <TeamPicker org={org} value={owners} onChange={setOwners} />
+    <ErrorNote>{action.error}</ErrorNote><button className="button button-primary" disabled={action.busy}>{action.busy ? 'Asking the server for its tools…' : 'Connect tool server'}</button>
+  </form>;
+}
+const SAYS = { reads: 'Says it only reads', changes: 'Says it changes things', deletes: 'Says it can delete', '': '' } as const;
+const allowedNames = (tools: ToolView[]) => tools.filter(tool => tool.allowed).map(tool => tool.name);
+function ToolServerCard({ org, server, onView }: { org: Organisation; server: ToolServerView; onView: Update }) {
+  const action = useAction();
+  const [ticked, setTicked] = useState(() => allowedNames(server.tools));
+  // The ticks follow the server only when what it holds changes. A page that is refreshed while a person is choosing must not undo the choosing.
+  const held = server.tools.map(tool => tool.fingerprint + (tool.allowed ? '+' : '-')).join(',');
+  useEffect(() => setTicked(allowedNames(server.tools)), [held]);
+  const allowed = allowedNames(server.tools);
+  const unsaved = ticked.length !== allowed.length || ticked.some(name => !allowed.includes(name));
+  // Every tool a team has is described to the model in each of its tasks. Roughly four characters make a token.
+  const weight = Math.round(server.tools.filter(tool => ticked.includes(tool.name)).reduce((sum, tool) => sum + tool.callName.length + tool.description.length + JSON.stringify(tool.inputSchema).length + 120, 0) / 400) * 100;
+  // Each tool is allowed as it is described on this page: the server refuses one that has been read again and is no longer the same.
+  const save = () => void action.run(async () => onView(await call(org.id, 'PATCH', '/toolServers/' + server.id + '/tools', { allowed: server.tools.filter(tool => ticked.includes(tool.name)).map(tool => ({ name: tool.name, fingerprint: tool.fingerprint })) })));
+  return <article className="ops-card">
+    <div className="row"><h3>{server.label}</h3><span className="tag">{allowed.length} of {server.tools.length} tools allowed · {server.enabled ? 'Enabled' : 'Disabled'}</span></div>
+    <p>{server.url}{server.serverName ? <> · calls itself {server.serverName}</> : null} · {!server.hasToken ? 'no token' : server.header.toLowerCase() === 'authorization' ? 'token saved' : 'token saved, sent as ' + server.header}</p>
+    <Reach org={org} ownerIds={server.ownerIds} describe={toolReach(org)} />
+    {server.tools.some(tool => tool.changed) ? <p className="note note-warn">The server now describes a tool differently from when you allowed it. It is kept back from agents until you have looked at it and allowed it again.</p> : null}
+    <fieldset className="access-tools" disabled={action.busy}>
+      <legend>Tools agents may call</legend>
+      {!server.tools.length ? <p className="muted">The server offers no tools.</p> : null}
+      {server.tools.map(tool => <div className={tool.unusable ? 'access-tool access-tool-off' : 'access-tool'} key={tool.name}>
+        {/* Only the tick and the name make the tick: reading down a long description, or selecting some of it, must not allow a tool by a slip. */}
+        <label className="access-tool-name">
+          <input type="checkbox" aria-label={'Allow ' + tool.name} checked={ticked.includes(tool.name)} disabled={!!tool.unusable} onChange={event => setTicked(event.target.checked ? [...ticked, tool.name] : ticked.filter(name => name !== tool.name))} />
+          <strong>{tool.name}</strong>{tool.says ? <span className="tag">{SAYS[tool.says]}</span> : null}{tool.changed ? <span className="tag tag-warn">Changed since you allowed it</span> : null}
+        </label>
+        <div className="access-tool-body">
+          <span className="access-tool-text">{tool.description || 'The server gives no description.'}</span>
+          {tool.unusable ? <span className="muted">Cannot be offered to agents. {tool.unusable}</span> : <>
+            {tool.takes.length ? <span className="access-tool-takes">{tool.takes.map(item => <span key={item.name}><code>{item.name}</code>{item.required ? '' : ' (optional)'}{item.about ? ': ' + item.about : ''}</span>)}</span> : <span className="muted">Takes nothing.</span>}
+            <details className="access-tool-shown"><summary>Everything a model is shown about it</summary><pre className="access-message-body">{tool.callName + '\n\n' + (tool.description || 'A tool on ' + server.label + '.') + '\n\n' + JSON.stringify(tool.inputSchema, null, 2)}</pre></details>
+          </>}
+        </div>
+      </div>)}
+    </fieldset>
+    {server.toolsLeftOut ? <p className="muted">{server.toolsLeftOut} more {server.toolsLeftOut === 1 ? 'tool is' : 'tools are'} offered by the server and not kept here: there is room for 150, and for descriptions of ordinary length.</p> : null}
+    <p className="muted">What a tool says of itself is the server’s word, not a check. Agents are shown each tool as it is described here, read {new Date(server.toolsReadAt).toLocaleString()}.{ticked.length ? ' As ticked, these tools add about ' + (weight || 100).toLocaleString() + ' tokens to every task of a team that has them, since each is described to the model every time.' : ''}</p>
+    <ErrorNote>{action.error}</ErrorNote>
+    <div className="access-actions">
+      <button type="button" className="button button-primary" disabled={action.busy || !unsaved} onClick={save}>Save allowed tools</button>
+      <button type="button" className="button" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/toolServers/' + server.id + '/tools/read', {})))}>{action.busy ? 'Working…' : 'Read the server’s tools again'}</button>
+    </div>
+    <GrantEditor org={org} kind="toolServers" record={server} onView={onView} />
+    <PasswordUpdate orgId={org.id} kind="toolServers" id={server.id} onView={onView} />
+  </article>;
+}
+/** A team's agents are offered a limited number of connected tools, in the order the servers and their tools stand here. Past that, a tool allowed is a tool left out, which a person has to be told. */
+function TooManyTools({ org, servers }: { org: Organisation; servers: ToolServerView[] }) {
+  const over = teams(org).map(seat => ({ seat, allowed: servers.filter(server => server.enabled && server.ownerIds.includes(seat.id)).reduce((sum, server) => sum + server.tools.filter(tool => tool.allowed).length, 0) })).filter(item => item.seat.kind !== 'ceo' && item.allowed > MAX_OFFERED_TOOLS);
+  return <>{over.map(({ seat, allowed }) => <p className="note note-warn" key={seat.id}>{seat.short} has {allowed} tools allowed across its servers. A team’s agents are offered {MAX_OFFERED_TOOLS} at most, in the order they stand here, so the last {allowed - MAX_OFFERED_TOOLS} are left out. Untick the ones the work does not need.</p>)}</>;
+}
 function Inbox({ orgId, box }: { orgId: string; box: MailboxView }) {
   const action = useAction();
   const [messages, setMessages] = useState<MailSummary[] | null>(null);
@@ -277,15 +357,16 @@ function Drafts({ org, view, onView }: { org: Organisation; view: AccessView; on
 }
 function Unlocked({ org, view, onView }: { org: Organisation; view: AccessView; onView: Update }) {
   const action = useAction();
-  const [pane, setPane] = useState<'mail' | 'accounts' | 'code' | 'drafts' | 'requests' | 'history'>('mail');
+  const [pane, setPane] = useState<'mail' | 'accounts' | 'code' | 'tools' | 'drafts' | 'requests' | 'history'>('mail');
   return <>
     <div className="row"><p className="muted">Unlocked · {view.autoLockMinutes === 0 ? 'stays unlocked until you lock it or the server stops.' : 'locks after 30 minutes without an access action, or when the server stops.'}</p><div className="access-actions"><a className="button" href={'/api/orgs/' + org.id + '/access/backup'} download>Download encrypted backup</a><button type="button" className="button" onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/lock', {})))} disabled={action.busy}>Lock vault</button></div></div>
-    {org.settings.execution === 'managed' ? <p className="note note-warn">The email and account tools run with local task execution. Switch Execution in Settings to local to give the agents these tools.</p> : null}
+    {org.settings.execution === 'managed' ? <p className="note note-warn">The email, account, repository and connected tools run with local task execution. Switch Execution in Settings to local to give the agents these tools.</p> : null}
     <ErrorNote>{action.error}</ErrorNote>
-    <nav className="ops-nav" aria-label="Email and account sections">{(['mail', 'accounts', 'code', 'drafts', 'requests', 'history'] as const).map(item => <button type="button" key={item} className={pane === item ? 'button button-primary' : 'button'} onClick={() => setPane(item)}>{({ mail: 'Mailboxes', accounts: 'Accounts', code: 'Repositories', drafts: 'Email drafts', requests: 'Access requests', history: 'Access history' })[item]}{item === 'requests' && view.requests.some(request => request.status === 'open') ? ' (' + view.requests.filter(request => request.status === 'open').length + ')' : ''}</button>)}</nav>
+    <nav className="ops-nav" aria-label="Email and account sections">{(['mail', 'accounts', 'code', 'tools', 'drafts', 'requests', 'history'] as const).map(item => <button type="button" key={item} className={pane === item ? 'button button-primary' : 'button'} onClick={() => setPane(item)}>{({ mail: 'Mailboxes', accounts: 'Accounts', code: 'Repositories', tools: 'Tool servers', drafts: 'Email drafts', requests: 'Access requests', history: 'Access history' })[item]}{item === 'requests' && view.requests.some(request => request.status === 'open') ? ' (' + view.requests.filter(request => request.status === 'open').length + ')' : ''}</button>)}</nav>
     {pane === 'mail' ? <><details className="access-add" open={view.mailboxes.length === 0}><summary>Connect a mailbox</summary><MailConnect org={org} configured={!!view.googleConfigured} onView={onView} /></details>{view.mailboxes.map(box => <article className="ops-card" key={box.id}><div className="row"><h3>{box.label}</h3><span className="tag">{box.provider === 'gmail' ? 'Google' : 'IMAP / SMTP'} · {box.enabled ? 'Enabled' : 'Disabled'}</span></div><p>{box.address}</p><Reach org={org} ownerIds={box.ownerIds} describe={mailReach(org)} /><Inbox orgId={org.id} box={box} /><GrantEditor org={org} kind="mailboxes" record={box} onView={onView} />{box.provider === 'imap' ? <PasswordUpdate orgId={org.id} kind="mailboxes" id={box.id} onView={onView} /> : null}</article>)}</> : null}
     {pane === 'accounts' ? <><details className="access-add" open={view.accounts.length === 0}><summary>Add a service account</summary><AccountConnect org={org} view={view} onView={onView} /></details>{view.accounts.map(account => <AccountCard key={account.id} org={org} account={account} onView={onView} />)}</> : null}
     {pane === 'code' ? <><details className="access-add" open={view.repositories.length === 0}><summary>Connect a repository</summary><RepositoryConnect org={org} onView={onView} /></details>{view.repositories.map(repository => <RepositoryCard key={repository.id} org={org} repository={repository} onView={onView} />)}</> : null}
+    {pane === 'tools' ? <><details className="access-add" open={view.toolServers.length === 0}><summary>Connect a tool server</summary><ToolServerConnect org={org} onView={onView} /></details><TooManyTools org={org} servers={view.toolServers} />{view.toolServers.map(server => <ToolServerCard key={server.id} org={org} server={server} onView={onView} />)}</> : null}
     {pane === 'drafts' ? <Drafts org={org} view={view} onView={onView} /> : null}
     {pane === 'requests' ? <>{!view.requests.length ? <p className="muted">Agents can request a service or help with sign-in here.</p> : null}{[...view.requests].reverse().map(item => <article className="ops-card" key={item.id}><h3>{item.service}</h3><p>{item.reason}</p><p className="muted">{item.actorId} · {item.status}</p>{item.status === 'open' ? <button className="button" type="button" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/requests/' + item.id + '/resolve', {})))}>Mark handled</button> : null}</article>)}</> : null}
     {pane === 'history' ? <div className="access-history">{view.audit.map((item, i) => <p key={i}><time>{new Date(item.at).toLocaleString()}</time> · {item.actorId} · {item.action.replaceAll('_', ' ')} · <code>{item.targetId}</code></p>)}</div> : null}
@@ -308,7 +389,7 @@ export function Access({ org }: { org: Organisation }) {
   }, [org.id]);
   return <section className="operations access-panel">
     <h2>Email &amp; accounts</h2>
-    <p>Business mail, saved logins and access for the agents, held in this organisation’s encrypted vault. <HelpLink guide="email-and-accounts">Setup guide</HelpLink></p>
+    <p>Business mail, saved logins, repositories and tool servers for the agents, held in this organisation’s encrypted vault. <HelpLink guide="email-and-accounts">Setup guide</HelpLink></p>
     <ErrorNote onDismiss={action.clearError}>{action.error}</ErrorNote>
     {!view ? <p className="muted">Loading access settings…</p> : !view.available ? <p className="note note-warn">{view.reason}</p> : view.unlocked ? <Unlocked org={org} view={view} onView={update} /> :
       <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => {

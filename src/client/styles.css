@@ -2733,6 +2733,20 @@ a.provider:hover {
 .access-history { font-size: .85rem; }
 .access-panel .row { flex-wrap: wrap; gap: .7rem; }
 .access-add { margin-top: 1rem; }
+.access-tools { border: 1px solid var(--line); border-radius: 8px; padding: .4rem .85rem; margin: 1rem 0; max-height: 48rem; overflow: auto; }
+.access-tools legend { padding: 0 .3rem; font-weight: 600; }
+.access-tool { padding: .6rem 0; border-top: 1px solid var(--line); }
+.access-tools legend + .access-tool { border-top: 0; }
+.access-tool input { width: auto; flex: 0 0 auto; }
+.access-tool-name { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; }
+.access-tool-body { display: grid; gap: .25rem; min-width: 0; margin: .3rem 0 0 1.6rem; }
+.access-tool strong { font-family: var(--mono); font-size: .9rem; }
+.access-tool-text { white-space: pre-wrap; }
+.access-tool-takes { display: grid; gap: .15rem; font-size: .85rem; color: var(--ink-2, inherit); white-space: pre-wrap; }
+.access-tool .muted, .access-tool-shown { font-size: .85rem; }
+.access-tool-shown summary { cursor: pointer; color: var(--ink-3); }
+.access-tool-shown pre { margin: .4rem 0 0; font: .8rem/1.5 var(--mono); max-height: 24rem; }
+.access-tool-off { opacity: .7; }
 .access-add > summary { cursor: pointer; font-weight: 600; padding: .7rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); }
 
 /* What each role may do: one column per role, kept to its own scroll so that the page never goes sideways. */
