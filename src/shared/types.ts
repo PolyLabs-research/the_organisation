@@ -2,12 +2,13 @@
 import type { BusinessState } from './business';
 import type { OrgApproaches } from './approaches';
 import type { OrgPrivileges } from './privileges';
+import type { SandboxRun } from './sandbox';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
  * Where a plan's agents do their work.
- * local: on this machine, through file tools; they cannot run code.
+ * local: on this machine, through file tools; they run code only where their role may, and then in a sandbox.
  * managed: in a Claude Managed Agents session, a hosted sandbox where they can run and test what they build.
  */
 export type ExecutionMode = 'local' | 'managed';
@@ -142,6 +143,10 @@ export interface OrgSettings {
    * readable in the Console but can no longer be changed, and archiving cannot be undone.
    */
   archiveSessions: boolean;
+  /** The image a sandbox is started from, for the roles that may run code. */
+  sandboxImage: string;
+  /** Whether code run in a sandbox can reach the internet. Off unless the shareholders switch it on: with it, what agents run can fetch from, and send to, any site. */
+  sandboxNetwork: boolean;
   /**
    * Whether a lead is shown what the organisation's memory holds on what it is about to decide, plan or hand out.
    * It adds a little to those prompts. Agents can search the memory, and so can a person, whatever this says.
@@ -276,6 +281,11 @@ export interface Task {
   redoes?: string | null;
   /** What the lead's review found: work let stand, work sent back, or a task that had failed. Absent until the phase has been reviewed. */
   judged?: 'accepted' | 'sent_back' | 'failed';
+  /**
+   * What the agent ran in the sandbox, as the system recorded it: the most recent commands, and how each ended.
+   * Absent where the agent could run nothing, and empty where it could and did not.
+   */
+  runs?: SandboxRun[];
 }
 
 export type PhaseStatus = 'pending' | 'working' | 'done';

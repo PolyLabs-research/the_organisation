@@ -35,3 +35,7 @@ jobs:
           # A browser-driven test that is skipped has checked nothing. Here a missing browser is a failure.
           REQUIRE_BROWSER: '1'
           CHROME_PATH: /usr/bin/google-chrome
+          # The same for the tests that run real containers: here a container service that does not answer is a failure.
+          # The image comes from a mirror that does not limit how often an address may fetch.
+          REQUIRE_SANDBOX: '1'
+          ORG_SANDBOX_TEST_IMAGE: mirror.gcr.io/library/alpine:3.20

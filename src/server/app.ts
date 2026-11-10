@@ -134,9 +134,11 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
   /** The model a new organisation starts on: the provider's pick from the keys connected, or the built-in default. */
   const defaultModel = () => registry.provider.defaultModel?.() ?? DEFAULT_SETTINGS.executiveModel;
 
-  app.get('/api/meta', (_req, res) => {
+  app.get('/api/meta', async (_req, res) => {
     const model = defaultModel();
     res.json({
+      // Whether code can be run here, for the roles that may run it, and if not, why not.
+      sandbox: (await registry.sandbox?.status()) ?? { available: false, runtime: null, reason: 'Nothing was set up on this server to run code with.' },
       provider: registry.provider.info(),
       providerReason: config.providerReason,
       profiles: PROFILES,
