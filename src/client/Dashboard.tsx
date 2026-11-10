@@ -1,5 +1,5 @@
 import { ArrowLeft, Pause, Play, Settings2, Square } from 'lucide-react';
-import { lazy, Suspense, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import type { OrgView } from '../shared/types';
 import { api, useAction, useOrgStream, type Meta } from './api';
 import { Operations } from './Operations';
@@ -56,6 +56,14 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planTarget, setPlanTarget] = useState<string | null>(null);
   const [file, setFile] = useState<string | null>(null);
+  // The address says a mailbox has just been connected, which is why this page opened on that tab. Once it has, the note
+  // is taken out of the address: left there, every organisation opened from here on, and every reload, opened on that tab too.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('access') !== 'connected') return;
+    url.searchParams.delete('access');
+    window.history.replaceState(window.history.state, '', url);
+  }, []);
 
   if (missing) {
     return (

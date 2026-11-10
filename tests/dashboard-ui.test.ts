@@ -186,6 +186,29 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     }
   });
 
+  it('opens on Email & accounts after a mailbox is connected, once', async () => {
+    const connected = await organisation('Just connected');
+    const other = await organisation('Another one');
+    const selected = (page: Page) => page.locator('.tabs [role=tab][aria-selected=true]').innerText();
+    // Where the server sends the browser when Google sign-in has finished.
+    const page = await open('/?access=connected#/org/' + connected.org.id);
+    try {
+      await page.getByRole('heading', { name: 'Just connected', exact: true }).waitFor();
+      expect(await selected(page)).toBe('Email & accounts');
+      await expect.poll(() => page.url()).toBe(base + '/#/org/' + connected.org.id);
+      // The next organisation opened from here starts on its board, and so does this one after a reload.
+      await page.getByRole('link', { name: 'Organisations' }).click();
+      await page.getByRole('link', { name: /Another one/ }).click();
+      await page.getByRole('heading', { name: 'Another one', exact: true }).waitFor();
+      expect(await selected(page)).toBe('Board');
+      await page.reload();
+      await page.getByRole('heading', { name: 'Another one', exact: true }).waitFor();
+      expect(await selected(page)).toBe('Board');
+    } finally {
+      await page.close();
+    }
+  });
+
   it('leaves the Help dialog as it is while the organisation changes behind it', async () => {
     const runner = await organisation('Reading the guide');
     const page = await open('/#/org/' + runner.org.id);
