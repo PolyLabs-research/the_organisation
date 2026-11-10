@@ -28,6 +28,10 @@ interface Reply {
   cut?: boolean;
   /** Start the reply and then say nothing more, with the connection left open. */
   hold?: boolean;
+  /** Start the reply and then end the stream in good order, as something on the way that times out can. */
+  unfinished?: boolean;
+  /** Answer 200 with nothing in it at all. */
+  empty?: boolean;
 }
 interface Seen {
   path: string;
@@ -92,10 +96,12 @@ beforeAll(async () => {
         return;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      if (reply.cut || reply.hold) {
-        // The reply starts, then the connection goes away, or goes quiet.
+      if (reply.empty) return void res.end();
+      if (reply.cut || reply.hold || reply.unfinished) {
+        // The reply starts, then the connection goes away, or goes quiet, or the stream just ends.
         res.write(sse(reply).split('\n\n').slice(0, 2).join('\n\n') + '\n\n');
         if (reply.cut) setTimeout(() => res.destroy(), 5);
+        if (reply.unfinished) res.end();
         return;
       }
       res.end(sse(reply));
@@ -228,6 +234,17 @@ describe('structured calls', () => {
     const err = await failure(provider().structured(structuredRequest()));
     expect(err.code).toBe('unavailable');
     expect(err.retryable).toBe(true);
+  });
+
+  it('treats a reply that stops arriving, with the connection closed in good order, the same way', async () => {
+    replies.push({ content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }], unfinished: true });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect([err.code, err.retryable]).toEqual(['unavailable', true]);
+    expect(err.message).toContain('ended before it was complete');
+    // So too an answer with nothing in it, which is not a reply at all.
+    replies.push({ empty: true });
+    const none = await failure(provider().structured(structuredRequest()));
+    expect([none.code, none.retryable]).toEqual(['unavailable', true]);
   });
 
   it('counts what a reply had said it read by the time the connection was lost', async () => {
@@ -473,6 +490,22 @@ describe('agent runs', () => {
     expect(written).toHaveLength(1);
     expect(seen).toHaveLength(3);
     expect(seen[2]!.body.messages).toEqual(seen[1]!.body.messages);
+  });
+
+  it('sends the same turn again when a reply simply stops arriving, and does not take that for a tool call it could not read', async () => {
+    const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
+    replies.push(call, { content: [{ type: 'text', text: 'half a rep' }], unfinished: true }, { content: [{ type: 'text', text: 'Done after a retry.' }] });
+    const result = await provider().agent(agentRequest());
+    expect(result).toEqual({ text: 'Done after a retry.', turns: 2, stopped: 'done' });
+    expect(written).toHaveLength(1);
+    expect(seen).toHaveLength(3);
+    // One that keeps stopping is given up on as something that may pass: the first try and three more.
+    seen = [];
+    replies.push({ unfinished: true }, { unfinished: true }, { unfinished: true }, { unfinished: true });
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['unavailable', true]);
+    expect(err.message).not.toContain('tool call');
+    expect(seen).toHaveLength(4);
   });
 
   it('counts a reply that was lost part-way once, and the one sent for in its place once', async () => {

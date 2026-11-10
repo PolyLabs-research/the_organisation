@@ -260,7 +260,7 @@ export class ClaudeProvider implements Provider {
           await sleep(this.turnRetryDelayMs * 2 ** retries++, req.signal);
           continue;
         }
-        if (!(err instanceof Anthropic.APIError) && !hasCause(err)) {
+        if (!(err instanceof ProviderError) && !(err instanceof Anthropic.APIError) && !hasCause(err)) {
           // With eager input streaming, a tool input that is not parseable JSON rejects here.
           if (++badJson <= 2) continue;
           // The SDK's message ends with the whole of the input it could not read, which may be a file as long as
@@ -359,6 +359,12 @@ async function replyOf(stream: BetaMessageStream, req: Pick<AgentRequest, 'model
       // of what had arrived, at about four characters to a token.
       const usage = started.stop_reason === null ? { ...started.usage, output_tokens: Math.max(started.usage.output_tokens, Math.ceil(written / 4)) } : started.usage;
       req.onUsage?.(usageOf({ ...started, usage }, req.model));
+    }
+    // A stream that just stops, with no error from the API or from the connection, leaves the SDK with no message
+    // to give: a reply that was never finished, or an answer with nothing in it. That is a reply lost on the way
+    // like any other, and asking again may well get it.
+    if (!(err instanceof Anthropic.APIError) && !hasCause(err) && (!stream.errored || (!started && stream.response))) {
+      throw new ProviderError('The reply from Anthropic ended before it was complete.', 'unavailable', true);
     }
     throw err;
   }
