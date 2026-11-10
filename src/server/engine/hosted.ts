@@ -160,6 +160,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
   }
   const capBefore = managed.sessionId ? managed.budgetUsd : 0;
   let capConfirmed = false;
+  // The budget the cap was worked out from. See `halt`.
+  let budgetThen = org.settings.budgetUsd;
   managed.budgetUsd = cap;
   managed.state = 'starting';
   ctx.touch();
@@ -485,10 +487,15 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     halt() {
       if (!isPlanActive(plan) || plan.status !== 'executing' || plan.execution !== 'managed' || !execById(org, lead.id)) return 'cancel';
       if (ctx.halting() || org.status !== 'running' || ctx.overBudget()) return 'pause';
+      // The budget has been lowered since the session's cap was worked out. The platform still holds the session
+      // to the old cap, which may be more than the budget now has left for it. The session is held, and is picked
+      // up again with a cap worked out from the budget as it stands.
+      if (org.settings.budgetUsd < budgetThen) return 'pause';
       return null;
     },
 
     moreBudget(spentUsd) {
+      budgetThen = org.settings.budgetUsd;
       const more = sessionAllowance(org, plan, spentUsd);
       if (more !== null) {
         managed.budgetUsd = more;

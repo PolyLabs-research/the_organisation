@@ -553,6 +553,35 @@ describe('a hosted session and money', () => {
     expect(h.org.usage.costUsd).toBeGreaterThanOrEqual(1);
   });
 
+  it('is held, and carries on under a cap from the new budget, when the budget is lowered under it', async () => {
+    const jobs: Array<{ cap: number; pickedUp: boolean }> = [];
+    class Watching extends MockProvider {
+      override executePlan(job: PlanJob): Promise<PlanOutcome> {
+        jobs.push({ cap: job.budgetUsd, pickedUp: !!job.session });
+        return super.executePlan(job);
+      }
+    }
+    h = await harness({ settings: { ...HOSTED, budgetUsd: 50 }, executives: ONE_LEAD, provider: new Watching({ ...QUIET, delayMs: 2, runs: 'never' }) });
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.phases[0]?.status === 'done', 'the first phase');
+    const session = planOf(h.org).managed!.sessionId;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.cap).toBeGreaterThan(40);
+
+    // The shareholders lower the budget to far less than the session was told it could spend.
+    h.runner.updateSettings({ budgetUsd: 3 });
+    await h.runner.idle();
+    const plan = planOf(h.org);
+    expect(h.org.lastError).toBeNull();
+    expect(plan.status).toBe('done');
+    expect(plan.managed!.sessionId).toBe(session);
+    // The session was held, then picked up with a cap that the budget as it now stands covers.
+    expect(jobs).toHaveLength(2);
+    expect(jobs[1]!.pickedUp).toBe(true);
+    expect(jobs[1]!.cap).toBeLessThanOrEqual(3);
+    expect(h.org.usage.costUsd).toBeLessThan(3);
+  });
+
   it('shares what is left between the plans that will want a session', () => {
     const plan = (id: string, managed: Partial<NonNullable<Plan['managed']>> | null, status: Plan['status'] = 'executing') =>
       ({ id, status, execution: 'managed', managed }) as unknown as Plan;
