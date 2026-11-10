@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { chromium, type Browser, type LaunchOptions, type Route } from 'playwright-core';
 import { BusinessBrowser } from '../src/server/access-browser';
 import { AccessError, type AccountSecret } from '../src/server/access-vault';
 import type { AccountPage, BrowserAction } from '../src/shared/access';
+import { CHROME, withoutBrowser } from './helpers';
 
 const site: AccountSecret = { id: 'account_test', label: 'Supplier', origin: 'https://supplies.example', loginUrl: 'https://supplies.example/login', signupUrl: 'https://supplies.example/signup', resourceOrigins: [], username: 'office@paperclips.example', password: 'generated-test-password', mailboxId: 'mail_test', ownerIds: ['coo'], allowSignup: true, enabled: true, createdAt: '' };
 let browser: BusinessBrowser;
@@ -13,7 +13,7 @@ const users = new Map<string, string>();
 let launched: LaunchOptions = {};
 async function fixtureBrowser(options: LaunchOptions): Promise<Browser> {
   launched = options;
-  const actual = await chromium.launch({ ...options, executablePath: process.env.CHROME_PATH ?? '/opt/google/chrome/chrome', channel: undefined });
+  const actual = await chromium.launch({ ...options, executablePath: CHROME, channel: undefined });
   return new Proxy(actual, {
     get(target, key) {
       if (key === 'newContext') return async (settings: Parameters<Browser['newContext']>[0]) => {
@@ -67,7 +67,7 @@ function setup() { requests.length = 0; users.clear(); browser = new BusinessBro
 const run = (action: Omit<BrowserAction, 'accountId'>, actor = 'task1', write = true) => browser.run(site, site.username, actor, { accountId: site.id, ...action }, new AbortController().signal, { write });
 const element = (page: AccountPage, label: string) => page.elements.find(item => item.label === label)!.id;
 afterEach(async () => { await browser?.close(); });
-describe.skipIf(!existsSync(process.env.CHROME_PATH ?? '/opt/google/chrome/chrome'))('account browser', () => {
+describe.skipIf(withoutBrowser())('account browser', () => {
   it('creates and verifies an account, then logs in with a saved password without returning it', async () => {
     setup();
     let page = await run({ action: 'signup' });

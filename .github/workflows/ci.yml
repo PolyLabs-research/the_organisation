@@ -1,0 +1,37 @@
+name: CI
+
+# The checks a change has to pass before it goes in: the type check, the build, and the whole test suite.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Type check, build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # The tests that drive the dashboard in a real browser need the built client, so the build comes first.
+      - run: npm run build
+      - name: Tests
+        run: npm test
+        env:
+          # A browser-driven test that is skipped has checked nothing. Here a missing browser is a failure.
+          REQUIRE_BROWSER: '1'
+          CHROME_PATH: /usr/bin/google-chrome
