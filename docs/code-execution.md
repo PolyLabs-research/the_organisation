@@ -10,7 +10,7 @@ It works with any model provider. [Hosted sessions](../README.md#hosted-sessions
 2. **Allow a role.** Under **Privileges**, tick **Run code in a sandbox** for the roles whose agents should run things. It is off for every role to begin with.
 3. **Choose the image and the network**, if the defaults do not suit, in an organisation's settings. See [Images](#images) and [The network](#the-network).
 
-The first time a role is allowed, the image is fetched (several hundred megabytes for the default). If Docker is not running, or the image cannot be had, the board says so, and until it is put right the role's agents are told that they cannot run code, exactly as before.
+The first time a role is allowed, the image is fetched (several hundred megabytes for the default). If Docker is not running, or the image cannot be had, the board says so, and until it is put right the role's agents are told that they cannot run code, exactly as before. The Privileges page says which it is: what code is run with, from which image and whether it can reach the network, or what stands in the way.
 
 Running code is switched off on a server that listens beyond loopback (`HOST` other than `127.0.0.1`). The API has no login, so anyone who could reach such a server could allow a role to run code and then have code run on your machine. `ORG_SANDBOX=off` switches it off everywhere.
 
@@ -29,7 +29,9 @@ Agents are told to run what can be run, to say in their report what they ran and
 
 Each command is recorded on its task as it ends: the command, the folder, how long it took, and whether it exited by itself (and with what code), hit its time limit, was stopped with the work, was killed, or could not be run. The record is the system's, written by the code that ran the command. No model writes or edits it.
 
-At the phase gate the lead is shown, under each task, what that task ran and how it ended, or that it ran nothing, and is told to go by that record where an agent's report says more. A lead whose agents can run code is told so when it hands out a phase's tasks, so that it asks for work to be run and tested.
+You read it under **Plans**: each task lists the commands it ran, in order, with where each was run, how it ended and how long it took, and the task's own line says how the last of them ended. A task that could run commands and ran none says so.
+
+At the phase gate the lead is shown the same, under each task: what it ran and how that ended, or that it ran nothing. The lead is told to go by that record where an agent's report says more. A lead whose agents can run code is told so when it hands out a phase's tasks, so that it asks for work to be run and tested.
 
 ## What confines a command
 

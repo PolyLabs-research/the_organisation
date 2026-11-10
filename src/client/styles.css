@@ -560,6 +560,18 @@ input[type='radio'] {
   color: var(--warn);
 }
 
+.tag-ok {
+  background: var(--ok-soft);
+  border-color: var(--ok-line);
+  color: var(--ok);
+}
+
+.tag-bad {
+  background: var(--bad-soft);
+  border-color: var(--bad-line);
+  color: var(--bad);
+}
+
 .status {
   display: inline-flex;
   align-items: center;
@@ -1751,6 +1763,38 @@ input[type='radio'] {
   gap: 7px;
   padding: 4px 12px 12px 34px;
   font-size: 13px;
+}
+
+/* What a task ran in the sandbox: the command as it was given, and how it ended. */
+.runs {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 4px;
+}
+
+.runs li {
+  display: grid;
+  gap: 1px;
+  padding: 5px 9px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-2);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 12.5px;
+}
+
+.runs li.run-ok {
+  border-left-color: var(--ok);
+}
+
+.runs li.run-bad {
+  border-left-color: var(--bad);
+}
+
+.runs code {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .file-links {

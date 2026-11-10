@@ -51,14 +51,20 @@ export interface SandboxStatus {
   reason: string | null;
 }
 
+/** Whether a run shows that what it ran works: it ended by itself, with nothing to report. */
+export const runPassed = (run: SandboxRun): boolean => run.ended === 'exited' && run.exitCode === 0;
+
+/** How a run ended, in words. */
+export function runOutcome(run: SandboxRun): string {
+  if (run.ended === 'exited') return run.exitCode === 0 ? 'passed (exit 0)' : `failed (exit ${run.exitCode})`;
+  if (run.ended === 'timed_out') return 'stopped at its time limit';
+  if (run.ended === 'stopped') return 'stopped with the work';
+  if (run.ended === 'killed') return 'killed, most likely for using more memory than the sandbox allows';
+  return 'could not be run';
+}
+
 /** How a run reads in a line, wherever one is listed. */
 export function describeRun(run: SandboxRun): string {
   const took = run.ms >= 1000 ? `${(run.ms / 1000).toFixed(1)} s` : `${run.ms} ms`;
-  const how =
-    run.ended === 'exited' ? (run.exitCode === 0 ? 'passed (exit 0)' : `failed (exit ${run.exitCode})`)
-      : run.ended === 'timed_out' ? 'stopped at its time limit'
-        : run.ended === 'stopped' ? 'stopped with the work'
-          : run.ended === 'killed' ? 'killed, most likely for using more memory than the sandbox allows'
-            : 'could not be run';
-  return `${run.command}${run.dir ? ` (in ${run.dir})` : ''}: ${how}, ${took}`;
+  return `${run.command}${run.dir ? ` (in ${run.dir})` : ''}: ${runOutcome(run)}, ${took}`;
 }

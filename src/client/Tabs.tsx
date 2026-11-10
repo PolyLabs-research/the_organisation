@@ -1,6 +1,7 @@
 import { CircleCheck, CircleDashed, CirclePause, CircleX, ExternalLink, FileText, LoaderCircle } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { STANDARD_APPROACH, approachLabel } from '../shared/approaches';
+import { runOutcome, runPassed } from '../shared/sandbox';
 import { describeWait, waitMet } from '../shared/waits';
 import type {
   GateEvidence,
@@ -150,6 +151,8 @@ function TaskRow({ orgId, task, held, ladder, onOpenFile }: { orgId: string; tas
           <span className="task-title">{task.title}</span>
           {task.rework ? <span className="tag">Rework</span> : null}
           {task.agent ? <span className="agent-tag">Agent {task.agent}</span> : inRun ? <span className="agent-tag">In a run</span> : null}
+          {/* How the last thing it ran in the sandbox ended, by the system's record and not the agent's word. */}
+          {task.runs?.length ? <span className={`tag ${runPassed(task.runs.at(-1)!) ? 'tag-ok' : 'tag-bad'}`}>{runPassed(task.runs.at(-1)!) ? 'Last run passed' : 'Last run did not pass'}</span> : null}
           {/* Which model the task was given to, where the agents have more than one to go to. */}
           {task.model && ladder ? <span className="agent-tag" title={task.effort ? `Rated ${task.effort} for effort` : 'Not rated for effort'}>{task.model}</span> : null}
         </summary>
@@ -177,6 +180,27 @@ function TaskRow({ orgId, task, held, ladder, onOpenFile }: { orgId: string; tas
             )
           ) : null}
           {failed ? <p className="note note-bad">The report could not be read. {failed}</p> : null}
+          {task.runs ? (
+            <>
+              <p className="field-label">Ran in the sandbox, as the system recorded it</p>
+              {task.runs.length ? (
+                <ol className="runs">
+                  {task.runs.map((run, i) => (
+                    <li key={run.at + i} className={runPassed(run) ? 'run-ok' : 'run-bad'}>
+                      {/* A command is an agent's words. It is shown as written, and is nothing that can be pressed. */}
+                      <code>{run.command}</code>
+                      <span className="muted">
+                        {run.dir ? `in ${run.dir} · ` : ''}
+                        {runOutcome(run)} · {duration(run.ms)}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="muted">Nothing. It could run commands, and ran none.</p>
+              )}
+            </>
+          ) : null}
           {task.files.length ? (
             <ul className="file-links">
               {task.files.map((path) => (
