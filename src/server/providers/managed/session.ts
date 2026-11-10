@@ -212,7 +212,7 @@ export class PlanSession {
   private readonly awaiting = new Map<string, number>();
   /** Messages the session has been seen to take up. One can be seen on the stream before the request that sent it has returned. */
   private readonly takenUp = new Set<string>();
-  /** True once this attachment has given the session room to spend (created it, or raised its cap). */
+  /** True once this attachment has given the session room to spend, or may have (created it, or asked for its cap to be raised). */
   private live = false;
   private reported = false;
   private replaying = false;
@@ -342,6 +342,9 @@ export class PlanSession {
       }
       this.read(session);
       // The cap was brought down to what the session had spent when it was held. Raising it sets its work going again.
+      // A raise can get through although its reply does not, so from here the session counts as having room to
+      // spend: if this try ends on a failure, the session is held again before it is let go of.
+      this.live = true;
       await this.raise(job.budgetUsd);
       return;
     }

@@ -1086,6 +1086,23 @@ describe('holding a session', () => {
     expect(api.requests.some((x) => x.method === 'DELETE' || x.path.endsWith('/archive'))).toBe(false);
   });
 
+  it('holds the session again when the reply to raising its cap is lost', async () => {
+    api.script = wholePlan;
+    const first = recorder({ haltAfter: 'Spec' });
+    expect(await provider.executePlan(job(first.hooks))).toEqual({ status: 'paused' });
+    const session = api.session();
+
+    // Picked up again: the cap is raised, which sets the session going, but the reply never arrives.
+    api.dropReplyOnce((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}`);
+    const again = recorder();
+    again.state.recorded.push('Spec');
+    await expect(provider.executePlan(job(again.hooks, { session: pickUp(session, first) }))).rejects.toBeInstanceOf(ProviderError);
+    // It is not left with its whole cap and nobody following it, and the organisation knows what cap it has.
+    expect(session.capCents).toBeLessThan(200);
+    expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
+    expect(again.state.cap).toBe(session.capCents / 100);
+  });
+
   it('holds a session that nobody is following, by its id', async () => {
     // A session that was let go of with most of its cap unspent, as when the server stops without warning.
     api.script = wholePlan;
