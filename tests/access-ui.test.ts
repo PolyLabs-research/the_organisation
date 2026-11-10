@@ -19,7 +19,7 @@ const chrome = process.env.CHROME_PATH ?? '/opt/google/chrome/chrome';
 it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages business email, passwords and grants through the real dashboard', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'access-ui-'));
   const store = new Store(dir); await store.init();
-  const mail = { check: vi.fn(async () => {}), list: vi.fn(async () => [{ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', date: '' }]), read: vi.fn(async () => ({ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', text: 'Your fixture verification code is 123456.', date: '', truncated: false })), send: vi.fn(async () => {}) };
+  const mail = { check: vi.fn(async () => {}), list: vi.fn(async () => [{ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', date: '' }]), read: vi.fn(async () => ({ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', text: 'Your fixture verification code is 123456.', date: '', truncated: false })), send: vi.fn(async (_box: unknown, _draft: { subject: string }) => {}) };
   const github = new FakeGitHub();
   await github.listen();
   const registry = new Registry(store, new MockProvider(QUIET), { access: { mail, code: new GitHubHost(github.base) } });
@@ -85,9 +85,26 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     await page.getByRole('button', { name: 'Save draft', exact: true }).click();
     await page.getByRole('button', { name: 'Send this email', exact: true }).waitFor();
     expect(mail.send).not.toHaveBeenCalled();
+    // Sending takes two presses. The first sends nothing: it asks, naming who the message goes to and what it is called.
     await page.getByRole('button', { name: 'Send this email', exact: true }).click();
+    await page.getByText('Send “Paperclip order enquiry” to supplier@paperclips.example?').waitFor();
+    await page.getByRole('button', { name: 'Not yet', exact: true }).click();
+    await page.getByRole('button', { name: 'Yes, send it', exact: true }).waitFor({ state: 'detached' });
+    expect(mail.send).not.toHaveBeenCalled();
+    await page.getByRole('button', { name: 'Send this email', exact: true }).click();
+    // The question stays with its draft when the list moves: another draft arrives above it, and the second press still sends the first.
+    await page.getByLabel('To', { exact: true }).fill('someone-else@paperclips.example');
+    await page.getByLabel('Subject', { exact: true }).fill('A later draft');
+    await page.getByLabel('Message', { exact: true }).fill('Prepared while the first was waiting to be sent.');
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+    await page.getByRole('heading', { name: 'A later draft', exact: true }).waitFor();
+    expect(await page.locator('.ops-card h3').first().innerText()).toBe('A later draft');
+    await page.getByText('Send “Paperclip order enquiry” to supplier@paperclips.example?').waitFor();
+    await page.getByRole('button', { name: 'Yes, send it', exact: true }).click();
     await page.locator('.ops-card .tag').filter({ hasText: /^sent$/ }).waitFor();
     expect(mail.send).toHaveBeenCalledTimes(1);
+    expect(mail.send.mock.calls[0]![1].subject).toBe('Paperclip order enquiry');
+    expect(await page.locator('.ops-card').filter({ hasText: 'A later draft' }).locator('.tag').innerText()).toBe('draft');
     await page.getByRole('button', { name: 'Lock vault', exact: true }).click();
     await page.getByRole('button', { name: 'Unlock vault', exact: true }).waitFor();
     expect(await text()).not.toContain('Paperclip order enquiry');

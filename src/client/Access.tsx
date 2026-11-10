@@ -235,6 +235,8 @@ function Drafts({ org, view, onView }: { org: Organisation; view: AccessView; on
   const action = useAction();
   const [mailboxId, setMailbox] = useState(view.mailboxes[0]?.id ?? '');
   const [to, setTo] = useState(''), [subject, setSubject] = useState(''), [text, setText] = useState('');
+  // Sending takes two presses. The draft waiting for the second is held by its id, so that when the list moves, as it does whenever an agent prepares another, the second press cannot land on a different draft's send.
+  const [sending, setSending] = useState<string | null>(null);
   return <>
     <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => { onView(await call(org.id, 'POST', '/drafts', { mailboxId, to, subject, text })); setTo(''); setSubject(''); setText(''); }); }}>
       <h3>Prepare an email</h3><div className="grid-2">
@@ -252,7 +254,11 @@ function Drafts({ org, view, onView }: { org: Organisation; view: AccessView; on
       <p className="muted">Prepared by {draft.actorId} · {new Date(draft.createdAt).toLocaleString()}</p>
       <pre className="access-message-body">{draft.text}</pre>
       {draft.status === 'uncertain' || draft.status === 'sending' ? <p className="note note-warn">Delivery is unconfirmed. Check Sent in the mailbox before preparing another copy.</p> : null}
-      <div className="access-actions">{draft.status === 'draft' ? <button type="button" className="button button-primary" disabled={action.busy} onClick={() => void action.run(async () => { try { onView(await call(org.id, 'POST', '/drafts/' + draft.id + '/send', {})); } finally { onView(await call(org.id, 'GET')); } })}>Send this email</button> : null}
+      <div className="access-actions">{draft.status !== 'draft' ? null : sending !== draft.id ? <button type="button" className="button button-primary" disabled={action.busy} onClick={() => setSending(draft.id)}>Send this email</button> : <>
+          <span className="pre-wrap">Send “{draft.subject}” to {draft.to}? Once sent, it cannot be taken back.</span>
+          <button type="button" className="button button-primary" disabled={action.busy} onClick={() => void action.run(async () => { try { onView(await call(org.id, 'POST', '/drafts/' + draft.id + '/send', {})); } finally { setSending(null); onView(await call(org.id, 'GET')); } })}>Yes, send it</button>
+          <button type="button" className="button" disabled={action.busy} onClick={() => setSending(null)}>Not yet</button>
+        </>}
         <button type="button" className="button" disabled={action.busy || draft.status === 'sending'} onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/drafts/' + draft.id + '/remove', {})))}>Remove from desk</button></div>
     </article>)}
   </>;
