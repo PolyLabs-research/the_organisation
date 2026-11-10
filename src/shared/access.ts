@@ -54,6 +54,8 @@ export interface ToolServerView {
   url: string; hasToken: boolean;
   /** The header the token is sent in. In Authorization it goes as a bearer token, and in any other as it is. */
   header: string;
+  /** Set where a person signed in through the browser: where, and whether the sign-in still holds. The tokens stay on the server. */
+  signIn: { issuer: string; signedInAt: string; lapsed: boolean; renews: boolean } | null;
   /** What the server calls itself. */
   serverName: string;
   tools: ToolView[];
@@ -109,6 +111,20 @@ export const toolServerSchema = z.object({
   header: z.string().trim().regex(/^[A-Za-z0-9-]{1,64}$/, 'A header’s name has letters, digits and hyphens').default('Authorization'),
   ownerIds: ownersSchema,
 }).strict();
+/**
+ * A sign-in through the browser, for a server that asks for one. Most servers register this program themselves when
+ * it asks. For one that does not, a person registers it at the service and gives the client it was issued.
+ */
+export const toolSignInSchema = z.object({
+  label: short,
+  url: z.string().trim().min(1).max(2000),
+  ownerIds: ownersSchema,
+  clientId: z.string().trim().max(500).regex(/^[\x21-\x7e]*$/, 'A client id has no spaces').default(''),
+  clientSecret: z.string().trim().max(2048).regex(/^[\x21-\x7e]*$/, 'A client secret has no spaces').default(''),
+  scope: z.string().trim().max(1000).regex(/^[\x21\x23-\x5b\x5d-\x7e ]*$/, 'Scopes are words with spaces between them').default(''),
+}).strict();
+/** Signing in again to a server already connected. A client or scopes given here take the place of those in use. */
+export const toolSignInAgainSchema = toolSignInSchema.pick({ clientId: true, clientSecret: true, scope: true }).strict();
 /** The tools a person allows, each as it was described on the page they allowed it from. Every other tool on the server is not allowed. */
 export const allowedToolsSchema = z.object({ allowed: z.array(z.object({ name: z.string().min(1).max(300), fingerprint: z.string().min(1).max(100) }).strict()).max(200) }).strict();
 export const draftSchema = z.object({

@@ -23,12 +23,38 @@ export interface StoredTool {
   /** The fingerprint of the description a person allowed. The tool is offered only while its description still has that fingerprint. */
   approved: string | null;
 }
+/**
+ * A sign-in to a tool server made through the browser, kept so that it can be renewed without the person. The token
+ * in use sits where a password does. What is here is either a secret too, or says where one of them may go.
+ */
+export interface ToolSignIn {
+  /** The authorisation server the person signed in at, and where it renews a sign-in. A refresh token goes nowhere else, whatever the tool server says later. */
+  issuer: string; tokenEndpoint: string;
+  /** How that server lets a program prove which program it is, as it said at sign-in. */
+  authMethods: string[];
+  clientId: string; clientSecret: string;
+  /** How this client proves itself, where the service said at registration. Empty to go by what the service takes. */
+  clientAuthMethod: string;
+  /** Whether a person gave the client, having registered one at the service, or this program registered itself. */
+  clientGiven: boolean;
+  /** What the token is for and what it allows, as they were asked for. */
+  resource: string; scope: string;
+  /** Renews the token. Empty where the server gave none: the sign-in then lasts as long as its token does. */
+  refreshToken: string;
+  /** When the token in use stops working, if the server said. */
+  expiresAt: string | null;
+  /** The sign-in can no longer be renewed. A person has to sign in again. */
+  lapsed: boolean;
+  signedInAt: string;
+}
 /** A server that offers tools. Its token, if it has one, sits where a password does; an empty one means it asks for none. */
 export interface ToolServerSecret {
   id: string; label: string; prefix: string; url: string; password: string;
   /** The header the token is sent in. */
   header: string; serverName: string;
   tools: StoredTool[]; toolsLeftOut: number; toolsReadAt: string;
+  /** Set where a person signed in through the browser. Absent where they gave a token of their own, or none. */
+  signIn?: ToolSignIn | null;
   ownerIds: string[]; enabled: boolean; createdAt: string;
 }
 export interface VaultData {

@@ -146,7 +146,15 @@ export class OrgRunner {
     options: RunnerOptions = {},
   ) {
     this.workspace = new Workspace(store.workspaceRoot(org.id));
-    this.access = new BusinessAccess(path.join(store.orgDir(org.id), 'access-vault.json'), org.id, () => org.executives.filter(exec => exec.kind === 'lead' || exec.kind === 'ceo').map(exec => exec.id), { ...options.access, allows: (actorId, privilege) => allows(org, actorId, privilege) });
+    this.access = new BusinessAccess(path.join(store.orgDir(org.id), 'access-vault.json'), org.id, () => org.executives.filter(exec => exec.kind === 'lead' || exec.kind === 'ceo').map(exec => exec.id), {
+      ...options.access,
+      allows: (actorId, privilege) => allows(org, actorId, privilege),
+      // What the vault finds out while nobody is looking at it goes on the board, where a person looks first.
+      said: (title, body) => {
+        postToBoard(org, 'system', 'system', title, body);
+        this.changed();
+      },
+    });
     this.retryDelayMs = options.retryDelayMs ?? 4000;
     this.checkTimes = { ...CHECK_TIMES, ...options.checkTimes };
     this.emitIntervalMs = options.emitIntervalMs ?? 150;

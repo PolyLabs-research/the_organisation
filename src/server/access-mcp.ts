@@ -222,7 +222,7 @@ export function rendered(result: unknown): { text: string; failed: boolean } {
 }
 
 /** A fetch that stops reading an answer once it is longer than any honest one. */
-const capped: typeof fetch = async (input, init) => {
+export const capped: typeof fetch = async (input, init) => {
   const response = await fetch(input, init);
   if (!response.body) return response;
   let seen = 0;
@@ -248,12 +248,17 @@ const within = async (ms: number, work: Promise<unknown>): Promise<void> => {
 
 interface Session {
   key: string; serverId: string; work: string; client: Client; transport: StreamableHTTPClientTransport;
+  /** What every request of the session carries. A sign-in renewed while the session is open is put here, and the session goes on. */
+  headers: { [name: string]: string };
   /** Calls under way in it. */
   calls: number;
   timer: ReturnType<typeof setTimeout> | null;
   /** Let go of. A call that was handed it before then opens another. */
   closed: boolean;
 }
+
+/** The server would not take the token it was sent. Where the token came from a sign-in, renewing it may be all that is needed. */
+export class TokenRefused extends AccessError {}
 
 export class McpToolHost implements ToolHost {
   /** Each session by its server and its piece of work: while it is being opened, and once it is open. */
@@ -264,7 +269,8 @@ export class McpToolHost implements ToolHost {
     if (error instanceof AccessError) return error;
     if (error instanceof StreamableHTTPError) {
       const status = error.code ?? 0;
-      if (status === 401 || status === 403) return new AccessError(token ? 'The server refused the token. It may be wrong, or have expired.' : 'The server asks for a token, or for a sign-in that cannot be done from here.', 403);
+      if (status === 401) return new TokenRefused(token ? 'The server refused the token. It may be wrong, or have expired.' : 'The server asks for a token or a sign-in. Give it a token, or sign in to it.', 403);
+      if (status === 403) return new AccessError(token ? 'The server refused the token. It may be wrong, or have expired.' : 'The server asks for a token or a sign-in. Give it a token, or sign in to it.', 403);
       if (status === 404 || status === 405) return new AccessError('There is no tool server at that address. Check the path: many answer at /mcp.', 404);
       if (status === 429) return new AccessError('The server is turning requests away for now. Try again later.', 429);
       if (status >= 300 && status < 400) return new AccessError('The server sent the request on to another address, which is not followed. Give the address the server itself answers at.', 502);
@@ -284,19 +290,21 @@ export class McpToolHost implements ToolHost {
     return token ? text.split(token).join('[redacted]') : text;
   }
 
-  private async connect(server: Address, signal: AbortSignal): Promise<{ client: Client; transport: StreamableHTTPClientTransport }> {
-    // In Authorization a token goes as a bearer token. A service that names a header of its own for its key reads the key there as it is.
+  /** What carries the token: as a bearer token in Authorization, and as it is in a header a service names for its key. */
+  private carrying(server: Address): { [name: string]: string } {
     const header = tokenHeader(server.header || 'Authorization');
-    const transport = new StreamableHTTPClientTransport(toolServerURL(server.url), {
-      fetch: capped,
-      requestInit: server.password ? { headers: { [header]: header === 'Authorization' ? 'Bearer ' + server.password : server.password } } : undefined,
-    });
+    return server.password ? { [header]: header === 'Authorization' ? 'Bearer ' + server.password : server.password } : {};
+  }
+  private async connect(server: Address, signal: AbortSignal): Promise<{ client: Client; transport: StreamableHTTPClientTransport; headers: { [name: string]: string } }> {
+    // The transport reads these afresh for every request, so a token changed here is the token sent from then on.
+    const headers = this.carrying(server);
+    const transport = new StreamableHTTPClientTransport(toolServerURL(server.url), { fetch: capped, requestInit: { headers } });
     // Nothing is offered to the server: it cannot ask a model anything, ask a person anything or read any files through this.
     // What a tool says it returns is not held to a schema either, so no schema of the server's is ever compiled.
     const client = new Client(CLIENT, { capabilities: {}, jsonSchemaValidator: unchecked });
     try {
       await client.connect(transport, { signal, timeout: CONNECT_MS });
-      return { client, transport };
+      return { client, transport, headers };
     } catch (error) {
       await client.close().catch(() => {});
       throw error;
@@ -338,7 +346,7 @@ export class McpToolHost implements ToolHost {
     if (known) return known.opening;
     if (this.sessions.size >= MAX_SESSIONS) throw new AccessError('Too many sessions with tool servers are open at once. Try again shortly.', 409);
     const entry: { opening: Promise<Session>; open?: Session } = {
-      opening: this.connect(server, signal).then(({ client, transport }) => (entry.open = { key, serverId: server.id, work, client, transport, calls: 0, timer: null, closed: false })),
+      opening: this.connect(server, signal).then(({ client, transport, headers }) => (entry.open = { key, serverId: server.id, work, client, transport, headers, calls: 0, timer: null, closed: false })),
     };
     this.sessions.set(key, entry);
     // One that could not be opened is not kept: the next call tries afresh.
@@ -365,6 +373,7 @@ export class McpToolHost implements ToolHost {
       session.calls++;
       if (session.timer) clearTimeout(session.timer);
       session.timer = null;
+      Object.assign(session.headers, this.carrying(server));
       let failed = false;
       try {
         return rendered(await session.client.callTool({ name, arguments: input }, undefined, { signal, timeout: CALL_MS, maxTotalTimeout: CALL_MS }));

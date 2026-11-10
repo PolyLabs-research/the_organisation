@@ -1,19 +1,22 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { MAX_OFFERED_TOOLS, accountSchema, allowedToolsSchema, browserActionSchema, draftSchema, mailboxSchema, ownersSchema, repositorySchema, repositoryWorkflowsSchema, toolServerSchema, type AccessView, type AccountPage, type MailDraft, type ToolServerView, type ToolView } from '../shared/access';
+import { MAX_OFFERED_TOOLS, accountSchema, allowedToolsSchema, browserActionSchema, draftSchema, mailboxSchema, ownersSchema, repositorySchema, repositoryWorkflowsSchema, toolServerSchema, toolSignInAgainSchema, toolSignInSchema, type AccessView, type AccountPage, type MailDraft, type ToolServerView, type ToolView } from '../shared/access';
 import { PRIVILEGE_BY_ID, type Privilege } from '../shared/privileges';
 import { BusinessBrowser, type AccountBrowser, cleanPageText, redactData } from './access-browser';
 import { GitHubHost, type CodeHost, type FileChange } from './access-github';
 import { BusinessMail, type MailTransport } from './access-mail';
 import { googleConfigured } from './access-google';
-import { McpToolHost, callName, fingerprint, prefixFor, type ToolFacts, type ToolHost } from './access-mcp';
+import { McpToolHost, TokenRefused, callName, fingerprint, prefixFor, type ToolFacts, type ToolHost } from './access-mcp';
+import { McpToolAuth, NOT_JUST_NOW, SignInLapsed, type Granted, type PendingGrant, type ToolAuth } from './access-mcp-auth';
 import { serviceURL, tokenHeader, toolServerURL } from './access-network';
-import { AccessError, AccessVault, type AccountSecret, type MailboxSecret, type RepositorySecret, type StoredTool, type ToolServerSecret, type VaultData } from './access-vault';
+import { AccessError, AccessVault, type AccountSecret, type MailboxSecret, type RepositorySecret, type StoredTool, type ToolServerSecret, type ToolSignIn, type VaultData } from './access-vault';
 
 export interface AccessOptions {
-  mail?: MailTransport; browser?: AccountBrowser; code?: CodeHost; tools?: ToolHost; idleMs?: number;
+  mail?: MailTransport; browser?: AccountBrowser; code?: CodeHost; tools?: ToolHost; toolAuth?: ToolAuth; idleMs?: number;
   /** Whether a role may do something. Where nothing says, each privilege stands at its default. */
   allows?: (actorId: string, privilege: Privilege) => boolean;
+  /** Something a person has to hear of that nobody is at the vault to see, told where they look first. */
+  said?: (title: string, body: string) => void;
 }
 const id = (prefix: string) => prefix + '_' + randomBytes(10).toString('hex');
 const at = () => new Date().toISOString();
@@ -51,9 +54,18 @@ function toolView(tool: StoredTool): ToolView {
   };
 }
 function toolServerView(record: ToolServerSecret): ToolServerView {
-  const { password, tools, ...rest } = record;
-  return { ...rest, header: rest.header || 'Authorization', hasToken: !!password, tools: tools.map(toolView) };
+  const { password, tools, signIn, ...rest } = record;
+  return {
+    ...rest, header: rest.header || 'Authorization', hasToken: !!password, tools: tools.map(toolView),
+    signIn: signIn ? { issuer: signIn.issuer, signedInAt: signIn.signedInAt, lapsed: signIn.lapsed, renews: !!signIn.refreshToken } : null,
+  };
 }
+/** How long before a token stops working it is renewed, so that no call is sent off with one about to run out. */
+const RENEW_BEFORE_MS = 60_000;
+/** After a service could not renew a sign-in for reasons of its own, how long before it is asked again. Every call in between is told to try shortly, without the service hearing of it. */
+const RENEW_AGAIN_MS = 30_000;
+/** A sign-in that has been started: what it will connect, or which connection it renews, kept until the person comes back from the service. */
+export interface ToolSignInUnderWay { grant: PendingGrant; url: string; label: string; ownerIds: string[]; targetId: string | null; }
 /** Agents only ever write to branches under here, so nothing of a person's can be touched. */
 export const AGENT_BRANCHES = 'agents/';
 const MAX_PUSH_FILES = 100;
@@ -84,6 +96,11 @@ export class BusinessAccess {
   private readonly browser: AccountBrowser;
   private readonly code: CodeHost;
   private readonly toolHost: ToolHost;
+  private readonly toolAuth: ToolAuth;
+  /** The renewal of a sign-in that is under way, by server. A refresh token is good for one use, so there is only ever one. */
+  private readonly renewing = new Map<string, Promise<void>>();
+  /** When a service last failed to renew a sign-in without saying the sign-in was at fault, by server. */
+  private readonly renewalFailed = new Map<string, number>();
   /** Agents work in parallel, and a branch takes one commit at a time. */
   private readonly pushes = new Map<string, Promise<unknown>>();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -101,6 +118,7 @@ export class BusinessAccess {
     this.browser = options.browser ?? new BusinessBrowser();
     this.code = options.code ?? new GitHubHost();
     this.toolHost = options.tools ?? new McpToolHost();
+    this.toolAuth = options.toolAuth ?? new McpToolAuth();
   }
   private touch() {
     if (this.timer) clearTimeout(this.timer);
@@ -203,7 +221,7 @@ export class BusinessAccess {
   }
   private secrets(): string[] {
     const data = this.vault.read();
-    return [...data.mailboxes, ...data.accounts, ...data.repositories, ...data.toolServers].map(item => item.password);
+    return [...[...data.mailboxes, ...data.accounts, ...data.repositories, ...data.toolServers].map(item => item.password), ...data.toolServers.flatMap(item => item.signIn ? [item.signIn.refreshToken, item.signIn.clientSecret] : [])];
   }
   private cleanResult<T>(value: T): T { return redactData(value, this.secrets()); }
   /** Nothing an agent sends outside may carry a saved credential, in any form the redaction knows. */
@@ -266,7 +284,8 @@ export class BusinessAccess {
   /** The connected tools a role's agents are offered: on a server assigned to the team, allowed by a person as it is described, and only with the privilege. */
   toolsFor(actorId: string): Array<{ serverId: string; server: string; tool: StoredTool }> {
     if (!this.vault.unlocked || !this.may(actorId, 'use_tools')) return [];
-    return this.vault.read().toolServers.filter(item => item.enabled && item.ownerIds.includes(actorId))
+    // A server whose sign-in has lapsed offers nothing until a person has signed in again: a tool that can only fail is a turn wasted.
+    return this.vault.read().toolServers.filter(item => item.enabled && item.ownerIds.includes(actorId) && !item.signIn?.lapsed)
       .flatMap(item => item.tools.filter(offered).map(tool => ({ serverId: item.id, server: item.label, tool })))
       .slice(0, MAX_OFFERED_TOOLS);
   }
@@ -356,9 +375,13 @@ export class BusinessAccess {
   }
   /** Ask a server again what it offers. A tool it now describes differently is no longer the tool a person allowed. */
   async readTools(targetId: string) {
-    const record = this.vault.read().toolServers.find(item => item.id === targetId);
-    if (!record) throw new AccessError('No such connection.', 404);
-    const facts = await this.operation(targetId, 'person', undefined, signal => this.toolHost.tools(record, signal));
+    const find = () => {
+      const record = this.vault.read().toolServers.find(item => item.id === targetId);
+      if (!record) throw new AccessError('No such connection.', 404);
+      return record;
+    };
+    find();
+    const facts = await this.operation(targetId, 'person', undefined, signal => this.signedIn(targetId, find, record => this.toolHost.tools(record, signal)));
     await this.vault.change(data => {
       const saved = data.toolServers.find(item => item.id === targetId);
       if (!saved) throw new AccessError('No such connection.', 404);
@@ -395,10 +418,151 @@ export class BusinessAccess {
     await this.vault.change(data => audit(data, actorId, 'tool_called', serverId + '/' + toolName));
     this.tasks.set(actorKey, actorId);
     return this.operation(serverId, actorId, signal, async abort => {
-      const result = await this.toolHost.call(allowed(), actorKey, toolName, input, abort);
+      const result = await this.signedIn(serverId, allowed, record => this.toolHost.call(record, actorKey, toolName, input, abort));
       allowed();
       return this.cleanResult(result);
     });
+  }
+  /**
+   * Start a sign-in through the browser: to a server to be connected, or to one already connected whose sign-in is
+   * to be made again. Returns where to send the person's browser, and what to keep until they come back.
+   */
+  async beginToolSignIn(input: unknown, targetId: string | null, redirectUri: string, state: string): Promise<{ url: string; underWay: ToolSignInUnderWay }> {
+    let label: string, url: string, ownerIds: string[], clientId: string, clientSecret: string, scope: string;
+    if (targetId) {
+      const spec = parse(toolSignInAgainSchema, input ?? {});
+      const record = this.vault.read().toolServers.find(item => item.id === targetId);
+      if (!record) throw new AccessError('No such connection.', 404);
+      ({ label, url, ownerIds } = record);
+      // A client a person gave before is used again unless they give another. What was asked for before is asked for again.
+      const given = record.signIn?.clientGiven ? record.signIn : null;
+      clientId = spec.clientId || given?.clientId || '';
+      clientSecret = spec.clientId ? spec.clientSecret : given?.clientSecret ?? '';
+      scope = spec.scope || record.signIn?.scope || '';
+    } else {
+      const spec = parse(toolSignInSchema, input);
+      ({ label, clientId, clientSecret, scope } = spec);
+      url = toolServerURL(spec.url).href;
+      ownerIds = this.owners(spec.ownerIds);
+      const servers = this.vault.read().toolServers;
+      if (servers.length >= 20) throw new AccessError('This vault already has 20 tool servers.');
+      if (servers.some(item => item.url === url)) throw new AccessError('This tool server is already connected. To sign in to it again, use its card.', 409);
+    }
+    if (clientSecret && !clientId) throw new AccessError('A client secret goes with a client id. Give both, or neither.');
+    const begun = await this.operation('sign-in-' + state, 'person', undefined, signal => this.toolAuth.begin(url, { redirectUri, state, clientId, clientSecret, scope }, signal));
+    this.touch();
+    return { url: begun.authorizationUrl, underWay: { grant: begun.grant, url, label, ownerIds, targetId } };
+  }
+  /**
+   * The person has come back from the service with a code. It is exchanged for a token, the server is asked for its
+   * tools with that token, and only then is anything saved: a new connection with none of its tools allowed, or the
+   * renewed sign-in of the one it was for, with what was allowed there still allowed.
+   */
+  async finishToolSignIn(underWay: ToolSignInUnderWay, code: string, epoch: number) {
+    const { grant, url, label, ownerIds, targetId } = underWay;
+    const serverId = targetId ?? id('tools');
+    const tokens = await this.operation('sign-in-' + serverId, 'person', undefined, signal => this.toolAuth.finish(grant, code, signal));
+    const facts = await this.operation('sign-in-' + serverId, 'person', undefined, signal => this.toolHost.tools({ url, password: tokens.accessToken, header: 'Authorization' }, signal));
+    const signIn: ToolSignIn = {
+      issuer: grant.issuer, tokenEndpoint: grant.tokenEndpoint, authMethods: grant.authMethods, clientId: grant.clientId, clientSecret: grant.clientSecret, clientAuthMethod: grant.clientAuthMethod, clientGiven: grant.clientGiven,
+      resource: grant.resource, scope: tokens.scope, refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt, lapsed: false, signedInAt: at(),
+    };
+    // Sessions opened with the token that is being replaced are not carried over to the new one.
+    if (targetId) await this.toolHost.close(targetId);
+    await this.vault.change(data => {
+      if (this.vault.epoch !== epoch) throw new AccessError('The vault session changed. Sign in again.', 409);
+      if (targetId) {
+        const saved = data.toolServers.find(item => item.id === targetId);
+        if (!saved) throw new AccessError('No such connection.', 404);
+        Object.assign(saved, { password: tokens.accessToken, header: 'Authorization', signIn }, described(saved.prefix, facts, saved.tools));
+        // What was put on the desk when the sign-in lapsed has been dealt with.
+        for (const request of data.requests) if (request.actorId === 'system' && request.service === saved.label && request.status === 'open') request.status = 'resolved';
+        audit(data, 'person', 'signed_in_again', targetId);
+      } else {
+        if (data.toolServers.length >= 20) throw new AccessError('This vault already has 20 tool servers.');
+        if (data.toolServers.some(item => item.url === url)) throw new AccessError('This tool server is already connected.', 409);
+        const prefix = prefixFor(label, new Set(data.toolServers.map(item => item.prefix)));
+        data.toolServers.push({ id: serverId, label, prefix, url, password: tokens.accessToken, header: 'Authorization', signIn, ...described(prefix, facts, []), ownerIds, enabled: true, createdAt: at() });
+        audit(data, 'person', 'tool_server_connected', serverId);
+      }
+    });
+    this.touch();
+    return serverId;
+  }
+  /**
+   * Do something on a tool server with its token. Where a person signed in, the sign-in is renewed first if it is
+   * about to run out, and once more if the server turns the token down, and then the work is done again. A token
+   * turned down fresh from a renewal is a sign-in that no longer works, and only a person can make another.
+   */
+  private async signedIn<T>(serverId: string, read: () => ToolServerSecret, work: (record: ToolServerSecret) => Promise<T>): Promise<T> {
+    await this.renewed(serverId, null);
+    const record = read();
+    try { return await work(record); }
+    catch (error) {
+      if (!(error instanceof TokenRefused) || !record.signIn) throw error;
+      await this.renewed(serverId, record.password);
+      try { return await work(read()); }
+      catch (second) {
+        if (!(second instanceof TokenRefused)) throw second;
+        await this.lapse(serverId);
+        throw new SignInLapsed();
+      }
+    }
+  }
+  /**
+   * See that a signed-in server's token is one that works. It is renewed when it is about to stop, or when it is the
+   * token the server has just `refused`, unless another caller has renewed it since. One renewal at a time: two
+   * callers spending the same refresh token would lose the sign-in for both.
+   */
+  private async renewed(serverId: string, refused: string | null): Promise<void> {
+    for (;;) {
+      const record = this.vault.read().toolServers.find(item => item.id === serverId);
+      const signIn = record?.signIn;
+      if (!record || !signIn) return;
+      if (signIn.lapsed) throw new SignInLapsed();
+      const due = refused !== null ? record.password === refused : signIn.expiresAt !== null && Date.parse(signIn.expiresAt) - Date.now() < RENEW_BEFORE_MS;
+      if (!due) return;
+      const underWay = this.renewing.get(serverId);
+      // Someone else is renewing it. When they are done, look again: it has been done for this caller too. If they could not, neither can this one, and it does not go and ask again.
+      if (underWay) { await underWay; continue; }
+      if (Date.now() - (this.renewalFailed.get(serverId) ?? -Infinity) < RENEW_AGAIN_MS) throw new AccessError(NOT_JUST_NOW, 502);
+      const mine = this.renew(record.id, signIn).finally(() => this.renewing.delete(serverId));
+      this.renewing.set(serverId, mine);
+      return mine;
+    }
+  }
+  /** Renew a sign-in where it was made. It is not tied to whoever asked: cut off half-way, the service may have used up the refresh token and the new one would be lost. */
+  private async renew(serverId: string, signIn: ToolSignIn): Promise<void> {
+    let tokens: Granted;
+    try { tokens = await this.operation('renew-' + serverId, 'system', undefined, signal => this.toolAuth.renew(signIn, signal)); }
+    catch (error) {
+      if (error instanceof SignInLapsed) await this.lapse(serverId);
+      else this.renewalFailed.set(serverId, Date.now());
+      throw error;
+    }
+    this.renewalFailed.delete(serverId);
+    await this.vault.change(data => {
+      const saved = data.toolServers.find(item => item.id === serverId);
+      // Removed, or signed in to afresh, while this was under way: what came back belongs to a sign-in that is no longer the one kept.
+      if (!saved?.signIn || saved.signIn.signedInAt !== signIn.signedInAt) return;
+      saved.password = tokens.accessToken;
+      Object.assign(saved.signIn, { refreshToken: tokens.refreshToken, expiresAt: tokens.expiresAt, scope: tokens.scope });
+    });
+  }
+  /** A sign-in can no longer be renewed. Its server offers agents nothing until a person signs in again, and a person is told where they look for what is waiting on them. */
+  private async lapse(serverId: string) {
+    await this.toolHost.close(serverId);
+    if (!this.vault.unlocked) return;
+    const label = await this.vault.change(data => {
+      const saved = data.toolServers.find(item => item.id === serverId);
+      if (!saved?.signIn || saved.signIn.lapsed) return null;
+      saved.signIn.lapsed = true;
+      audit(data, 'system', 'sign_in_lapsed', serverId);
+      if (data.requests.length < 200) data.requests.push({ id: id('request'), actorId: 'system', service: saved.label, reason: 'The sign-in to this tool server has lapsed, so agents can no longer use its tools. Sign in again from its card under Tool servers.', status: 'open', createdAt: at() });
+      return saved.label;
+    });
+    // Said once, when it happens: every call after this one finds the sign-in already marked.
+    if (label !== null) this.options.said?.('The sign-in to ' + label + ' has lapsed', 'It can no longer be renewed, so agents are offered none of that tool server’s tools. A person has to sign in to it again, from its card under Email & accounts, Tool servers. What was allowed there is allowed again once they have.');
   }
   async setWorkflows(targetId: string, input: unknown) {
     const spec = parse(repositoryWorkflowsSchema, input);
@@ -444,6 +608,7 @@ export class BusinessAccess {
   }
   async password(kind: ConnectionKind, targetId: string, password: unknown) {
     const secret = parse(z.string().min(1).max(2048), password);
+    if (kind === 'toolServers' && this.vault.read().toolServers.find(item => item.id === targetId)?.signIn) throw new AccessError('This server was signed in to through the browser, so it has no token of yours to replace. Sign in to it again from its card.', 409);
     await this.changeConnection(targetId, async () => {
     if (kind === 'accounts') await this.browser.close(targetId);
     // A token is only worth saving if GitHub takes it, and it can bring different rights with it.

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Server } from 'node:http';
+import { request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -11,6 +11,7 @@ import { Store } from '../src/server/store';
 import { MockProvider } from '../src/server/providers/mock';
 import { QUIET } from './helpers';
 import { FakeToolServer } from './fake-mcp-server';
+import { FakeAuthorisationServer, visit } from './fake-auth-server';
 import type { AccessView } from '../src/shared/access';
 
 let dir: string, registry: Registry, server: Server, unsafe: Server, base: string, unsafeBase: string, config: Config;
@@ -121,6 +122,97 @@ describe('business access API', () => {
       // Like the rest of the vault, none of it answers on a server that listens beyond this machine.
       expect((await fetch(unsafeBase + root + '/toolServers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'Orders', url: tools.url, ownerIds: [] }) })).status).toBe(403);
     } finally { await tools.close(); }
+  });
+  it('signs in to a tool server through the browser, and finishes only a sign-in that this browser started', async () => {
+    const auth = new FakeAuthorisationServer(), tools = new FakeToolServer();
+    await auth.listen();
+    tools.auth = auth;
+    await tools.listen();
+    try {
+      const runner = await establish(), root = '/api/orgs/' + runner.org.id + '/access';
+      await api('POST', root + '/create', { passphrase: phrase });
+      const start = (at: string, body: object, headers: Record<string, string> = {}) => fetch(base + root + at, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+      const come = (address: URL | string, cookie?: string) => fetch(address, { redirect: 'manual', headers: cookie ? { cookie: 'org_tool_sign_in=' + cookie } : {} });
+      const outcome = async () => (await api('GET', root + '/toolServers/signin')).data.outcome;
+      // Starting one is for this dashboard on this machine, like the rest of the vault.
+      expect((await start('/toolServers/signin', { label: 'Orders', url: tools.url, ownerIds: ['coo'] }, { Origin: 'https://foreign.example' })).status).toBe(403);
+      expect((await start('/toolServers/signin', { label: 'Orders', url: tools.url, ownerIds: ['coo'] }, { 'Sec-Fetch-Site': 'cross-site' })).status).toBe(403);
+      expect((await fetch(unsafeBase + root + '/toolServers/signin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'Orders', url: tools.url, ownerIds: [] }) })).status).toBe(403);
+
+      const begun = await start('/toolServers/signin', { label: 'Orders', url: tools.url, ownerIds: ['coo'] });
+      expect(begun.status).toBe(200);
+      // The browser that started it is given a cookie that only the way back is sent, and that no script can read.
+      const set = begun.headers.get('set-cookie') ?? '';
+      expect(set).toMatch(/^org_tool_sign_in=[a-f0-9]{64}; Max-Age=600; Path=\/api\/oauth\/tools\/callback; .*HttpOnly; SameSite=Lax$/);
+      const cookie = /org_tool_sign_in=([a-f0-9]{64})/.exec(set)![1]!;
+      const { url } = (await begun.json()) as { url: string };
+      expect(new URL(url).origin).toBe(auth.base);
+      const back = await visit(url);
+      expect(back.origin + back.pathname).toBe(base + '/api/oauth/tools/callback');
+
+      // Another browser with the same address, this browser with another sign-in's address, and a server that listens beyond this machine: none finishes it.
+      const elsewhere = new URL(back); elsewhere.searchParams.set('state', 'f'.repeat(64));
+      for (const attempt of [await come(back), await come(back, 'e'.repeat(64)), await come(elsewhere, cookie), await come(unsafeBase + back.pathname + back.search, cookie)]) expect(attempt.status).toBe(400);
+      expect((await api('GET', root)).data.toolServers).toEqual([]);
+
+      // Nor does the right browser by another name for this machine than the one it set out from, or after ten minutes.
+      const byName = await new Promise<number>((resolve, reject) => { const asked = httpRequest(back, { headers: { host: 'localhost:' + back.port, cookie: 'org_tool_sign_in=' + cookie } }, answer => { answer.resume(); resolve(answer.statusCode ?? 0); }); asked.on('error', reject); asked.end(); });
+      expect(byName).toBe(400);
+      const clock = Date.now;
+      const late = vi.spyOn(Date, 'now').mockImplementation(() => clock() + 11 * 60_000);
+      expect((await come(back, cookie)).status).toBe(400);
+      late.mockRestore();
+      expect((await api('GET', root)).data.toolServers).toEqual([]);
+
+      const finished = await come(back, cookie);
+      expect([finished.status, finished.headers.get('location'), finished.headers.get('cache-control')]).toEqual([303, '/?access=tools#/org/' + runner.org.id, 'no-store']);
+      expect(finished.headers.get('set-cookie')).toMatch(/^org_tool_sign_in=; /);
+      expect(await outcome()).toEqual({ ok: true, message: 'Orders is connected. None of its tools is allowed yet.' });
+      // What it says is said once, and a sign-in is finished once.
+      expect(await outcome()).toBeNull();
+      expect((await come(back, cookie)).status).toBe(400);
+      const saved = ((await api('GET', root)).data as AccessView).toolServers[0]!;
+      expect(saved).toMatchObject({ label: 'Orders', hasToken: true, signIn: { issuer: auth.base + '/', lapsed: false, renews: true } });
+      const token = [...auth.access.keys()][0]!, refresh = [...auth.refresh.keys()][0]!;
+      const everything = JSON.stringify([(await api('GET', root)).data, (await api('GET', '/api/orgs/' + runner.org.id)).data]) + await readFile(path.join(dir, 'orgs', runner.org.id, 'org.json'), 'utf8');
+      for (const secret of [token, refresh, cookie]) expect(everything).not.toContain(secret);
+      // A token of the person's own has no place on a connection that was signed in to.
+      expect((await api('POST', root + '/toolServers/' + saved.id + '/password', { password: 'a-token-of-my-own' })).status).toBe(409);
+
+      // Signing in again is for a connection, and renews that one.
+      const again = await start('/toolServers/' + saved.id + '/signin', {});
+      const second = /org_tool_sign_in=([a-f0-9]{64})/.exec(again.headers.get('set-cookie') ?? '')![1]!;
+      expect((await come(await visit(((await again.json()) as { url: string }).url), second)).status).toBe(303);
+      expect(await outcome()).toEqual({ ok: true, message: 'Signed in to Orders again.' });
+      expect(((await api('GET', root)).data as AccessView).toolServers.map(item => item.id)).toEqual([saved.id]);
+      expect((await start('/toolServers/tools_nothing/signin', {})).status).toBe(404);
+
+      // Refused at the service, or with the vault locked on the way: the page is told which, and nothing is connected.
+      auth.approves = false;
+      const refused = await start('/toolServers/signin', { label: 'More orders', url: tools.url + '?more', ownerIds: [] });
+      const third = /org_tool_sign_in=([a-f0-9]{64})/.exec(refused.headers.get('set-cookie') ?? '')![1]!;
+      expect((await come(await visit(((await refused.json()) as { url: string }).url), third)).status).toBe(303);
+      expect(await outcome()).toEqual({ ok: false, message: 'The sign-in was cancelled or refused at the service. Nothing was connected.' });
+      auth.approves = true;
+      // A way back that says the person refused is a refusal, whatever else it carries.
+      const mixed = await start('/toolServers/signin', { label: 'More orders', url: tools.url + '?more', ownerIds: [] });
+      const fifth = /org_tool_sign_in=([a-f0-9]{64})/.exec(mixed.headers.get('set-cookie') ?? '')![1]!;
+      const both = await visit(((await mixed.json()) as { url: string }).url);
+      both.searchParams.set('error', 'access_denied');
+      expect((await come(both, fifth)).status).toBe(303);
+      expect(await outcome()).toEqual({ ok: false, message: 'The sign-in was cancelled or refused at the service. Nothing was connected.' });
+      expect(((await api('GET', root)).data as AccessView).toolServers).toHaveLength(1);
+      const locked = await start('/toolServers/signin', { label: 'More orders', url: tools.url + '?more', ownerIds: [] });
+      const fourth = /org_tool_sign_in=([a-f0-9]{64})/.exec(locked.headers.get('set-cookie') ?? '')![1]!;
+      const way = await visit(((await locked.json()) as { url: string }).url);
+      await api('POST', root + '/lock', {});
+      await api('POST', root + '/unlock', { passphrase: phrase });
+      expect((await come(way, fourth)).status).toBe(303);
+      expect(await outcome()).toEqual({ ok: false, message: 'The vault was locked during the sign-in. Unlock it and sign in again.' });
+      expect(((await api('GET', root)).data as AccessView).toolServers).toHaveLength(1);
+      await api('POST', root + '/lock', {});
+      expect((await start('/toolServers/signin', { label: 'More orders', url: tools.url + '?more', ownerIds: [] })).status).toBe(423);
+    } finally { await tools.close(); await auth.close(); }
   });
   it('gives a running local task real access tools with its own lead identity', async () => {
     const runner = await establish();

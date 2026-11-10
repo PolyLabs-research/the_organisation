@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { FakeAuthorisationServer } from './fake-auth-server';
 
 // A tool server for the tests: the protocol's own server classes behind a local address, so that what is tested is
 // the real client speaking the real protocol. What it offers is plain data that a test can change between requests.
@@ -24,6 +25,17 @@ export class FakeToolServer {
   token = 'tool-server-token-0001';
   /** The header it reads the token from: as a bearer token in Authorization, and as it is in any other. */
   header = 'authorization';
+  /**
+   * Set for a server that wants a sign-in: it then takes only tokens this authorisation server has handed out and
+   * still stands by, and says where its sign-in is, as the protocol has a server say it.
+   */
+  auth: FakeAuthorisationServer | null = null;
+  /** Where the server says its sign-in is, if not at `auth`. A server can say anything. */
+  signInAt: string | null = null;
+  /** What the server says a token is for, if not its own address. */
+  signInFor: string | null = null;
+  /** Where the server says its sign-in is described, when it turns a request away, if not on the server itself. */
+  describedAt: string | null = null;
   name = 'Orders';
   tools: FakeTool[] = [
     { name: 'find_order', description: 'Look up an order by its number.', inputSchema: taking({ number: { type: 'string', description: 'The order number' } }), annotations: { readOnlyHint: true }, run: input => text('Order ' + String(input.number) + ': 3 ferns, paid.') },
@@ -64,8 +76,19 @@ export class FakeToolServer {
     this.seen.push({ method: req.method ?? '', path, session, authorization: req.headers.authorization, key });
     if (path === '/page') { res.writeHead(200, { 'content-type': 'text/html' }).end('<h1>Not a tool server</h1>'); return; }
     if (path === '/moved') { res.writeHead(307, { location: this.elsewhere + '/mcp' }).end(); return; }
+    if (this.auth && path === '/.well-known/oauth-protected-resource/mcp') {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ resource: this.signInFor ?? this.url, authorization_servers: [this.signInAt ?? this.auth.base], scopes_supported: ['orders.read'], bearer_methods_supported: ['header'] }));
+      return;
+    }
     if (path !== '/mcp') { res.writeHead(404).end(); return; }
-    if (this.token && key !== (this.header === 'authorization' ? 'Bearer ' + this.token : this.token)) { res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' })); return; }
+    if (this.auth) {
+      const presented = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
+      try { this.auth.verify(presented ?? ''); }
+      catch {
+        res.writeHead(401, { 'content-type': 'application/json', 'www-authenticate': 'Bearer ' + (presented ? 'error="invalid_token", ' : '') + 'resource_metadata="' + (this.describedAt ?? this.base + '/.well-known/oauth-protected-resource/mcp') + '", scope="orders.read"' }).end(JSON.stringify({ error: 'invalid_token' }));
+        return;
+      }
+    } else if (this.token && key !== (this.header === 'authorization' ? 'Bearer ' + this.token : this.token)) { res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' })); return; }
     let known = session ? this.sessions.get(session) : undefined;
     if (!known) {
       if (session) { res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null })); return; }
