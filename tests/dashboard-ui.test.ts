@@ -244,6 +244,33 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     }
   });
 
+  it('saves the settings that were changed in the dialog, and leaves the others as they now are', async () => {
+    const runner = await organisation('Two windows');
+    const page = await open('/#/org/' + runner.org.id);
+    const sent: unknown[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'PATCH' && request.url().endsWith('/settings')) sent.push(request.postDataJSON());
+    });
+    try {
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await page.getByLabel(/^Budget \(US dollars\)/).fill('150');
+      // While the dialog is open, the pace is changed from somewhere else: another window, or a script.
+      runner.updateSettings({ pace: 'slow' });
+      await page.locator('.pace-options [aria-checked=true]').filter({ hasText: 'Slow' }).waitFor();
+      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+      await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor({ state: 'detached' });
+      expect(sent).toEqual([{ budgetUsd: 150 }]);
+      expect(runner.org.settings).toMatchObject({ budgetUsd: 150, pace: 'slow' });
+      // A dialog closed with Save and nothing changed sends nothing at all.
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+      await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor({ state: 'detached' });
+      expect(sent).toHaveLength(1);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('leaves the Help dialog as it is while the organisation changes behind it', async () => {
     const runner = await organisation('Reading the guide');
     const page = await open('/#/org/' + runner.org.id);
