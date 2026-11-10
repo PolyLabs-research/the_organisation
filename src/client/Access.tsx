@@ -40,14 +40,21 @@ function PasswordUpdate({ orgId, kind, id, onView }: { orgId: string; kind: Kind
 function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: Kind; record: AccountView | MailboxView | RepositoryView; onView: Update }) {
   const action = useAction();
   const [owners, setOwners] = useState(record.ownerIds);
+  // Removing takes two presses: what is saved here goes for good, and for a password generated here there is no other copy.
+  const [removing, setRemoving] = useState(false);
   useEffect(() => setOwners(record.ownerIds), [record.ownerIds.join(',')]);
   const update = (enabled: boolean) => void action.run(async () => onView(await call(org.id, 'PATCH', '/' + kind + '/' + record.id, { ownerIds: owners, enabled })));
+  const lost = kind === 'repositories' ? 'Its saved token is deleted for good.' : kind === 'accounts' ? 'Its saved password is deleted for good. If that is its only copy, reveal it and note it first.' : 'Its saved password or Google sign-in is deleted for good, and so are the drafts prepared from it.';
   return <details className="access-details"><summary>Manage access</summary>
     <TeamPicker org={org} value={owners} onChange={setOwners} />
     <div className="access-actions">
       <button type="button" className="button" disabled={action.busy} onClick={() => update(record.enabled)}>Save team access</button>
       <button type="button" className="button" disabled={action.busy} onClick={() => update(!record.enabled)}>{record.enabled ? 'Disable' : 'Enable'}</button>
-      <button type="button" className="button" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'DELETE', '/' + kind + '/' + record.id)))}>Remove connection</button>
+      {removing ? <>
+        <span className="pre-wrap">Remove {record.label}? {lost}</span>
+        <button type="button" className="button button-danger" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'DELETE', '/' + kind + '/' + record.id)))}>Yes, remove it</button>
+        <button type="button" className="button" disabled={action.busy} onClick={() => setRemoving(false)}>Keep it</button>
+      </> : <button type="button" className="button" disabled={action.busy} onClick={() => setRemoving(true)}>Remove connection</button>}
     </div>
     <p className="muted">Removing a connection deletes its saved secret here. It does not delete the external account. Google permissions can also be revoked in your Google Account.</p>
     <ErrorNote>{action.error}</ErrorNote>

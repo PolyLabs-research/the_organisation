@@ -161,6 +161,19 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     await page.getByRole('tab', { name: 'Email & accounts', exact: true }).click();
     await page.getByRole('button', { name: 'Repositories', exact: true }).click();
     await page.getByText('COO: pushes branches').waitFor();
+    // Removing a connection takes two presses. The first removes nothing: it says what goes with the connection, for good.
+    const vault = registry.get(registry.list()[0]!.id)!.access;
+    const website = page.locator('.ops-card').filter({ hasText: 'acme/website' });
+    await website.getByText('Manage access', { exact: true }).click();
+    await website.getByRole('button', { name: 'Remove connection', exact: true }).click();
+    await website.getByText('Remove Website? Its saved token is deleted for good.').waitFor();
+    await website.getByRole('button', { name: 'Keep it', exact: true }).click();
+    await website.getByRole('button', { name: 'Remove connection', exact: true }).waitFor();
+    expect((await vault.view()).repositories).toHaveLength(1);
+    await website.getByRole('button', { name: 'Remove connection', exact: true }).click();
+    await website.getByRole('button', { name: 'Yes, remove it', exact: true }).click();
+    await page.getByRole('heading', { name: 'Website', exact: true }).waitFor({ state: 'detached' });
+    expect((await vault.view()).repositories).toHaveLength(0);
     // Which work approaches a role may use has a page of its own too.
     await page.getByRole('tab', { name: 'Approaches', exact: true }).click();
     await tick('Plan-Do-Check-Act').waitFor();
