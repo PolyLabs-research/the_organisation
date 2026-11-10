@@ -262,6 +262,10 @@ export class PlanSession {
     let timer: NodeJS.Timeout | null = null;
     try {
       await this.open();
+      // A session that is picked up with no more to give it is not followed. It may not have been held when it
+      // was last let go of (the server stopped without warning), so it is held now: with room left under an
+      // older cap it could go on spending while the organisation waits for money.
+      if (this.outcome?.status === 'at_budget') await this.hold();
       if (this.job.signal?.aborted) this.leave('pause');
       timer = setInterval(() => void this.tick(), this.timings.tickMs);
       let failures = 0;

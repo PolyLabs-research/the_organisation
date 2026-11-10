@@ -510,6 +510,26 @@ describe('starting a session for a plan', () => {
     expect(api.sessions.size).toBe(1);
   });
 
+  it('holds a session that an earlier try created when it is found with no more to give it', async () => {
+    let down = true;
+    api.dropReplyOnce((x) => x.method === 'POST' && x.path === '/v1/sessions');
+    api.failAlways((x) => down && x.method === 'GET' && x.path === '/v1/sessions', 403, 'sessions cannot be listed just now');
+    await expect(provider.executePlan(job(recorder().hooks))).rejects.toBeInstanceOf(ProviderError);
+    const session = api.session();
+    // Nobody follows it, and it spends half a dollar under the cap it was created with.
+    session.spentCents = 50;
+
+    // By the time it is found, the organisation has less left for the plan than that, and nothing more to give.
+    down = false;
+    const r = recorder();
+    expect(await provider.executePlan(job(r.hooks, { budgetUsd: 0.3 }))).toEqual({ status: 'at_budget' });
+    expect(r.state.sessionId).toBe(session.id);
+    expect(r.state.spend).toBeCloseTo(0.5, 5);
+    // It does not keep the rest of its first cap while nobody follows it.
+    expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
+    expect(r.state.cap).toBe(session.capCents / 100);
+  });
+
   it('forgets a request for a session once the plan\'s session is known', async () => {
     api.script = wholePlan;
     const first = recorder({ haltAfter: 'Spec' });
@@ -1119,6 +1139,25 @@ describe('holding a session', () => {
     expect(session.capCents).toBeLessThan(200);
     expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
     expect(again.state.cap).toBe(session.capCents / 100);
+  });
+
+  it('holds a session it picks up with no more to give it, if nobody had held it', async () => {
+    api.script = wholePlan;
+    const first = recorder({ haltAfter: 'Spec' });
+    expect(await provider.executePlan(job(first.hooks))).toEqual({ status: 'paused' });
+    const session = api.session();
+    // As after a stop without warning: the session still has the cap it was working under.
+    session.capCents = 200;
+
+    // Picked up when the organisation has less left for it than it has spent already, and nothing more to give.
+    const again = recorder();
+    again.state.recorded.push('Spec');
+    expect(await provider.executePlan(job(again.hooks, { budgetUsd: 0.05, session: pickUp(session, first) }))).toEqual({ status: 'at_budget' });
+    expect(again.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.20: null']);
+    // It waits for money capped at what it has spent, and the organisation knows what cap it has.
+    expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
+    expect(again.state.cap).toBe(session.capCents / 100);
+    expect(sent(session, 'user.interrupt')).toHaveLength(0);
   });
 
   it('holds a session that nobody is following, by its id', async () => {
