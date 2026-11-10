@@ -53,6 +53,10 @@ export class Registry {
     for (const runner of resume) {
       try { runner.start(); } catch (error) { runner.org.lastError = 'Automatic resume: ' + (error as Error).message; await runner.flush(); }
     }
+    // A hosted session that was at work when the server stopped without warning had nobody to hold it, and can go on
+    // spending up to its cap. One whose organisation has just started again is picked up there. The others are held
+    // now, beside everything else: starting must not wait on the provider, and the provider may be out of reach.
+    for (const runner of this.runners.values()) if (runner.org.status !== 'running') runner.holdAdrift();
   }
 
   list(): OrgSummary[] {
@@ -92,6 +96,10 @@ export class Registry {
     this.runners.delete(id);
     runner.stop();
     await runner.idle().catch(() => {});
+    // Once the organisation is gone nothing knows of its hosted sessions, so none may be left with room to spend.
+    // The ones that were being followed have just been held. Any other that is not finished is held here: it is
+    // usually at its cap already, and then this changes nothing.
+    await runner.holdSessions({ all: true }).catch(() => {});
     // Its hosted sessions would be left with nothing to say what they were for. Where the organisation was
     // set to archive sessions, the ones still open are archived with it.
     if (runner.org.settings.archiveSessions) await runner.archiveSessions({ all: true }).catch(() => {});

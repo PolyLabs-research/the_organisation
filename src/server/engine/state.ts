@@ -473,7 +473,12 @@ export function normaliseLoaded(org: Organisation): Organisation {
         }
       }
     }
-    if (plan.managed && (plan.managed.state === 'running' || plan.managed.state === 'starting')) plan.managed.state = 'paused';
+    if (plan.managed && (plan.managed.state === 'running' || plan.managed.state === 'starting')) {
+      plan.managed.state = 'paused';
+      // A session is held by whoever follows it, as it lets go. This one was still being followed when the state
+      // was last saved, so the server stopped without that: the session is paused in name only until it is held.
+      if (plan.managed.sessionId) plan.managed.adrift = true;
+    }
   }
   if (migrateJobs) {
     for (const plan of org.plans) {

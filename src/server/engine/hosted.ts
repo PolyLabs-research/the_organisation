@@ -189,6 +189,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       managed.budgetUsd = info.budgetUsd;
       if (managed.state === 'starting' || managed.state === 'paused' || managed.state === 'at_budget') managed.state = 'running';
       capConfirmed = true;
+      // It is being followed again, and whoever follows a session holds it on letting go.
+      managed.adrift = false;
       changed();
     },
 

@@ -59,6 +59,8 @@ export interface RunnerOptions {
   checkTimes?: Partial<CheckTimes>;
   /** At the slow pace, the pause after one piece of work before the next starts. */
   paceGapMs?: number;
+  /** How long to wait before trying again to hold a hosted session that could not be held; doubles each time, up to ten minutes. */
+  holdRetryMs?: number;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -103,6 +105,12 @@ export class OrgRunner {
   private readonly listeners = new Set<Listener>();
   /** Hosted sessions being archived right now, so that none is asked twice. */
   private readonly archiving = new Set<string>();
+  /** Hosted sessions being held from here right now, for the same reason. */
+  private readonly holding = new Set<string>();
+  /** Set while a session that was left to itself still has to be held: when to try again. */
+  private holdTimer: NodeJS.Timeout | null = null;
+  private holdTries = 0;
+  private readonly holdRetryMs: number;
   /** Work done beside the loop (archiving sessions), so that coming to rest can wait for it. */
   private chores: Promise<unknown> = Promise.resolve();
   private abort = new AbortController();
@@ -139,6 +147,7 @@ export class OrgRunner {
     this.checkTimes = { ...CHECK_TIMES, ...options.checkTimes };
     this.emitIntervalMs = options.emitIntervalMs ?? 150;
     this.paceGapMs = options.paceGapMs ?? SLOW_PACE_GAP_MS;
+    this.holdRetryMs = options.holdRetryMs ?? 30_000;
   }
 
   view(): OrgView {
@@ -345,6 +354,90 @@ export class OrgRunner {
   /** Archive what can be archived, beside the loop. Failures wait for the next time. */
   private tidy(): void {
     this.chores = this.chores.then(() => this.archiveSessions()).catch(() => {});
+  }
+
+  /**
+   * Hold hosted sessions that nobody is following: bring each one's spend cap down to what it has spent, as is
+   * done whenever the organisation is paused. A session is normally held by whoever follows it, on letting go.
+   * This is for the ones that had nobody to do that: sessions that were being followed when the server stopped
+   * without warning (marked `adrift` as the organisation was loaded) and, with `all`, every session of a plan
+   * that is not finished, for an organisation that is being removed. A session that is being followed now is left
+   * to whoever follows it. `left` counts the sessions that could not be held, and `why` is what the last of them said.
+   */
+  async holdSessions(scope: { all?: boolean } = {}): Promise<{ held: number; left: number; why: string | null }> {
+    const provider = this.provider;
+    let held = 0;
+    let left = 0;
+    let why: string | null = null;
+    if (!provider.holdSession) return { held, left, why };
+    for (const plan of this.org.plans) {
+      const managed = plan.managed;
+      const id = managed?.sessionId;
+      if (!managed || !id || !(managed.adrift || scope.all)) continue;
+      if (managed.state === 'finished' || this.inFlight.has(`execute:${plan.id}`) || this.holding.has(id)) continue;
+      this.holding.add(id);
+      try {
+        const now = await provider.holdSession(id);
+        // It may have been picked up, or given up for another, while the answer was on its way: then it is no longer this method's to settle.
+        if (managed.sessionId !== id || this.inFlight.has(`execute:${plan.id}`)) continue;
+        // A session that no longer exists, or has ended, has nothing left to hold.
+        if (now) managed.budgetUsd = now.budgetUsd;
+        managed.adrift = false;
+        held += 1;
+        this.changed();
+      } catch (err) {
+        left += 1;
+        why = err instanceof Error ? err.message : String(err);
+      } finally {
+        this.holding.delete(id);
+      }
+    }
+    return { held, left, why };
+  }
+
+  /**
+   * Hold the sessions that were left to themselves when the server stopped without warning, beside the loop, and
+   * keep trying for as long as one of them cannot be held: until its cap has been brought down, such a session can
+   * go on spending up to it with the organisation paused. The board is told when the first try fails, and again
+   * when the sessions have been held after all.
+   */
+  holdAdrift(): void {
+    const adrift = () => this.org.plans.filter((p) => p.managed?.adrift && p.managed.sessionId && p.managed.state !== 'finished');
+    if (this.disposed || this.holdTimer || !adrift().length) return;
+    this.chores = this.chores
+      .then(() => this.holdSessions())
+      .then(({ left, why }) => {
+        if (this.disposed) return;
+        if (!left) {
+          if (this.holdTries > 0) {
+            postToBoard(this.org, 'system', 'system', 'Hosted sessions held', 'The hosted sessions that were left running when the server stopped have now been held: their caps are down to what they have spent, and they carry on when the organisation is started.');
+            this.changed();
+          }
+          this.holdTries = 0;
+          return;
+        }
+        if (this.holdTries === 0) {
+          const plans = adrift();
+          const room = plans.reduce((sum, p) => sum + Math.max(0, p.managed!.budgetUsd - p.managed!.spentUsd), 0);
+          const many = plans.length !== 1;
+          postToBoard(
+            this.org,
+            'system',
+            'system',
+            many ? 'Hosted sessions could not be held' : 'A hosted session could not be held',
+            `The server stopped without warning while ${many ? `${plans.length} hosted sessions were` : 'a hosted session was'} at work, so nobody brought ${many ? 'their caps' : 'its cap'} down, and holding ${many ? 'them' : 'it'} now has failed${why ? `: ${why}` : '.'} Until ${many ? 'they are' : 'it is'} held, ${many ? 'they' : 'it'} can go on spending by ${many ? 'themselves' : 'itself'}, up to about $${room.toFixed(2)} more, although the organisation is paused. This is being tried again. Starting the organisation picks ${many ? 'them' : 'it'} up, and ${many ? 'each can' : 'it can'} be looked at from its plan, in the Anthropic Console.`,
+          );
+          this.changed();
+        }
+        const wait = Math.min(600_000, this.holdRetryMs * 2 ** this.holdTries++);
+        this.holdTimer = setTimeout(() => {
+          this.holdTimer = null;
+          this.holdAdrift();
+        }, wait);
+        // A try that is still to come must not keep a server that is shutting down from exiting.
+        this.holdTimer.unref?.();
+      })
+      .catch(() => {});
   }
 
   // ---- the signatory's desk ----
@@ -992,7 +1085,8 @@ export class OrgRunner {
     this.backoff.clear();
     if (this.emitTimer) clearTimeout(this.emitTimer);
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.emitTimer = this.saveTimer = null;
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.emitTimer = this.saveTimer = this.holdTimer = null;
     this.listeners.clear();
   }
 }

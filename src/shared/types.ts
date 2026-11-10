@@ -363,6 +363,12 @@ export interface ManagedSession {
   archivedAt?: string | null;
   /** Sessions this plan used before the current one: ones that were lost and replaced. */
   past?: Array<{ sessionId: string; archivedAt: string | null }>;
+  /**
+   * True when the session was being followed as the server stopped without warning. Nobody brought its cap down
+   * then, so it can go on spending up to that cap by itself. It is held as soon as the provider can be reached, and
+   * the mark comes off once it has been, or once the session is followed again.
+   */
+  adrift?: boolean;
 }
 
 export interface Plan {
