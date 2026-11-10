@@ -895,9 +895,22 @@ export class PlanSession {
     this.checkpoint();
   }
 
-  /** The session has stopped. Decide what that means: done, waiting on this side, out of money, or stuck. */
+  /** Act on a stop, once. If what it called for could not be done, it has not been acted on. */
   private async onIdle(reason: StopReason): Promise<void> {
     this.idleActed = true;
+    try {
+      await this.settle(reason);
+    } catch (err) {
+      // A request failed on the way. While the session still stands at this stop, the stop is still to be acted
+      // on: by the next attachment if this one fails with it, or when a session that has gone quiet is looked at.
+      // Left marked as acted on, nothing would come back to it, and the plan would wait on it for good.
+      if (this.idle === reason) this.idleActed = false;
+      throw err;
+    }
+  }
+
+  /** The session has stopped. Decide what that means: done, waiting on this side, out of money, or stuck. */
+  private async settle(reason: StopReason): Promise<void> {
     const soon = Date.now() + this.timings.graceMs;
     switch (reason.type) {
       case 'requires_action': {
@@ -952,7 +965,9 @@ export class PlanSession {
 
   /** Set a lead that has stopped short going again. After a few times in a row the session is given up. */
   private async nudge(why: string): Promise<void> {
-    this.wake = null;
+    // Tried again shortly unless it gets done here. A request that fails on the way must not leave the lead
+    // stopped with nothing set to wake it.
+    const again = (this.wake = { at: Date.now() + this.timings.graceMs, why });
     if (this.nudges >= MAX_NUDGES) {
       // Whatever is left in the session must not be able to spend once nobody is following it.
       await this.hold();
@@ -960,9 +975,11 @@ export class PlanSession {
       if (this.reported) return this.finish();
       return this.end({ status: 'lost', reason: why });
     }
-    if (await this.say(this.job.resume())) this.nudges += 1;
-    // It would not take a message just now (it is waiting on an answer, or at its cap). Try again shortly.
-    else this.wake = { at: Date.now() + this.timings.graceMs, why };
+    // It may not take a message just now (it is waiting on an answer, or at its cap). That, too, is tried again.
+    if (!(await this.say(this.job.resume()))) return;
+    this.nudges += 1;
+    // Unless the session has stopped anew while the message was on its way: that stop has its own time to be looked at.
+    if (this.wake === again) this.wake = null;
   }
 
   /** Housekeeping beside the stream: holds, new instructions, spend, and a session that has gone quiet. */
@@ -995,10 +1012,15 @@ export class PlanSession {
         const session = await this.retrieve();
         if (this.ended(session)) return;
         // Not stopped as far as its status says: either its work is on its way again (the stream will say so, and
-        // that ends this watch) or the status is a moment behind. Look again shortly.
-        this.budgetCheckAt = session.status === 'idle' ? null : Date.now() + this.timings.graceMs;
+        // that ends this watch) or the status is a moment behind. Look again shortly. The same if the cap has to
+        // be raised and the request fails: the watch ends when the raise is done, not before.
+        this.budgetCheckAt = Date.now() + this.timings.graceMs;
         if (session.status !== 'idle') return;
-        if (this.capUsd - this.spentUsd < 0.01) return void (await this.raise(this.hooks.moreBudget(this.spentUsd)));
+        if (this.capUsd - this.spentUsd < 0.01) {
+          await this.raise(this.hooks.moreBudget(this.spentUsd));
+          this.budgetCheckAt = null;
+          return;
+        }
         // At its budget with money left under its cap: a higher cap will not help. (A session stops like this
         // when its usage includes a model the platform has no price for.) It needs someone to look.
         return this.fail(

@@ -196,6 +196,12 @@ async function wholePlan(s: FakeSession): Promise<void> {
 }
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** What a plan comes to, or 'still waiting' when it has not ended in good time, so that a plan left waiting for good fails its test and does not stall it. */
+const inGoodTime = async <T>(work: Promise<T>, ms = 3000): Promise<T | 'still waiting'> => {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<'still waiting'>((resolve) => (timer = setTimeout(() => resolve('still waiting'), ms)));
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+};
 const sent = (s: FakeSession, type: string) => s.received.filter((e) => e.type === type);
 const messages = (s: FakeSession) => sent(s, 'user.message').map((e) => e.content[0].text as string);
 const body = (method: string, route: string | RegExp, nth = 0) =>
@@ -1286,6 +1292,96 @@ describe('a session that goes wrong', () => {
     r.hooks.agentEnded = (threadId, how, detail) => void ended.push([threadId, how, detail]);
     await provider.executePlan(job(r.hooks));
     expect(ended[0]).toEqual(['sthr_x', 'failed', 'The agent gave up after repeated errors.']);
+  });
+});
+
+describe('a request that fails while a session is stopped', () => {
+  // In each of these the session has stopped and waits on this side, and the one request that would set things
+  // going fails once. Nothing more comes from the session by itself, so whatever failed has to be tried again.
+
+  it('brings the last files home on a second try, and ends the plan', async () => {
+    let reported = false;
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES) await phase(s, name);
+      const reply = await s.call('report_to_board', { headline: 'Shipped', summary: 'Done.', outcomes: [] });
+      if (reply.isError) throw new Error(reply.text);
+      reported = true;
+      s.idle({ type: 'end_turn' });
+    };
+    // The look at the session's files that follows the report.
+    api.failOnce((x) => reported && x.method === 'GET' && x.path === '/v1/files', 500, 'internal error');
+    const r = recorder();
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    expect([...r.state.files.keys()].sort()).toEqual(PHASES.map((name) => `engineering/${name.toLowerCase()}.md`).sort());
+  });
+
+  it('raises the cap on a second try when the session is at it', async () => {
+    api.script = wholePlan;
+    const r = recorder();
+    r.state.grants.push(0.6, 0.6);
+    api.failOnce((x) => x.method === 'POST' && /^\/v1\/sessions\/sesn_\d+$/.test(x.path), 500, 'internal error');
+    expect(await inGoodTime(provider.executePlan(job(r.hooks, { budgetUsd: 0.25 })))).toEqual({ status: 'reported' });
+    expect(r.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.30: 0.6', 'asked for more at 0.30: 0.6']);
+    expect(api.session().capCents).toBe(60);
+    expect(r.state.recorded).toEqual(PHASES);
+  });
+
+  it('raises the cap on a second try when it only learns afterwards that the session is at it', async () => {
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES.slice(0, 2)) await phase(s, name);
+      // The request that takes it to its cap. It says that it has stopped there before it says what it has spent,
+      // so for a moment its cap looks to be above its spend.
+      s.spentCents = s.capCents;
+      s.idle({ type: 'budget_reached' });
+      await s.until(() => s.capCents > s.spentCents);
+      s.running();
+      for (const name of PHASES.slice(2)) await phase(s, name);
+      await report(s);
+    };
+    const r = recorder();
+    r.state.grants.push(0.6, 0.6);
+    api.failOnce((x) => x.method === 'POST' && /^\/v1\/sessions\/sesn_\d+$/.test(x.path), 500, 'internal error');
+    expect(await inGoodTime(provider.executePlan(job(r.hooks, { budgetUsd: 0.25 })))).toEqual({ status: 'reported' });
+    expect(r.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.25: 0.6', 'asked for more at 0.25: 0.6']);
+    expect(api.session().capCents).toBe(60);
+  });
+
+  it('tells a lead that stopped short to carry on, on a second try', async () => {
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES) await phase(s, name);
+      s.idle({ type: 'end_turn' }); // forgot to report
+      await s.next((e) => e.type === 'user.message' && e.content[0].text === 'Carry on with the plan.');
+      s.running();
+      await report(s);
+    };
+    api.failOnce((x) => x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.message', 500, 'internal error');
+    const r = recorder();
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    expect(messages(api.session())).toEqual(['Carry out this plan.', 'Carry on with the plan.']);
+  });
+
+  it('brings the last files home on a second try when it gives up on a lead that reported and left a run open', async () => {
+    let reported = false;
+    api.script = async (s) => {
+      s.running();
+      s.emit('workflow_run.created', { workflow_run_id: 'wrun_1', name: 'Sweep', description: null, phases: [] });
+      for (const name of PHASES) await phase(s, name);
+      const reply = await s.call('report_to_board', { headline: 'Shipped', summary: 'Done.', outcomes: [] });
+      if (reply.isError) throw new Error(reply.text);
+      reported = true;
+      for (;;) {
+        s.idle({ type: 'end_turn' });
+        await s.next((e) => e.type === 'user.message' && e.content[0].text === 'Carry on with the plan.');
+        s.running();
+      }
+    };
+    api.failOnce((x) => reported && x.method === 'GET' && x.path === '/v1/files', 500, 'internal error');
+    const r = recorder();
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    expect(r.state.report?.headline).toBe('Shipped');
   });
 });
 
