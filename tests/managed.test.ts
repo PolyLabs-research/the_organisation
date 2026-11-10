@@ -947,6 +947,37 @@ describe('picking a session up again', () => {
     expect(third.state.notes).not.toContain('Waiting for the record to be taken.');
   });
 
+  it('keeps its place at a call that an earlier look read and did not answer', async () => {
+    // The lead recorded Spec while its agents were still at work, and said more a good while later. Whoever
+    // followed the session then had read both when it was told to hold, with the call unanswered.
+    let made = false;
+    api.script = async (s) => {
+      s.running();
+      const calling = s.callWhileBusy('record_phase', { phase: 'Spec', summary: 'Spec passed its gate.' });
+      api.skip(60_000);
+      s.says('Waiting for the record to be taken.');
+      made = true;
+      await calling.catch(() => {});
+    };
+    const first = recorder();
+    first.state.halt = 'pause';
+    expect(await provider.executePlan(job(first.hooks))).toEqual({ status: 'paused' });
+    await waitFor(() => made, 'the call to be made');
+    const session = api.session();
+    const call = session.events.find((e) => e.type === 'agent.custom_tool_use')!;
+    const said = session.events.find((e) => e.type === 'agent.message')!;
+
+    // The next look reads the call again, after what came just before it, and is told to hold once more.
+    const second = recorder();
+    second.state.halt = 'pause';
+    const left = { id: session.id, cursor: call.processed_at as string, handled: said.processed_at as string, openRuns: [], runThreads: [], reported: false };
+    expect(await provider.executePlan(job(second.hooks, { session: left }))).toEqual({ status: 'paused' });
+    expect(sent(session, 'user.custom_tool_result')).toHaveLength(0);
+    // Reading still starts at the call next time: it has not been answered.
+    expect(second.state.cursor).toBe(call.processed_at);
+    expect(second.state.handled! > second.state.cursor!).toBe(true);
+  });
+
   it('remembers which agents belong to a run, so one going idle is not taken as finished', async () => {
     api.script = async (s) => {
       s.running();

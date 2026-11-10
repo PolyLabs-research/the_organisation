@@ -553,6 +553,7 @@ export class PlanSession {
     } finally {
       this.replaying = false;
     }
+    this.checkpoint();
     if (this.leaving || this.halted()) return;
 
     // What is still waiting on this side gets its answer now.
@@ -824,7 +825,9 @@ export class PlanSession {
 
   /** Tell the engine where reading can start next time: the oldest call still unanswered, or else the latest event acted on. */
   private checkpoint(): void {
-    if (!this.latestAt) return;
+    // Not while the history is being read: a call that an earlier attachment read and left unanswered is only
+    // known to be unanswered once the reading has come to it again, and the place must not move past it before then.
+    if (!this.latestAt || this.replaying) return;
     let from = this.latestAt;
     for (const call of this.pending.values()) if (call.at && call.at < from) from = call.at;
     if (!this.cursor || from > this.cursor) this.cursor = from;
