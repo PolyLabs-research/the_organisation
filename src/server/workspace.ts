@@ -59,7 +59,8 @@ export class Workspace {
       try {
         const real = await fs.realpath(probe);
         const relReal = path.relative(realRoot, real);
-        if (relReal.startsWith('..') || path.isAbsolute(relReal)) throw new WorkspaceError('path escapes the workspace');
+        // Outside is ".." or below it. A folder that is merely called "..notes" is inside like any other.
+        if (relReal === '..' || relReal.startsWith('..' + path.sep) || path.isAbsolute(relReal)) throw new WorkspaceError('path escapes the workspace');
         return target;
       } catch (err) {
         if (err instanceof WorkspaceError) throw err;

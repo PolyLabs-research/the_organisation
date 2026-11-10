@@ -125,6 +125,26 @@ describe('persistent business records', () => {
     } finally { await h.cleanup(); }
   });
 
+  it('takes an incoming event from a person or a local integration only, never from a seat or its agents', async () => {
+    const h = await harness();
+    try {
+      // An event creates a commitment, wakes a waiting organisation and is announced on the board as having come
+      // from outside. A seat that could file one could give itself work and call it a customer's.
+      const event = { kind: 'event', record: { ownerId: 'cto', title: 'A customer wrote in', detail: 'Wants a quote for 100 boxes.', source: 'inbox', externalId: 'message-1' } };
+      for (const actor of [{ id: 'cto' }, { id: 'cto', worker: true }, { id: 'ceo' }]) {
+        expect(() => applyBusinessCommand(h.org, event, actor), JSON.stringify(actor)).toThrow(/Only a person or a local integration/);
+      }
+      applyBusinessUpdates(h.org, [JSON.stringify(event)], { id: 'cto' });
+      expect(h.org.business.events).toHaveLength(0);
+      expect(h.org.business.jobs).toHaveLength(0);
+      expect(h.org.business.reviewRequested).toBe(false);
+      expect(h.org.board.at(-1)).toMatchObject({ title: 'Operating update needs correction', body: expect.stringContaining('Only a person or a local integration') });
+      applyBusinessCommand(h.org, event, person);
+      expect(h.org.business.events).toHaveLength(1);
+      expect(h.org.business.jobs).toHaveLength(1);
+    } finally { await h.cleanup(); }
+  });
+
   it('rolls back an invalid model batch and records the correction', async () => {
     const h = await harness();
     try {

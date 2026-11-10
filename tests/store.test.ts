@@ -1,7 +1,8 @@
+import { promises as fsPromises } from 'node:fs';
 import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SCHEMA_VERSION } from '../src/server/engine/state';
 import { MockProvider } from '../src/server/providers/mock';
 import { Registry } from '../src/server/registry';
@@ -48,6 +49,36 @@ describe('organisations on disk', () => {
     await third.load();
     expect(third.get(id)!.org.usage.calls).toBe(calls);
     third.get(id)!.dispose();
+  });
+
+  it('never leaves half a state file behind: a save that is cut off leaves the last good one in place', async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-store-'));
+    const store = new Store(dir);
+    await store.init();
+    const registry = new Registry(store, new MockProvider(QUIET), { retryDelayMs: 1, emitIntervalMs: 1 });
+    const runner = await registry.create({ name: 'Fernery', idea: 'Houseplants by post.', executives: TEAM, settings: { maxCycles: 1, budgetUsd: 1000 } });
+    await runner.flush();
+    const file = path.join(store.orgDir(runner.org.id), 'org.json');
+    const good = await readFile(file, 'utf8');
+
+    // The process stops after the new state has been written out but before it has taken the old one's place.
+    const cut = vi.spyOn(fsPromises, 'rename').mockRejectedValueOnce(new Error('the process was stopped here'));
+    try {
+      await expect(store.save({ ...runner.org, name: 'Fernery, renamed' })).rejects.toThrow('stopped here');
+    } finally {
+      cut.mockRestore();
+    }
+    // What is on disk is the whole of the earlier state, not part of the new one.
+    expect(await readFile(file, 'utf8')).toBe(good);
+    const reloaded = new Registry(store, new MockProvider(QUIET), { retryDelayMs: 1, emitIntervalMs: 1 });
+    await reloaded.load();
+    expect(reloaded.unreadable).toEqual([]);
+    expect(reloaded.get(runner.org.id)!.org.name).toBe('Fernery');
+    // And the next save goes through as usual.
+    await store.save({ ...runner.org, name: 'Fernery, renamed' });
+    expect(JSON.parse(await readFile(file, 'utf8')).name).toBe('Fernery, renamed');
+    runner.dispose();
+    await reloaded.shutdown();
   });
 
   it('reads the most recent calls from a long activity log, skipping a line cut short', async () => {
