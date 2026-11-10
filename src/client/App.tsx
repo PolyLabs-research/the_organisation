@@ -3,7 +3,7 @@ import { api, type Meta } from './api';
 import { Dashboard } from './Dashboard';
 import { Home } from './Home';
 import { Models } from './Models';
-import { ErrorNote } from './ui';
+import { ErrorBoundary, ErrorNote } from './ui';
 import { Wizard } from './Wizard';
 
 type Route = { page: 'home' } | { page: 'new' } | { page: 'models' } | { page: 'org'; id: string };
@@ -85,19 +85,22 @@ export function App() {
       </header>
       <main className="page">
         {error ? <ErrorNote>{error}</ErrorNote> : null}
-        {!meta ? (
-          error ? null : (
-            <p className="muted">Loading…</p>
-          )
-        ) : route.page === 'new' ? (
-          <Wizard meta={meta} />
-        ) : route.page === 'models' ? (
-          <Models meta={meta} onChange={reload} />
-        ) : route.page === 'org' ? (
-          <Dashboard key={route.id} id={route.id} meta={meta} />
-        ) : (
-          <Home meta={meta} />
-        )}
+        {/* A page that cannot be drawn says so here, under the bar that leads to the others. Going to another page starts afresh. */}
+        <ErrorBoundary key={route.page === 'org' ? `org/${route.id}` : route.page} what="This page">
+          {!meta ? (
+            error ? null : (
+              <p className="muted">Loading…</p>
+            )
+          ) : route.page === 'new' ? (
+            <Wizard meta={meta} />
+          ) : route.page === 'models' ? (
+            <Models meta={meta} onChange={reload} />
+          ) : route.page === 'org' ? (
+            <Dashboard key={route.id} id={route.id} meta={meta} />
+          ) : (
+            <Home meta={meta} />
+          )}
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -84,16 +84,23 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     }
   });
 
-  it('says so, and offers a reload, when the page itself cannot be drawn', async () => {
+  it('says so when an organisation’s page cannot be drawn, and still leads to the others', async () => {
     const runner = await organisation('Broken page');
+    await organisation('Sound page');
     // A stage this version of the dashboard has never heard of.
     (runner.org.cycle as { stage: string }).stage = 'retrospective';
     const page = await open('/#/org/' + runner.org.id);
     try {
-      await page.getByText('The page could not be shown.').waitFor();
+      await page.getByText('This page could not be shown.').waitFor();
       expect(await page.getByRole('alert').innerText()).toContain('stops nothing that was running');
       await page.getByRole('button', { name: 'Reload the page', exact: true }).click();
-      await page.getByText('The page could not be shown.').waitFor();
+      await page.getByText('This page could not be shown.').waitFor();
+      // The bar above it is still there: the way to the list, and from there to an organisation that can be drawn.
+      await page.getByRole('link', { name: 'the_organisation', exact: true }).click();
+      await page.getByRole('heading', { name: 'Organisations', exact: true }).waitFor();
+      expect(await page.getByText('could not be shown').count()).toBe(0);
+      await page.getByRole('link', { name: /Sound page/ }).click();
+      await page.getByRole('heading', { name: 'Sound page', exact: true }).waitFor();
     } finally {
       await page.close();
     }
