@@ -67,7 +67,9 @@ function setup() { requests.length = 0; users.clear(); browser = new BusinessBro
 const run = (action: Omit<BrowserAction, 'accountId'>, actor = 'task1', write = true) => browser.run(site, site.username, actor, { accountId: site.id, ...action }, new AbortController().signal, { write });
 const element = (page: AccountPage, label: string) => page.elements.find(item => item.label === label)!.id;
 afterEach(async () => { await browser?.close(); });
-describe.skipIf(withoutBrowser())('account browser', () => {
+// Each test starts a real Chrome, and has the time the other browser-driven tests have: on a machine that is running
+// several of them at once, a browser's first start can take many times what it usually does.
+describe.skipIf(withoutBrowser())('account browser', { timeout: 40_000 }, () => {
   it('creates and verifies an account, then logs in with a saved password without returning it', async () => {
     setup();
     let page = await run({ action: 'signup' });
