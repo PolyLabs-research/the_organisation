@@ -220,6 +220,12 @@ export class PlanSession {
   private interrupted = false;
   /** The session's status says that it has ended, and its history has still to be read to the end. */
   private over = false;
+  /**
+   * Whether the session has been given its plan. One created here has: the plan goes in with it. One that is
+   * picked up with no place to read from may never have been (the server can stop between creating a session
+   * and telling it anything), and is given the plan if its history holds no message for its lead.
+   */
+  private briefed = false;
 
   /** Why the session is idle, as far as is known; null while it is working. */
   private idle: StopReason | null = null;
@@ -323,6 +329,8 @@ export class PlanSession {
       this.sessionId = job.session.id;
       this.consoleUrl = this.linkTo(this.sessionId);
       this.cursor = job.session.cursor;
+      // A place to read from is only ever kept for a session that has its plan (see `checkpoint`).
+      this.briefed = this.cursor !== null;
       this.latestAt = job.session.handled ?? job.session.cursor;
       this.floor = this.latestAt;
       this.reported = job.session.reported;
@@ -411,6 +419,7 @@ export class PlanSession {
     }
     this.sessionId = session.id;
     this.consoleUrl = this.linkTo(session.id);
+    this.briefed = true;
     this.capped(job.budgetUsd);
     await this.creating(null);
     this.hooks.instructed(job.kickoff.instructions);
@@ -447,6 +456,8 @@ export class PlanSession {
     }
     this.sessionId = session.id;
     this.consoleUrl = this.linkTo(session.id);
+    // The request that made it carried the plan.
+    this.briefed = true;
     // It still has the cap it was created with. The engine is told of it before anything else can fail.
     this.capped(session.budget ? usd(session.budget.max_list_cost) : this.job.budgetUsd);
     await this.creating(null);
@@ -646,11 +657,9 @@ export class PlanSession {
    */
   private async catchUp(again = false): Promise<void> {
     this.replaying = true;
-    let briefed = this.cursor !== null;
     try {
       const since = this.cursor ? { 'created_at[gte]': new Date(Date.parse(this.cursor) - OVERLAP_MS).toISOString() } : {};
       for await (const event of this.sessions.events.list(this.sessionId, since)) {
-        if (event.type === 'user.message') briefed = true;
         await this.handle(event);
         if (this.outcome) return;
       }
@@ -668,9 +677,11 @@ export class PlanSession {
     // It has ended since its history was read: what it said last, and why it ended, is read before it is given up.
     if (!again && session.status === 'terminated' && !session.archived_at) return this.catchUp(true);
     if (this.gone(session)) return;
-    if (!briefed) {
-      // The session exists but was never given its plan.
+    if (!this.briefed) {
+      // The session exists but was never given its plan. It has it once the message has gone: if this attachment
+      // ends before that, on a failure or because the session is to be held, the next one gives it.
       await this.send([message(this.job.kickoff.message)]);
+      this.briefed = true;
       return;
     }
     if (this.interrupted) {
@@ -787,6 +798,8 @@ export class PlanSession {
   private async handle(event: SessionEvent | StreamEvent): Promise<void> {
     if (event.type === 'event_start' || event.type === 'event_delta') return; // previews of text; the finished event follows
     const at = timeOf(event);
+    // A session with a message for its lead in it has been told what to do.
+    if (event.type === 'user.message') this.briefed = true;
     // A message from this side shows up twice: when it is queued, and again when the session takes it up.
     if (event.type === 'user.message' && at && event.id) {
       this.takenUp.add(event.id);
@@ -939,7 +952,9 @@ export class PlanSession {
   private checkpoint(): void {
     // Not while the history is being read: a call that an earlier attachment read and left unanswered is only
     // known to be unanswered once the reading has come to it again, and the place must not move past it before then.
-    if (!this.latestAt || this.replaying) return;
+    // And not for a session that has not been given its plan: a place to read from is taken, here and by the
+    // engine, to mean that it has, and one that was left before the plan had gone would never be given it.
+    if (!this.latestAt || this.replaying || !this.briefed) return;
     let from = this.latestAt;
     for (const call of this.pending.values()) if (call.at && call.at < from) from = call.at;
     if (!this.cursor || from > this.cursor) this.cursor = from;

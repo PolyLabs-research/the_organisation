@@ -1312,6 +1312,62 @@ describe('picking a session up again', () => {
     expect(session.capCents).toBe(200);
   });
 
+  /** A session that exists and was never given its plan, with a lead that carries the plan out once it is told it. */
+  const untold = async (): Promise<FakeSession> => {
+    api.script = wholePlan;
+    await provider.executePlan(job(recorder().hooks));
+    const lead = [...api.agents.keys()][1]!;
+    const response = await fetch(`${api.baseURL}/v1/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent: { id: lead }, environment_id: [...api.environments.keys()][0], budget: { type: 'limit', max_list_cost: { amount: '10', currency: 'USD' } } }),
+    });
+    const session = api.sessions.get(((await response.json()) as { id: string }).id)!;
+    void (async () => {
+      await session.next((e) => e.type === 'user.message');
+      await wholePlan(session);
+    })().catch((err) => (session.failure = err));
+    return session;
+  };
+
+  it('gives the plan again when giving it to a session that was never told it fails', async () => {
+    const session = await untold();
+    // The message with the plan is lost to a fault on the way. By then the session's history has been read.
+    api.failOnce((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}/events` && x.body.events[0].type === 'user.message', 500, 'internal error');
+    const r = recorder();
+    const picked = { id: session.id, cursor: null, handled: null, openRuns: [], runThreads: [], reported: false };
+    expect(await inGoodTime(provider.executePlan(job(r.hooks, { session: picked })))).toEqual({ status: 'reported' });
+    // Its lead was given the plan, not told to carry on with one it had never seen.
+    expect(messages(session)).toEqual(['Carry out this plan.']);
+    expect(r.state.recorded).toEqual(PHASES);
+  });
+
+  it('gives the plan to a session that was held before it could be told it', async () => {
+    const session = await untold();
+    // The organisation is paused just as the session's history has been read, before the plan has gone to it.
+    const first = recorder();
+    const push = api.requests.push.bind(api.requests);
+    api.requests.push = (...items) => {
+      for (const x of items) {
+        const history = x.method === 'GET' && x.path === `/v1/sessions/${session.id}/events` && ![...x.query.keys()].some((key) => key.startsWith('types'));
+        if (history) first.state.halt = 'pause';
+      }
+      return push(...items);
+    };
+    const picked = { id: session.id, cursor: null, handled: null, openRuns: [], runThreads: [], reported: false };
+    expect(await provider.executePlan(job(first.hooks, { session: picked }))).toEqual({ status: 'paused' });
+    api.requests.push = push;
+    expect(messages(session)).toEqual([]);
+    // Nothing is kept of where its history was read to: what was read was not what a lead with a plan says.
+    expect(first.state.cursor).toBeNull();
+
+    // Picked up again, from what the organisation kept of it.
+    const again = recorder();
+    expect(await inGoodTime(provider.executePlan(job(again.hooks, { session: pickUp(session, first) })))).toEqual({ status: 'reported' });
+    expect(messages(session)).toEqual(['Carry out this plan.']);
+    expect(again.state.recorded).toEqual(PHASES);
+  });
+
   it('takes a plan as finished when the report was already in and the session has since stopped', async () => {
     api.script = wholePlan;
     const first = recorder();
