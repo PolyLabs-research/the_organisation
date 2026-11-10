@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Organisation, Plan } from '../src/shared/types';
+import { cancelPlan } from '../src/server/engine/handlers';
 import { findPhase, outputPath } from '../src/server/engine/hosted';
 import { sessionAllowance, toClientView } from '../src/server/engine/state';
 import { MockProvider } from '../src/server/providers/mock';
@@ -410,6 +411,38 @@ describe('a hosted session and the organisation\'s controls', () => {
     expect(plan.managed!.state).toBe('finished');
     expect(plan.reportId).toBeNull();
     expect(plan.phases.flatMap((p) => p.tasks).some((t) => t.status === 'running')).toBe(false);
+  });
+
+  it('has what its session left open closed when its plan is cancelled while nobody is following it', async () => {
+    let under = false;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks }) => {
+        hooks.session({ id: 'sesn_test', consoleUrl: null, budgetUsd: 5 });
+        hooks.assigned({ threadId: 'sthr_a', agentName: 'Team agent', brief: 'Write the spec.', runId: null });
+        hooks.run({ id: 'run_1', event: 'created', name: 'Sweep', steps: [{ id: 's1', name: 'Check' }] });
+        hooks.run({ id: 'run_1', event: 'step_started', stepId: 's1' });
+        under = true;
+        while (hooks.halt() === null) await new Promise((resolve) => setTimeout(resolve, 2));
+        return { status: 'paused' };
+      }),
+    });
+    h.runner.start();
+    await waitFor(() => under, 'the work to be under way');
+    h.runner.pause();
+    await h.runner.idle();
+    const plan = planOf(h.org);
+    // Held, with an agent and a workflow run in the middle of their work.
+    expect(plan.managed!.state).toBe('paused');
+    expect(plan.phases[0]!.tasks.map((t) => t.status)).toEqual(['running']);
+    expect(plan.managed!.runs[0]!.status).toBe('running');
+
+    cancelPlan(h.org, plan, 'The shareholders have dropped this line of work.', 'ceo');
+    expect(plan.status).toBe('cancelled');
+    expect(plan.managed!.state).toBe('finished');
+    expect(plan.phases[0]!.tasks[0]).toMatchObject({ status: 'failed', error: 'The plan was cancelled.' });
+    expect(plan.managed!.runs[0]).toMatchObject({ status: 'stopped', steps: [{ id: 's1', name: 'Check', status: 'done' }] });
   });
 
   it('does not hold up the board: its calls go on while sessions run, whatever the limit on calls', async () => {

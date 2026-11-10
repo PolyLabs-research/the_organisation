@@ -117,7 +117,7 @@ function workingPhase(plan: Plan): PlanPhase | undefined {
 }
 
 /** Close whatever a session left open when it is no longer being followed. */
-function closeOpenWork(plan: Plan, managed: ManagedSession, as: 'done' | 'failed', error: string | null): void {
+export function closeOpenWork(plan: Plan, managed: ManagedSession, as: 'done' | 'failed', error: string | null): void {
   const at = now();
   for (const phase of plan.phases) {
     for (const task of phase.tasks) {
