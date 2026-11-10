@@ -185,6 +185,26 @@ describe('asking Claude Code about itself', () => {
     // A command that is not Claude Code at all.
     expect((await failure(checkClaudeCode('node', fakeEnv()))).message).toMatch(/"node --version" did not answer as Claude Code does.*CLAUDE_CODE_PATH/);
   });
+
+  it('stops waiting for a command that does not answer, and ends whatever the command started', async () => {
+    // A script around a program that hangs. Ending the script alone would leave the program holding the output open.
+    const wrapper = path.join(dir, 'slow-claude.sh');
+    const started = path.join(dir, 'slow.pid');
+    writeFileSync(wrapper, `#!/bin/sh\nsleep 30 &\necho $! > "${started}"\nwait\n`, { mode: 0o755 });
+    const began = Date.now();
+    const error = await failure(checkClaudeCode(wrapper, fakeEnv(), 300));
+    expect(error.message).toMatch(/did not answer as Claude Code does/);
+    expect(Date.now() - began).toBeLessThan(5000);
+    const pid = Number(readFileSync(started, 'utf8'));
+    await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 'the program behind the script to end');
+  });
 });
 
 describe('one call through Claude Code', () => {

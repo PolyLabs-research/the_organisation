@@ -244,10 +244,17 @@ function notFound(command: string): ProviderError {
 /** Run the command for a short answer, with nothing on its input. */
 function ask(command: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 20_000): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    // In a process group of its own, as a run is, so that a script around the real program is ended with the program.
+    const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    track(child);
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    const timer = setTimeout(() => {
+      // Its time is up. The answer is taken as it stands, without waiting for the output to close: whatever
+      // the command started may be holding it open, and may never let go.
+      signalRun(child, 'SIGKILL');
+      resolve({ code: null, stdout, stderr });
+    }, timeoutMs);
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
     child.on('error', (err: NodeJS.ErrnoException) => {
@@ -265,9 +272,9 @@ function ask(command: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs 
  * Ask Claude Code which version it is and whether it is signed in. Neither question calls a model. Throws,
  * with words for the person, if the command is missing, too old or not signed in.
  */
-export async function checkClaudeCode(command = 'claude', env: NodeJS.ProcessEnv = process.env): Promise<ClaudeCodeStatus> {
+export async function checkClaudeCode(command = 'claude', env: NodeJS.ProcessEnv = process.env, timeoutMs?: number): Promise<ClaudeCodeStatus> {
   const clean = childEnv(env);
-  const said = await ask(command, ['--version'], clean);
+  const said = await ask(command, ['--version'], clean, timeoutMs);
   const version = /claude code/i.test(said.stdout) ? parseVersion(said.stdout)?.join('.') : undefined;
   if (!version) {
     throw new ProviderError(`"${command} --version" did not answer as Claude Code does${said.stderr.trim() ? ` (${brief(said.stderr.trim(), 200)})` : ''}. Set CLAUDE_CODE_PATH to the Claude Code command.`, 'auth', false);
@@ -275,7 +282,7 @@ export async function checkClaudeCode(command = 'claude', env: NodeJS.ProcessEnv
   if (olderThan(version, MIN_CLAUDE_CODE)) {
     throw new ProviderError(`Claude Code ${version} is too old for this: ${MIN_CLAUDE_CODE} or later is needed. Update it with "claude update".`, 'auth', false);
   }
-  const auth = await ask(command, ['auth', 'status', '--json'], clean);
+  const auth = await ask(command, ['auth', 'status', '--json'], clean, timeoutMs);
   let status: Json | null = null;
   try {
     const parsed: unknown = JSON.parse(auth.stdout);
