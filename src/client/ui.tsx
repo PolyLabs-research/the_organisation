@@ -61,12 +61,13 @@ export function Markdown({ children }: { children: string }) {
     <div className="md">
       <ReactMarkdown
         components={{
-          // Agent-written content can contain any link; open it away from the dashboard.
-          a: ({ href, children: label }) => (
-            <a href={href} target="_blank" rel="noreferrer noopener">
-              {label}
-            </a>
-          ),
+          // Agent-written content can contain any link, under any label: one that reads like a control of this
+          // page, or like an address other than its own. So a link is not one here. It is written out as its
+          // label and its address, and nobody is one click from an address a model chose.
+          a: ({ href, children: label }) => {
+            if (!href || label === href) return <>{label}</>;
+            return label ? <>{label} ({href})</> : <>{href}</>;
+          },
           // An image would be fetched as soon as the text is shown, which tells whoever wrote
           // the text that it was read and can carry data out in the address. Show its label instead.
           img: ({ alt, src }) => <span className="muted">[image: {alt || src}]</span>,
