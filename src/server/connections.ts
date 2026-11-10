@@ -41,6 +41,8 @@ interface FileShape {
   connections: Connection[];
   /** What was learned about connections that come from the environment, by connection id. */
   environment: Record<string, Remembered>;
+  /** The id each provider's key from the environment was first given, by provider. */
+  environmentIds?: Record<string, string>;
   /** True once this server has had a key of any kind. From then on, having none is a lack of keys, not a simulation. */
   hadKeys?: boolean;
 }
@@ -51,6 +53,7 @@ export class ConnectionStore {
   private stored: Connection[] = [];
   private fromEnv: Connection[] = [];
   private remembered: Record<string, Remembered> = {};
+  private environmentIds: Record<string, string> = {};
   private everHadKeys = false;
   private writing: Promise<void> = Promise.resolve();
 
@@ -86,15 +89,28 @@ export class ConnectionStore {
             .map((c) => tidy(local(c) ? { ...c, apiKey: '', baseURL: '' } : c))
         : [];
       this.remembered = parsed.environment && typeof parsed.environment === 'object' ? parsed.environment : {};
+      this.environmentIds = parsed.environmentIds && typeof parsed.environmentIds === 'object' ? parsed.environmentIds : {};
       this.everHadKeys = parsed.hadKeys === true || this.stored.length > 0;
     }
     this.fromEnv = [];
+    let named = false;
     for (const preset of PRESETS) {
       const name = preset.env.find((n) => (this.env[n] ?? '').trim());
       const ambient = preset.id === 'anthropic' && this.anthropicAmbient;
       if (!name && !ambient) continue;
       // A key added by hand for the same provider takes the provider's plain id; the one from the environment stands beside it.
-      const id = this.stored.some((c) => c.id === preset.id) ? `${preset.id}-env` : preset.id;
+      // Whichever of the two ids the key from the environment was first given, it keeps, so that removing the key
+      // added by hand does not hand its id on: organisations name their models by it, plain Claude names belong
+      // to the id "anthropic", and an account's hosted-session ids are filed under it. Only a key added by hand
+      // that took the id while the variable was away puts the one from the environment beside it again.
+      const taken = (id: string) => this.stored.some((c) => c.id === id);
+      const first = Object.hasOwn(this.environmentIds, preset.id) ? this.environmentIds[preset.id] : undefined;
+      const kept = (first === preset.id || first === `${preset.id}-env`) && !taken(first);
+      const id = kept ? first : taken(preset.id) ? `${preset.id}-env` : preset.id;
+      if (id !== first) {
+        this.environmentIds[preset.id] = id;
+        named = true;
+      }
       // A provider with more than one platform is reached at its first unless the environment names another address.
       const elsewhere = address(this.env[baseUrlVariable(preset.id)] ?? '');
       this.fromEnv.push(
@@ -110,7 +126,7 @@ export class ConnectionStore {
         }),
       );
     }
-    if (this.fromEnv.length && !this.everHadKeys) {
+    if (this.fromEnv.length && (!this.everHadKeys || named)) {
       this.everHadKeys = true;
       await this.save();
     }
@@ -174,7 +190,7 @@ export class ConnectionStore {
     this.writing = this.writing
       .catch(() => {})
       .then(async () => {
-        const shape: FileShape = { version: 1, connections: this.stored, environment: this.remembered, hadKeys: this.everHadKeys };
+        const shape: FileShape = { version: 1, connections: this.stored, environment: this.remembered, environmentIds: this.environmentIds, hadKeys: this.everHadKeys };
         await fs.mkdir(path.dirname(this.file), { recursive: true });
         const tmp = `${this.file}.${process.pid}.tmp`;
         await fs.writeFile(tmp, JSON.stringify(shape, null, 2), { encoding: 'utf8', mode: 0o600 });
