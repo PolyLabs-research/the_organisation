@@ -93,7 +93,8 @@ export const api = {
 
 /**
  * Keeps a live view of one organisation. The server pushes a fresh view on
- * every change; the browser reconnects by itself if the stream drops.
+ * every change; the browser reconnects by itself if the stream drops, and a
+ * stream it has given up on is opened again from here.
  */
 export function useOrgStream(id: string) {
   const [view, setView] = useState<OrgView | null>(null);
@@ -118,31 +119,47 @@ export function useOrgStream(id: string) {
       })
       .catch(() => {});
 
-    const source = new EventSource(`/api/orgs/${id}/events`);
-    source.addEventListener('open', () => setConnected(true));
-    source.addEventListener('view', (event) => setView(JSON.parse((event as MessageEvent).data) as OrgView));
-    source.addEventListener('activity', (event) => {
-      const entry = JSON.parse((event as MessageEvent).data) as ActivityEntry;
-      const key = entry.id + entry.at;
-      if (seen.current.has(key)) return;
-      seen.current.add(key);
-      setActivity((list) => [...list.slice(-299), entry]);
-    });
-    source.addEventListener('error', () => {
-      setConnected(false);
-      // A stream that never opened may mean the organisation is gone; ask once to tell the two apart.
-      api.orgs().then(
-        (orgs) => {
-          if (!closed && !orgs.some((o) => o.id === id)) {
-            setMissing(true);
-            source.close();
-          }
-        },
-        () => {},
-      );
-    });
+    let source: EventSource;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+    const open = () => {
+      const stream = (source = new EventSource(`/api/orgs/${id}/events`));
+      stream.addEventListener('open', () => {
+        failures = 0;
+        setConnected(true);
+      });
+      stream.addEventListener('view', (event) => setView(JSON.parse((event as MessageEvent).data) as OrgView));
+      stream.addEventListener('activity', (event) => {
+        const entry = JSON.parse((event as MessageEvent).data) as ActivityEntry;
+        const key = entry.id + entry.at;
+        if (seen.current.has(key)) return;
+        seen.current.add(key);
+        setActivity((list) => [...list.slice(-299), entry]);
+      });
+      stream.addEventListener('error', () => {
+        setConnected(false);
+        // A stream that drops, the browser opens again. One that is answered with an error (by a proxy in front of a
+        // server that is away, say) it closes for good, so that one is opened again from here: after a second, then
+        // two, then four, up to half a minute.
+        if (stream.readyState === EventSource.CLOSED && !closed) retry = setTimeout(open, Math.min(30_000, 1000 * 2 ** failures++));
+        // A stream that never opened may mean the organisation is gone; ask once to tell the two apart.
+        api.orgs().then(
+          (orgs) => {
+            if (!closed && !orgs.some((o) => o.id === id)) {
+              closed = true;
+              setMissing(true);
+              clearTimeout(retry);
+              source.close();
+            }
+          },
+          () => {},
+        );
+      });
+    };
+    open();
     return () => {
       closed = true;
+      clearTimeout(retry);
       source.close();
     };
   }, [id]);

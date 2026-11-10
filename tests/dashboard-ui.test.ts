@@ -100,6 +100,32 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
     }
   });
 
+  it('opens the live stream again when it has been answered with an error', async () => {
+    const runner = await organisation('Behind a proxy');
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    page.setDefaultTimeout(10_000);
+    // What a proxy or a tunnel in front of the server says while the server is away: the next attempt to open the stream
+    // gets an error for an answer, which a browser takes as final.
+    let refused = 0;
+    await page.route('**/api/orgs/*/events', (route) => (refused++ === 0 ? route.fulfill({ status: 502, contentType: 'text/plain', body: 'Bad gateway' }) : route.continue()));
+    try {
+      // On the first attempt of all: the page must not sit at "Loading…".
+      await page.goto(base + '/#/org/' + runner.org.id);
+      await page.getByRole('heading', { name: 'Behind a proxy', exact: true }).waitFor();
+      await page.getByText('Reconnecting…').waitFor({ state: 'detached' });
+      // And on a stream that had been open: it drops, the browser's own attempt to reopen it is refused, and the page opens it again.
+      refused = 0;
+      server.closeAllConnections();
+      await page.getByText('Reconnecting…').waitFor();
+      await page.getByText('Reconnecting…').waitFor({ state: 'detached' });
+      expect(refused).toBeGreaterThan(1);
+      runner.updateSettings({ pace: 'slow' });
+      await page.locator('.pace-options [aria-checked=true]').filter({ hasText: 'Slow' }).waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
   it('leaves the Help dialog as it is while the organisation changes behind it', async () => {
     const runner = await organisation('Reading the guide');
     const page = await open('/#/org/' + runner.org.id);
