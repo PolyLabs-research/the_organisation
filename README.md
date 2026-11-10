@@ -554,7 +554,10 @@ data/claude-code/      for the Claude Code connection: the standing instructions
 data/managed.json      ids of the agents and environments hosted sessions start from
 data/connections.json  the API keys added in the interface, and what each was last seen to offer
                        (and whether Claude Code is connected, which has no key)
+data/server.lock       which server is using this folder, while one is
 ```
+
+One server uses a data folder at a time. A second one started on the same folder would save over the first one's state and could run the same organisations, spending twice, so it waits a few seconds for the first to go (a server being restarted is on its way out) and otherwise does not start, and says which server holds the folder. A server that died without letting go is recognised: at once on the same machine, and after a few seconds of silence otherwise.
 
 `connections.json` holds keys in the clear, readable only by your user. Leave it out of anything you share or back up to somewhere others can read; the whole `data/` folder is already ignored by git. Nothing in the data folder is ever served to a browser: with `npm run dev` the client is served from the project folder, which the data folder is inside by default, and requests for anything in it are turned away.
 
