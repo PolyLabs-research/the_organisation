@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/server/app';
-import type { Config } from '../src/server/config';
+import { loadConfig, type Config } from '../src/server/config';
 import { MockProvider } from '../src/server/providers/mock';
 import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
@@ -302,6 +302,62 @@ describe('who may call the API', () => {
     });
     expect(status).toBe(403);
     await new Promise<void>((resolve) => other.close(() => resolve()));
+  });
+
+  it('answers a server opened to other machines by address, and by no name it was not told is its own', async () => {
+    const config: Config = { port: 0, host: '0.0.0.0', allowedHosts: ['office-box.lan'], dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
+    const other = createApp(registry, config).listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => other.once('listening', resolve));
+    const { port } = other.address() as AddressInfo;
+    const ask = (host: string, method = 'GET', headers: Record<string, string> = {}) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, method, path: '/api/orgs', headers: { host, ...headers } }, (res) => {
+          let body = '';
+          res.on('data', (chunk) => (body += chunk));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        });
+        req.on('error', reject);
+        req.end(method === 'GET' ? undefined : '{}');
+      });
+    try {
+      // An address cannot be pointed anywhere else, so a request that names one is addressed to this machine.
+      expect((await ask(`10.1.2.3:${port}`)).status).toBe(200);
+      expect((await ask(`[fd00::12]:${port}`)).status).toBe(200);
+      expect((await ask(`localhost:${port}`)).status).toBe(200);
+      expect((await ask(`Office-Box.lan:${port}`)).status).toBe(200);
+      // A page that has pointed a name of its own at this machine sends that name, and an Origin to match it.
+      const read = await ask(`attacker.example:${port}`);
+      expect(read.status).toBe(403);
+      expect(read.body).toContain('ORG_ALLOWED_HOSTS');
+      const before = registry.list().length;
+      const drive = await ask(`attacker.example:${port}`, 'POST', { origin: `http://attacker.example:${port}`, 'content-type': 'application/json' });
+      expect(drive.status).toBe(403);
+      expect(registry.list().length).toBe(before);
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
+  });
+
+  it('reads the names it may answer to from ORG_ALLOWED_HOSTS', () => {
+    expect(loadConfig({}).allowedHosts).toEqual([]);
+    expect(loadConfig({ ORG_ALLOWED_HOSTS: ' Office-Box.lan:4780, ,other.example ' }).allowedHosts).toEqual(['office-box.lan', 'other.example']);
+  });
+
+  it('answers to its own name when that is what it was told to listen on', async () => {
+    const config: Config = { port: 0, host: 'office-box.lan', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
+    const other = createApp(registry, config).listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => other.once('listening', resolve));
+    const { port } = other.address() as AddressInfo;
+    const status = (host: string) =>
+      new Promise<number>((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port, path: '/api/orgs', headers: { host } }, (res) => (res.resume(), resolve(res.statusCode ?? 0))).on('error', reject);
+      });
+    try {
+      expect(await status(`office-box.lan:${port}`)).toBe(200);
+      expect(await status(`other-box.lan:${port}`)).toBe(403);
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
   });
 
   it('refuses to start an organisation that is being deleted', async () => {

@@ -572,12 +572,13 @@ A folder is loaded only if its name is the organisation's id, so a copy kept bes
 | `ORG_PROVIDER` | `auto` | `auto` simulates until the server is first given a key, and calls real models from then on. `mock` simulates whatever keys there are. |
 | `PORT` | `4780` | Port to listen on. |
 | `HOST` | `127.0.0.1` | Address to listen on. |
+| `ORG_ALLOWED_HOSTS` | none | When `HOST` is not loopback: the names, separated by commas, that this machine is reached by (`office-box.lan`). Requests addressed to it by IP address need nothing here. |
 | `ORG_DATA_DIR` | `./data` | Where organisations are stored. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | OAuth Web application client for Gmail connections; see the [setup guide](docs/email-and-accounts.md). |
 | `ORG_BROWSER_PATH` | installed Google Chrome | Optional Chromium executable for the business account browser. |
 | `ANTHROPIC_WORKSPACE_ID` | Default workspace | The workspace your API key belongs to, for links from a plan to its hosted session in the Console. |
 
-The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection and business email/account controls are switched off in that case.
+The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection and business email/account controls are switched off in that case. The server then answers requests addressed to it by IP address, or by a name listed in `ORG_ALLOWED_HOSTS`, and by no other name: a web page can point a name of its own at your machine, and without this rule the browser would let that page use the API as if it were the server's own. This holds inside a container too, where the server has to listen on `0.0.0.0` even when the port is published to your machine alone.
 
 ## Development
 

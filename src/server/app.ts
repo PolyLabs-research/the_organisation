@@ -3,6 +3,7 @@ import { accessRoutes } from './access-routes';
 import { AccessError } from './access-vault';
 import { googleRoutes } from './access-google';
 import { operatingDigest } from '../shared/business';
+import { isIP } from 'node:net';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_AGENTS_PER_LEAD, MAX_LEADS, PROFILES } from '../shared/profiles';
 import type { CreateOrgRequest } from '../shared/types';
@@ -41,12 +42,28 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
 
   // The API has no login: it trusts whoever can reach it. These two checks
   // keep web pages out. A page on another site cannot drive the API by making
-  // the browser post to it, and (when bound to loopback) cannot read it by
-  // pointing a hostname of its own at 127.0.0.1.
+  // the browser post to it, and cannot read it by pointing a hostname of its
+  // own at this machine, whichever address the server listens on.
+  const loopbackOnly = LOOPBACK_BINDINGS.has(config.host);
+  const named = new Set([config.host, ...(config.allowedHosts ?? [])].map((name) => name.toLowerCase()));
+  /** Whether a request addressed to `host` is one this server answers. */
+  const answersTo = (host: string): boolean => {
+    if (LOOPBACK.has(host)) return true;
+    // Listening on loopback only, nothing else is an honest address for it.
+    if (loopbackOnly) return false;
+    // Listening beyond loopback, it is reached by address, or by a name it has been told is its own. An address
+    // cannot be pointed anywhere else. A name can: that is how a page reaches a server it has no business with.
+    return isIP(host.replace(/^\[|\]$/g, '')) !== 0 || named.has(host);
+  };
+
   app.use('/api', (req, res, next) => {
     const host = hostname(req.headers.host);
-    if (LOOPBACK_BINDINGS.has(config.host) && !LOOPBACK.has(host)) {
-      res.status(403).json({ error: 'This server only answers requests addressed to localhost.' });
+    if (!answersTo(host)) {
+      res.status(403).json({
+        error: loopbackOnly
+          ? 'This server only answers requests addressed to localhost.'
+          : `This server does not answer to the name "${host.slice(0, 100)}". If that name is this machine's, add it to ORG_ALLOWED_HOSTS.`,
+      });
       return;
     }
     const origin = req.headers.origin;
