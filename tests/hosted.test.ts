@@ -698,6 +698,34 @@ describe('a hosted session that goes wrong', () => {
     expect(h.org.board.find((m) => m.title === 'CTO session ended early')?.body).toContain('the sandbox was shut down.');
   });
 
+  it('keeps the report its lead had already made when the session ends before it could be wound up', async () => {
+    let sessions = 0;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks, context }) => {
+        sessions += 1;
+        hooks.session({ id: `sesn_${sessions}`, consoleUrl: null, budgetUsd: 5 });
+        hooks.assigned({ threadId: 'sthr_a', agentName: 'Team agent', brief: 'Write the release notes.', runId: null });
+        for (const phase of context.phases as Array<{ name: string }>) hooks.phase({ phase: phase.name, summary: 'Done.', decisions: [] });
+        hooks.report({ headline: 'Shipped', summary: 'The plan is delivered.', outcomes: ['It works.'], asks: [] });
+        // The report is with the organisation. Then the session ends by itself, before its lead's turn was seen to end.
+        return { status: 'lost', reason: 'the session ended by itself.' };
+      }),
+    });
+    await runToRest(h.runner);
+    const plan = planOf(h.org);
+    expect(h.org.lastError).toBeNull();
+    expect(plan.status).toBe('done');
+    expect(h.org.reports.find((r) => r.id === plan.reportId)?.headline).toBe('Shipped');
+    // No second session is started only to have the report made again.
+    expect(sessions).toBe(1);
+    expect(plan.managed).toMatchObject({ sessionId: 'sesn_1', state: 'finished', pendingReport: null, attempts: 0 });
+    expect(plan.managed!.past ?? []).toEqual([]);
+    expect(h.org.board.some((m) => m.title === 'CTO session ended early')).toBe(false);
+    expect(plan.phases.flatMap((p) => p.tasks).some((t) => t.status === 'running')).toBe(false);
+  });
+
   it('stops the organisation with the reason when a second session is lost too', async () => {
     h = await harness({ settings: HOSTED, executives: ONE_LEAD, mock: { lostSessions: 2, runs: 'never' } });
     await runToRest(h.runner);

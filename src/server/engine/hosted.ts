@@ -629,8 +629,17 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         closeOpenWork(plan, managed, 'failed', 'The plan was cancelled.');
         managed.state = 'finished';
         return;
-      case 'lost':
-        return lose(outcome.reason);
+      case 'lost': {
+        // A report the lead has already made, with every phase recorded, stands whatever became of the session
+        // afterwards. Its files came home as each phase was recorded; only a last look for more was missed.
+        const report = managed.pendingReport;
+        if (plan.status !== 'executing' || !report || plan.phases.some((p) => p.status !== 'done')) return lose(outcome.reason);
+        closeOpenWork(plan, managed, 'done', null);
+        managed.state = 'finished';
+        managed.pendingReport = null;
+        fileReport(org, plan, lead, report, managed.files);
+        return;
+      }
     }
   };
 }
