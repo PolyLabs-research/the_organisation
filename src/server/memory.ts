@@ -15,7 +15,11 @@ import type { Workspace } from './workspace';
 // not already kept somewhere else: lose the index and it is built again from the organisation's own files.
 
 const MAX_ITEM_CHARS = 8_000;
-/** All the agents' task reports together, from archived cycles. Past this the oldest cycles' are let go: what was reported to the board about that work stays. */
+/**
+ * All the agents' task reports together, from archived cycles. Past this the oldest cycles' are let go: what was reported
+ * to the board about that work stays. What was reported, decided and planned is kept for every cycle, without limit: it
+ * comes to a few tens of thousands of characters a cycle, which thousands of cycles do not make much of.
+ */
 const MAX_TASK_CHARS = 24_000_000;
 /** A file larger than this is not indexed. */
 const MAX_FILE_BYTES = 400_000;

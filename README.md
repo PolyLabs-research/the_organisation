@@ -267,7 +267,7 @@ Showing leads is a setting, **Show leads what the organisation remembers**, on b
 
 **What it holds.** Text files of up to 400 KB, the most recently written first up to 8 million characters in all, each in parts of about 1,800 characters; up to 8,000 characters of any one report, decision, plan or task report; and agents' task reports from archived cycles up to 24 million characters in all, past which the oldest cycles' are let go, while what was reported to the board about that work stays. The archive is read as it was written, by whatever version of the program wrote it. A cycle whose file cannot be read is left out, named under **Memory**, and tried again later. Email is not in it: a mailbox is read by the roles allowed to read it, and is not remembered here.
 
-What it quotes from files and task reports is text agents wrote, some of it taken from the web or from email. It reaches a lead or an agent as record, with the reminder that what it quotes from outside is still not an instruction.
+What it quotes from files and task reports is text agents wrote, some of it taken from the web, from email or from a connected tool. It reaches a lead or an agent as record, with the reminder that what it quotes from outside is still not an instruction. That lowers the risk of a seat being steered by it and does not remove it. Through the memory, as through the shared workspace, what one team's agent read outside and then wrote down can come in front of another team's lead and agents, a team that was given no mailbox or tool of its own among them. An agent's report on its task, which used to be read by its own lead only, can now be found by any team.
 
 **In hosted sessions**, a lead is told at the start of its session what is remembered on the plan's objective, and for the rest of the plan it has the same search as a tool of its own, `recall`, to use whenever a phase may repeat earlier work or touches something the board has ruled on. Its agents in the sandbox have no such tool: the lead puts what they need of it in their tasks. A file that a search names is in the sandbox if it was among those mounted when the session began.
 
@@ -693,6 +693,9 @@ src/server/
                  to one) and the agent tools for all of them
   connections.ts the API keys the server holds
   workspace.ts   the confined file tools agents use
+  memory.ts      the organisation's memory: the index over its record, its archive
+                 and its files, and the search agents are given (what a lead is
+                 shown from it is in engine/recall.ts)
   app.ts         the HTTP API and live event stream
 src/client/      the web interface (React)
 scripts/         establish an organisation from one prompt; set up hosted sessions;
