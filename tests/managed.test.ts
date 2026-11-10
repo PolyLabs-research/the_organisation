@@ -1,9 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import Anthropic from '@anthropic-ai/sdk';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { cancelPlan } from '../src/server/engine/handlers';
 import { ClaudeProvider } from '../src/server/providers/claude';
+import { Uploads } from '../src/server/providers/managed/files';
 import { MockProvider } from '../src/server/providers/mock';
 import { ProviderError, type BoardReportDraft, type PlanHooks, type PlanJob, type PlanOutcome } from '../src/server/providers/types';
 import { FakeManagedApi, type FakeSession } from './fake-managed-api';
@@ -388,6 +390,35 @@ describe('starting a session for a plan', () => {
     expect(api.count('POST', '/v1/sessions')).toBe(3); // one refused with "not found", then one that worked
     expect(api.agents.size).toBe(2);
     expect(api.session().created.agent.id).toBe([...api.agents.keys()][1]);
+  });
+
+  it('sends a workspace file once when several plans of one organisation start together, and keeps one record of it', async () => {
+    const workspace = path.join(dir, 'workspace');
+    await mkdir(workspace, { recursive: true });
+    const files = await Promise.all(
+      ['a.md', 'b.md', 'c.md', 'd.md', 'e.md', 'f.md'].map(async (p) => {
+        await writeFile(path.join(workspace, p), `# ${p}`);
+        const s = await stat(path.join(workspace, p));
+        return { path: p, absolutePath: path.join(workspace, p), size: s.size, modifiedAt: s.mtime.toISOString() };
+      }),
+    );
+    const client = new Anthropic({ apiKey: 'test-key', baseURL: api.baseURL, maxRetries: 0 });
+    const stateDir = path.join(dir, 'state');
+    // Each plan has its own look at the organisation's one record of what has been uploaded.
+    const together = () => Promise.all([1, 2, 3].map(() => new Uploads(client, stateDir).ensure(files)));
+    const mounts = await together();
+    expect(api.count('POST', '/v1/files')).toBe(files.length);
+    expect(mounts[1]).toEqual(mounts[0]);
+    expect(mounts[2]).toEqual(mounts[0]);
+    expect(mounts[0]!.map((m) => m.path)).toEqual(files.map((f) => f.path));
+
+    // And again, many times over, with nothing left to send: every look gets its answer and the record stays whole.
+    for (let round = 0; round < 40; round++) expect(await together()).toHaveLength(3);
+    // One that finds the ids on file refused, at the same moment, waits its turn like the others.
+    const forgetful = new Uploads(client, stateDir);
+    await Promise.all([new Uploads(client, stateDir).ensure(files), forgetful.forget(), new Uploads(client, stateDir).ensure(files)]);
+    expect(Object.keys(JSON.parse(await readFile(path.join(stateDir, 'uploads.json'), 'utf8'))).sort()).toEqual(files.map((f) => f.path));
+    expect(await readdir(stateDir)).toEqual(['uploads.json']);
   });
 
   it('finds the session it created when the reply to the request was lost, and starts no second one', async () => {

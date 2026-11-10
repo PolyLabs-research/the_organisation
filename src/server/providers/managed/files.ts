@@ -30,6 +30,27 @@ export interface Mount {
   fileId: string;
 }
 
+/**
+ * One at a time for each record. Every plan has its own `Uploads` for its organisation's one record, and plans
+ * that start together would each read it before any had written it: every file would be sent once per plan,
+ * and their writes of the record would run into one another.
+ */
+const turns = new Map<string, Promise<void>>();
+
+function inTurn<T>(record: string, work: () => Promise<T>): Promise<T> {
+  const result = (turns.get(record) ?? Promise.resolve()).then(work);
+  // Whoever is next goes ahead whether this went well or not.
+  const done = result.then(
+    () => {},
+    () => {},
+  );
+  turns.set(record, done);
+  void done.then(() => {
+    if (turns.get(record) === done) turns.delete(record);
+  });
+  return result;
+}
+
 /** The uploads made for one organisation, remembered on disk so an unchanged file is not sent twice. */
 export class Uploads {
   private known: Record<string, Uploaded> | null = null;
@@ -62,7 +83,11 @@ export class Uploads {
   }
 
   /** A file id for each of these files, uploading the ones that are new or have changed since they were last sent. */
-  async ensure(files: PlanJob['files'], signal?: AbortSignal): Promise<Mount[]> {
+  ensure(files: PlanJob['files'], signal?: AbortSignal): Promise<Mount[]> {
+    return inTurn(this.file, () => this.send(files, signal));
+  }
+
+  private async send(files: PlanJob['files'], signal?: AbortSignal): Promise<Mount[]> {
     const known = await this.load();
     const soon = new Date(Date.now() + 3600_000).toISOString();
     const mounts: Mount[] = [];
@@ -99,9 +124,11 @@ export class Uploads {
   }
 
   /** The ids on file were refused. Send everything again next time. */
-  async forget(): Promise<void> {
-    this.known = {};
-    await this.save();
+  forget(): Promise<void> {
+    return inTurn(this.file, async () => {
+      this.known = {};
+      await this.save();
+    });
   }
 }
 
