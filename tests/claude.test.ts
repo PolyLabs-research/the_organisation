@@ -481,6 +481,18 @@ describe('agent runs', () => {
     expect(usage[0]).toMatchObject({ inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 50 });
   });
 
+  it('counts what a lost reply had written by its length, since it never got to say', async () => {
+    const raw = `{"path": "a.md", "content": "${'A line of the file.\n'.repeat(40)}"}`;
+    replies.push({ content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {}, rawInput: raw }], stop_reason: 'tool_use' }, { content: [{ type: 'text', text: 'Done.' }] });
+    const usage: CallUsage[] = [];
+    await provider().agent(agentRequest({ onUsage: (u) => usage.push(u) }));
+    // About four characters to a token: the 800-odd characters that arrived are some 200 tokens of output, not none.
+    expect(usage[0]!.outputTokens).toBe(Math.ceil(raw.length / 4));
+    expect(usage[0]!.costUsd).toBeCloseTo((100 * 4 + Math.ceil(raw.length / 4) * 20 + 900 * 0.2 + 50 * 5) / 1e6, 10);
+    // A reply that did say how long it was is counted as it said.
+    expect(usage[1]!.outputTokens).toBe(40);
+  });
+
   it('sends the same turn again when the API is overloaded', async () => {
     const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
     replies.push(call, { status: 529, error: { type: 'overloaded_error', message: 'Overloaded' } }, { content: [{ type: 'text', text: 'Done.' }] });

@@ -342,16 +342,27 @@ const sleep = (ms: number, signal?: AbortSignal) =>
  */
 async function replyOf(stream: BetaMessageStream, req: Pick<AgentRequest, 'model' | 'signal' | 'onUsage'>): Promise<Anthropic.Beta.BetaMessage> {
   let started: Anthropic.Beta.BetaMessage | undefined;
-  stream.on('streamEvent', (_event, snapshot) => {
+  let written = 0;
+  stream.on('streamEvent', (event, snapshot) => {
     started = snapshot;
+    if (event.type === 'content_block_delta') written += sizeOf(event.delta);
   });
   try {
     return await stream.finalMessage();
   } catch (err) {
-    if (started && !req.signal?.aborted) req.onUsage?.(usageOf(started, req.model));
+    if (started && !req.signal?.aborted) {
+      // A reply says how much it wrote only as it ends. One that never got that far is counted by the length
+      // of what had arrived, at about four characters to a token.
+      const usage = started.stop_reason === null ? { ...started.usage, output_tokens: Math.max(started.usage.output_tokens, Math.ceil(written / 4)) } : started.usage;
+      req.onUsage?.(usageOf({ ...started, usage }, req.model));
+    }
     throw err;
   }
 }
+
+/** How many characters of words, thinking or tool input one piece of a streamed reply carries. */
+const sizeOf = (delta: Anthropic.Beta.BetaRawContentBlockDelta): number =>
+  delta.type === 'text_delta' ? delta.text.length : delta.type === 'input_json_delta' ? delta.partial_json.length : delta.type === 'thinking_delta' ? delta.thinking.length : 0;
 
 /**
  * What of an assistant turn may be sent back, and which tool calls in it are
