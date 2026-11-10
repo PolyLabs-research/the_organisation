@@ -112,10 +112,12 @@ describe('the guard in front of whatever serves files', () => {
   beforeAll(async () => {
     root = await project();
     const app = express();
-    // A file server with no rules of its own, so that only the guard stands between a request and the files.
+    // A file server with no rules of its own, so that only the guard stands between a request and the files. It
+    // serves the project folder at its own address and at the one by which the development server reaches a file
+    // by its full path: this folder, made for the test, and nothing else on the machine.
     app.use(keepDataPrivate(root, path.join(root, 'data')));
     app.use(express.static(root, { dotfiles: 'allow' }));
-    app.use('/@fs', express.static('/', { dotfiles: 'allow' }));
+    app.use(`/@fs${root}`, express.static(root, { dotfiles: 'allow' }));
     server = app.listen(0, '127.0.0.1');
     await new Promise<void>((resolve) => server.once('listening', resolve));
     port = (server.address() as AddressInfo).port;
