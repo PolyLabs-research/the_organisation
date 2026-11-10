@@ -553,9 +553,11 @@ ${filesBlock(files)}${codeBlock(plan, branch)}`;
 }
 
 function taskReport(task: Task): string {
-  if (task.status === 'failed') return `## ${task.title}${task.rework ? ' (rework)' : ''}\nFAILED: ${task.error ?? 'no result'}`;
+  // The id is how a lead says whose work a rework task puts right.
+  const head = `## ${task.title}${task.rework ? ' (rework)' : ''}\nTask id: ${task.id}`;
+  if (task.status === 'failed') return `${head}\nFAILED: ${task.error ?? 'no result'}`;
   const files = task.files.length ? `\nFiles: ${task.files.join(', ')}` : '\nFiles: none written';
-  return `## ${task.title}${task.rework ? ' (rework)' : ''}\n${(task.result ?? '').slice(0, 6000)}${files}`;
+  return `${head}\n${(task.result ?? '').slice(0, 6000)}${files}`;
 }
 
 export interface ReviewFile {
@@ -593,7 +595,7 @@ export function phaseReviewPrompt(org: Organisation, plan: Plan, index: number, 
       ? 'The system has not passed this gate, so the phase cannot pass and will go back for rework whatever you decide. Give the tasks that will fix it. Agents can read the checks and the logs of failed runs with read_repository.'
       : 'The system has not passed this gate and the phase cannot be sent back again, so the plan stops here. Say in your summary what was tried and what is left.'
     : canRework
-      ? 'Pass the phase if it meets its purpose and deliverable well enough for the next phase to rely on. Send it back for rework only if a specific, fixable gap would undermine what follows, and then give the tasks that close the gap.'
+      ? 'Pass the phase if it meets its purpose and deliverable well enough for the next phase to rely on. Send it back for rework only if a specific, fixable gap would undermine what follows, and then give the tasks that close the gap. For each of those, say which task\'s work it puts right, by that task\'s id, or leave that empty if it is work no task was asked to do.'
       : 'This phase has already been sent back as often as it can be. Pass it now, and record in your summary anything that remains open so the next phase can allow for it.';
   return `Your agents have finished phase ${index + 1} of ${plan.phases.length}, ${phase.name}.
 

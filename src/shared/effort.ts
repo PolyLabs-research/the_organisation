@@ -1,4 +1,5 @@
 import type { ActivityEntry, Organisation, Plan } from './types';
+import { modelForTask } from './routing';
 import { waitedIndex } from './waits';
 
 /**
@@ -259,7 +260,8 @@ function planForecast(
       // Handed out: place each unfinished task on the agent expected to be free first.
       const free = Array.from({ length: slots }, () => now);
       for (const task of phase.tasks.filter((t) => t.status === 'running')) {
-        const est = tasks.estimate(task.effort, model);
+        // On the model the task was given to: with a ladder of agent models, that depends on its rating.
+        const est = tasks.estimate(task.effort, task.model ?? model);
         const slot = Math.min(Math.max((task.agent ?? 1) - 1, 0), slots - 1);
         const started = task.startedAt ? Date.parse(task.startedAt) : now;
         const taskEnd = est ? Math.max(now + MINUTE / 6, started + est.minutes * MINUTE) : now;
@@ -268,7 +270,7 @@ function planForecast(
       }
       let complete = true;
       for (const task of phase.tasks.filter((t) => t.status === 'pending')) {
-        const est = tasks.estimate(task.effort, model);
+        const est = tasks.estimate(task.effort, modelForTask(org, phase, task));
         if (!est) {
           complete = false;
           continue;

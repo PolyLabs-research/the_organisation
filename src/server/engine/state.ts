@@ -1,6 +1,7 @@
 import { emptyBusiness } from '../../shared/business';
 import { STANDARD_APPROACH } from '../../shared/approaches';
 import { PROFILE_BY_ID, MAX_LEADS, executiveFromDraft } from '../../shared/profiles';
+import { MAX_LADDER, MAX_RUNG_LEVEL } from '../../shared/routing';
 import { describeRequest, isOpen, waitingOnPerson } from '../../shared/signatory';
 import type {
   BoardMessage,
@@ -8,6 +9,7 @@ import type {
   CreateOrgRequest,
   CycleRecord,
   Executive,
+  LadderRung,
   Organisation,
   OrgSettings,
   Pace,
@@ -39,6 +41,8 @@ export const DEFAULT_SETTINGS: OrgSettings = {
   workflowRuns: true,
   archiveSessions: false,
   signatory: 'human',
+  workerLadder: [],
+  workerLadderLearns: true,
 };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -62,6 +66,32 @@ export function assertModelRefs(patch: Partial<OrgSettings> | undefined): void {
   for (const [seat, value] of [['executives', patch?.executiveModel], ['agents', patch?.workerModel]] as const) {
     if (value !== undefined && !isModelRef(value)) throw new ValidationError(`The model named for the ${seat} is not a model’s name.`);
   }
+  if (patch?.workerLadder === undefined) return;
+  if (!Array.isArray(patch.workerLadder)) throw new ValidationError('The cheaper models for the agents’ lighter tasks must be a list.');
+  for (const rung of patch.workerLadder as unknown[]) {
+    const { model, upTo } = (rung ?? {}) as Partial<LadderRung>;
+    if (!isModelRef(model)) throw new ValidationError('A model named for the agents’ lighter tasks is not a model’s name.');
+    if (typeof upTo !== 'number' || !Number.isInteger(upTo) || upTo < 1 || upTo > MAX_RUNG_LEVEL) {
+      throw new ValidationError(`Say which tasks ${model} takes: those rated up to a level from 1 to ${MAX_RUNG_LEVEL}.`);
+    }
+  }
+}
+
+/**
+ * A ladder as it is kept: at most three rungs, each a different model from the others and from the agents' own,
+ * and each reaching higher than the one below it. What does not fit is left out or moved up, so that the
+ * levels always read lightest first.
+ */
+function tidyLadder(value: unknown, top: string): LadderRung[] {
+  const out: LadderRung[] = [];
+  for (const item of Array.isArray(value) ? (value as unknown[]) : []) {
+    const { model, upTo } = (item ?? {}) as Partial<LadderRung>;
+    if (!isModelRef(model) || model === top || out.some((rung) => rung.model === model)) continue;
+    const least = (out.at(-1)?.upTo ?? 0) + 1;
+    if (out.length >= MAX_LADDER || least > MAX_RUNG_LEVEL) break;
+    out.push({ model, upTo: Math.round(clamp(upTo, least, MAX_RUNG_LEVEL, least)) });
+  }
+  return out;
 }
 
 /** A ceiling on the follow-up plans one lead may start in a cycle, whatever the reports say. */
@@ -153,6 +183,9 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
     workflowRuns: typeof p.workflowRuns === 'boolean' ? p.workflowRuns : base.workflowRuns,
     archiveSessions: typeof p.archiveSessions === 'boolean' ? p.archiveSessions : base.archiveSessions,
     signatory: p.signatory === 'ai' || p.signatory === 'human' ? p.signatory : base.signatory,
+    // Tidied against the agents' model as it will be: a rung that names that model is no rung.
+    workerLadder: tidyLadder(p.workerLadder !== undefined ? p.workerLadder : base.workerLadder, model(p.workerModel, base.workerModel)),
+    workerLadderLearns: typeof p.workerLadderLearns === 'boolean' ? p.workerLadderLearns : (base.workerLadderLearns ?? true),
   };
 }
 
@@ -363,6 +396,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     usage: emptyUsage(),
     usageByExec: {},
   };
+  syncRouting(org);
   postToBoard(
     org,
     'system',
@@ -386,6 +420,22 @@ export function addSteer(org: Organisation, text: string): void {
   };
   org.steers.push(steer);
   postToBoard(org, 'steer', 'shareholders', 'Shareholder steer', steer.text);
+}
+
+/**
+ * Bring what the organisation has learned about its ladder of agent models into line with its settings. The
+ * ladder starts where the settings put it. A change to the ladder itself (a model, a level, or whether it follows
+ * results) starts it afresh: what was learned was about another ladder.
+ */
+export function syncRouting(org: Organisation): void {
+  const set = org.settings.workerLadder;
+  if (!set.length || !org.settings.workerLadderLearns) {
+    org.routing = null;
+    return;
+  }
+  const same = (a: LadderRung[], b: LadderRung[]) => a.length === b.length && a.every((rung, i) => rung.model === b[i]!.model && rung.upTo === b[i]!.upTo);
+  if (org.routing && Array.isArray(org.routing.from) && Array.isArray(org.routing.rungs) && same(org.routing.from, set)) return;
+  org.routing = { from: set.map((rung) => ({ ...rung })), rungs: set.map((rung) => ({ model: rung.model, upTo: rung.upTo, ceiling: null, recent: [] })) };
 }
 
 /** Seat or unseat the judge so the roster matches the arbiter setting. */
@@ -450,6 +500,7 @@ export function normaliseLoaded(org: Organisation): Organisation {
   // From before there were work approaches: every plan ran the lead's own profile.
   org.workApproaches ??= {};
   syncSignatory(org);
+  syncRouting(org);
   for (const plan of org.plans) {
     plan.execution ??= null;
     plan.managed ??= null;

@@ -14,6 +14,7 @@ import type {
   Task,
 } from '../../shared/types';
 import { MAX_AGENTS_PER_LEAD } from '../../shared/profiles';
+import { modelForTask } from '../../shared/routing';
 import { INTERRUPTED } from '../../shared/types';
 import { waitsOnAi } from '../../shared/signatory';
 import { ProviderError, type CallUsage, type Provider } from '../providers/types';
@@ -41,6 +42,7 @@ import {
   planById,
   postToBoard,
   sanitiseSettings,
+  syncRouting,
   sessionAllowance,
   syncJudge,
   toClientView,
@@ -276,6 +278,12 @@ export class OrgRunner {
         throw new ValidationError(`The model chosen for the ${seat}, "${model}", is not one a connected key can call. Add its key under Models and keys, or pick another model.`);
       }
     }
+    for (const rung of next.workerLadder) {
+      const had = org.settings.workerLadder.some((old) => old.model === rung.model);
+      if (!had && this.provider.knows && !this.provider.knows(rung.model)) {
+        throw new ValidationError(`The model chosen for the agents' lighter tasks, "${rung.model}", is not one a connected key can call. Add its key under Models and keys, or pick another model.`);
+      }
+    }
     const oldInterval = org.settings.reviewIntervalMinutes;
     const hadWeb = org.settings.webResearch;
     org.settings = next;
@@ -296,6 +304,7 @@ export class OrgRunner {
       }
     }
     syncJudge(org);
+    syncRouting(org);
     if (org.settings.signatory !== holder) {
       // What the person took back from an earlier AI ruling stays with the person, so it is not counted.
       const waiting = org.signatory.requests.filter((r) => waitsOnAi(r, 'ai')).length;
@@ -803,11 +812,13 @@ export class OrgRunner {
     };
     this.inFlight.set(item.key, active);
     const task = this.taskOf(item);
-    if (task) {
+    if (task && item.kind === 'task') {
       task.status = 'running';
       task.agent = agent;
       task.startedAt = active.startedAt;
       task.attempts += 1;
+      // Which model the task goes to is settled as it starts: by its rating, from the ladder as it now stands.
+      task.model = modelForTask(org, planById(org, item.planId)?.phases[item.phaseIndex] ?? null, task);
     }
     void this.run(item, active);
   }

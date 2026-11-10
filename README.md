@@ -149,7 +149,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 - [The interface](#the-interface)
 - [Signing and paying](#signing-and-paying)
 - [Models and keys](#models-and-keys), and [Claude Code in place of a key](#claude-code-in-place-of-a-key)
-- [Spend and limits](#spend-and-limits)
+- [Spend and limits](#spend-and-limits), and [lighter tasks on cheaper models](#lighter-tasks-on-cheaper-models)
 - [What agents can and cannot do](#what-agents-can-and-cannot-do)
 - [Hosted sessions](#hosted-sessions-claude-managed-agents)
 - [Data](#data) and [Configuration](#configuration)
@@ -487,6 +487,7 @@ An organisation that never stops can spend without limit, so every organisation 
 What drives spend, and where to change it (wizard or settings):
 
 - **The model for the agents.** Agents do most of the work. Executives and agents start on the same model: Claude Opus 5.5 where there is an Anthropic key, and otherwise a mid-priced model of the first key connected (`gpt-6.1-sol` for OpenAI, for example). Each can be set separately.
+- **Cheaper models for the agents' lighter tasks** (none by default). See [below](#lighter-tasks-on-cheaper-models).
 - **Effort** for executives and agents (default medium).
 - **Agents per lead** and **tasks per phase** (default at most 4 tasks).
 - **Follow-up work per cycle** (default one round, and never more than two follow-up plans per lead).
@@ -494,6 +495,17 @@ What drives spend, and where to change it (wizard or settings):
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
 If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. A failure that belongs to one agent's task and not to the provider (the model declined it, its reply was cut off or made no sense, or what the agent had read grew past what the model takes) fails that task alone: the lead sees it at the phase gate and decides what to do, and the organisation carries on. Token counts an endpoint reports that are not numbers are set aside, and the call is counted by its length instead. Should a call's cost still come back as something that is not a number, it is not added to the spend: the organisation pauses and says so, since a total that is not a number could never reach the budget. By default, an organisation that was running comes back paused after a server restart. The optional resume-on-restart setting restores a previously running or waiting organisation automatically, while retaining manual pauses and limits.
+
+### Lighter tasks on cheaper models
+
+Leads rate every task they hand out from 1 to 10 on the effort scale, and most tasks are small. By default every task still goes to the one model chosen for the agents. In the wizard or in settings you can put up to three cheaper models under it, each with the highest rating it takes: tasks rated up to 2 to a fast model, say, and up to 4 to a mid-priced one. A task rated above the last of them, or not rated at all, stays on the agents' model. The models can be on different keys.
+
+- **Work that is sent back goes up.** When a lead sends a phase back at its gate, it says which task's work each new task puts right. That new task goes one model above the one that fell short, or above where its own rating would have put it if the lead named no task.
+- **The levels follow results**, unless you switch that off. A lead's review is the only judge of whether a model was up to its work: each task it reads either stands or is sent back, and a task that failed counts as sent back. Where the system's own checks stop a phase and the lead names no task, every task of that review counts as sent back. A model that has had 3 of its last 8 tasks sent back gives up its highest level, and is not tried there again. A model whose last 5 tasks at its highest level all stood, with nothing sent back in between, is tried one level higher. The board is told each time a level moves.
+- Changing the ladder in settings, a model or a level, starts what was learned afresh.
+- Each task in **Plans** shows the model it was given to, and the Overseer's forecast uses it.
+
+This is for work on this machine. In a [hosted session](#hosted-sessions-claude-managed-agents) every agent runs on the agents' model.
 
 On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is what the API would charge for the same tokens. With a subscription login none of it is billed; the budget is then a limit on how much of your plan an organisation may use.
 

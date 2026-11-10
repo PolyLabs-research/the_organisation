@@ -654,7 +654,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
 
       case 'phase_review': {
         const phase = c.phase as { name: string; index: number };
-        const tasks = c.tasks as Array<{ title: string; status: string; files: string[] }>;
+        const tasks = c.tasks as Array<{ id?: string; title: string; status: string; files: string[] }>;
         const done = tasks.filter((t) => t.status === 'done').length;
         const failed = tasks.length - done;
         const mode = this.options.rework ?? 'once';
@@ -668,6 +668,8 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
                 title: `${phase.name}: reconcile with the previous phase`,
                 brief: `Read the files from the previous phase and the ${phase.name} files, and write one reconciled version that removes the contradictions between them.`,
                 effort: 3,
+                // The lightest of the phase's tasks is the one whose work is put right.
+                redoes: tasks.at(-1)?.id ?? '',
               },
             ],
             decisions: [],

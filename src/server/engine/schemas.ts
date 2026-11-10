@@ -167,6 +167,11 @@ const TaskSpec = z.object({
   effort: Effort('this task'),
 });
 
+/** A task that puts right what a phase's review found. */
+const ReworkSpec = TaskSpec.extend({
+  redoes: z.string().default('').describe('The id of the task whose work this puts right, as shown above its report (like t12). Empty if this is work that no task was asked to do'),
+});
+
 export const Kickoff = z.object({
   tasks: z.array(TaskSpec),
   notes: z.string().describe('Anything every agent on this phase should know; may be empty'),
@@ -189,7 +194,7 @@ export const PhaseReview = z.object({
   operations: BusinessUpdates,
   verdict: z.enum(['pass', 'rework']),
   summary: z.string().describe('What the phase produced and what the next phase should rely on'),
-  reworkTasks: z.array(TaskSpec).describe('For "rework": the tasks that close the gap. Otherwise empty'),
+  reworkTasks: z.array(ReworkSpec).describe('For "rework": the tasks that close the gap. Otherwise empty'),
   decisions: z.array(RemitDecision),
   requests: z.array(RequestSpec).describe('Payments to be made or documents to be signed that the plan now needs from the signatory. Empty at most gates'),
 });
