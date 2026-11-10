@@ -57,6 +57,15 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     registry.create({ name, idea: 'A subscription box that sends people a new houseplant every month, with care instructions.', executives: TEAM, settings: { budgetUsd: 100 } });
 
   /** A page on the dashboard of one organisation, or wherever `address` says. */
+  /**
+   * Press Save in the settings dialog and wait until it has closed, which it does once the server has answered.
+   * The button is no measure of that: it stops saying "Save settings" the moment it is pressed.
+   */
+  async function saveSettings(page: Page): Promise<void> {
+    await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+    await page.locator('dialog[open]').waitFor({ state: 'detached' });
+  }
+
   async function open(address: string): Promise<Page> {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     page.setDefaultTimeout(PATIENCE);
@@ -282,14 +291,12 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       // While the dialog is open, the pace is changed from somewhere else: another window, or a script.
       runner.updateSettings({ pace: 'slow' });
       await page.locator('.pace-options [aria-checked=true]').filter({ hasText: 'Slow' }).waitFor();
-      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
-      await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor({ state: 'detached' });
+      await saveSettings(page);
       expect(sent).toEqual([{ budgetUsd: 150 }]);
       expect(runner.org.settings).toMatchObject({ budgetUsd: 150, pace: 'slow' });
       // A dialog closed with Save and nothing changed sends nothing at all.
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
-      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
-      await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor({ state: 'detached' });
+      await saveSettings(page);
       expect(sent).toHaveLength(1);
     } finally {
       await page.close();
@@ -368,8 +375,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       const level = page.locator('.ladder-rung').first().getByLabel(/^Takes tasks rated up to/);
       expect(await level.inputValue()).toBe('2');
       await level.selectOption('3');
-      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
-      await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor({ state: 'detached' });
+      await saveSettings(page);
       expect(sent).toEqual([{ workerLadder: [{ model: 'claude-haiku-5-5', upTo: 3 }] }]);
       expect(runner.org.routing?.rungs).toEqual([{ model: 'claude-haiku-5-5', upTo: 3, ceiling: null, recent: [] }]);
 
