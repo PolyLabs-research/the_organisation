@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import type { AgentTool } from './types';
+
 // What model providers accept as a JSON Schema for structured output, and reading JSON back out of a reply.
 
 // JSON Schema keywords that structured outputs do not accept. Zod adds numeric bounds to every integer.
@@ -18,6 +21,13 @@ const UNSUPPORTED_KEYWORDS = new Set([
 ]);
 
 export type JsonSchema = Record<string, unknown>;
+
+/** What a tool takes, as a model is shown it: the tool's own schema where it brings one, and otherwise what its zod schema gives. */
+export function toolParameters(tool: Pick<AgentTool, 'schema' | 'parameters'>): JsonSchema {
+  if (tool.parameters) return tool.parameters;
+  const { $schema: _dialect, ...parameters } = z.toJSONSchema(tool.schema) as JsonSchema;
+  return parameters;
+}
 
 /** The schema as structured outputs take it: unsupported keywords removed, objects closed, enums kept. */
 export function strictSchema(node: JsonSchema): JsonSchema {

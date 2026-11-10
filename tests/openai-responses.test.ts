@@ -328,6 +328,16 @@ describe('an agent run through the Responses API', () => {
     expect(third.input.at(-1).output).toBe('engineering/spec.md');
   });
 
+  it('shows the model a tool’s own schema where it brings one, and hands the tool what the model sent', async () => {
+    const taken: unknown[] = [];
+    const parameters = { type: 'object', properties: { number: { type: 'string', description: 'The order number' }, on: { type: 'string', format: 'date' } }, required: ['number'] };
+    const connected: AgentTool = { name: 'orders__find_order', description: 'Look up an order.', schema: z.record(z.string(), z.unknown()), parameters, run: async (input) => (taken.push(input), 'Found.') };
+    api.responses = [{ calls: [{ id: 'call_a', name: 'orders__find_order', arguments: { number: 'A-17', on: '2026-11-10' } }] }, { text: 'Done.' }];
+    await run(provider(), { tools: [...tools(), connected] });
+    expect(api.asked[0].tools[2]).toEqual({ type: 'function', name: 'orders__find_order', description: 'Look up an order.', parameters, strict: false });
+    expect(taken).toEqual([{ number: 'A-17', on: '2026-11-10' }]);
+  });
+
   it('takes the items from the stream when the finished response does not list them', async () => {
     api.responses = [{ reasoning: 'r', calls: [{ id: 'call_a', name: 'list_files', arguments: { directory: '' } }], bareFinal: true }, { text: 'Done.', bareFinal: true }];
     expect(await run(provider())).toEqual({ text: 'Done.', turns: 2, stopped: 'done' });

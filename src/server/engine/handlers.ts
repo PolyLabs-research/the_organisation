@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
-import { accessTools } from '../access-tools';
+import { accessTools, connectedTools } from '../access-tools';
 import { codeTools } from '../access-code-tools';
 import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
@@ -523,6 +523,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       });
       tools.push(...businessTools(org, { id: exec.id, worker: true }, ctx.touch, () => !ctx.halting() && !ctx.signal.aborted && isPlanActive(plan)));
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
+      tools.push(...connectedTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(
         ...codeTools(
           ctx.access,

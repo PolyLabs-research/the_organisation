@@ -7,6 +7,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
 import { MODELS, costOfRequest, hasRates, isKnownModel } from './pricing';
+import { toolParameters } from './schema';
 import { ProviderError, type AgentRequest, type AgentResult, type AgentTool, type CallUsage, type Provider, type StructuredRequest, type SystemPrompt } from './types';
 
 // Runs the organisation on Claude through Claude Code, the program, instead
@@ -422,11 +423,10 @@ class ToolBridge {
       case 'tools/list':
         return ok({
           tools: session.tools.map((tool) => {
-            const { $schema: _dialect, ...inputSchema } = z.toJSONSchema(tool.schema) as Json;
             return {
               name: tool.name,
               description: tool.description,
-              inputSchema,
+              inputSchema: toolParameters(tool) as Json,
               // Offered from the first turn, and allowed results as long as a file an agent may read.
               _meta: { 'anthropic/alwaysLoad': true, 'anthropic/maxResultSizeChars': MAX_RESULT_CHARS },
             };

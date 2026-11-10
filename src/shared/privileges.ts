@@ -3,11 +3,12 @@ import type { Executive, Organisation } from './types';
 // What a role and its agents may do. The shareholders set these, per role, and nothing a seat or an agent does can
 // change them. Each one is enforced where the thing is done: an agent is told what its role may not do, so that it
 // does not waste its turns, but being told is not what stops it. A mailbox or an account must also be assigned to
-// the team under Email & accounts: the privilege says what a role may do, the assignment says with what.
+// the team under Email & accounts, and so must a repository or a tool server: the privilege says what a role may do,
+// the assignment says with what.
 
 export type Privilege =
   | 'web_search' | 'update_records' | 'ask_signatory' | 'read_mail' | 'draft_mail' | 'sign_in' | 'act' | 'create_accounts'
-  | 'read_code' | 'push_code' | 'run_workflows' | 'edit_pipelines';
+  | 'read_code' | 'push_code' | 'run_workflows' | 'edit_pipelines' | 'use_tools';
 
 export interface PrivilegeSpec {
   id: Privilege;
@@ -141,6 +142,15 @@ export const PRIVILEGES: readonly PrivilegeSpec[] = [
     hosted: false,
     needs: 'push_code',
   },
+  {
+    id: 'use_tools',
+    group: 'Connected tools',
+    label: 'Use connected tools',
+    detail: 'Call the tools a person has allowed on tool servers assigned to this team. A tool does whatever its server lets it do, such as changing or deleting something there, and no person checks each call.',
+    forbids: 'use connected tools',
+    byDefault: false,
+    hosted: false,
+  },
 ];
 
 /** What is always so, whatever is ticked: no setting changes these. */
@@ -149,6 +159,7 @@ export const NO_ROLE_CAN = [
   'Send an email: a person reviews and sends every message',
   'See a saved password, token or session cookie',
   'Merge a pull request or push to a repository’s main branch: a person merges',
+  'Call a tool on a connected server that a person has not allowed, or connect a server',
   'Change these privileges, or give itself access to anything',
   'Record a payment or a measurement as confirmed: only a person can',
   'Reach a private or local network address from the account browser',

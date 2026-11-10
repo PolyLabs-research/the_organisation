@@ -418,6 +418,17 @@ describe('agent runs', () => {
     expect(second.system).toEqual(first.system);
   });
 
+  it('shows the model a tool’s own schema where it brings one, and hands the tool what the model sent', async () => {
+    const taken: unknown[] = [];
+    const parameters = { type: 'object', properties: { number: { type: 'string', description: 'The order number' }, on: { type: 'string', format: 'date' } }, required: ['number'] };
+    const connected: AgentTool = { name: 'orders__find_order', description: 'Look up an order.', schema: z.record(z.string(), z.unknown()), parameters, run: async (input) => (taken.push(input), 'Found.') };
+    replies.push({ content: [{ type: 'tool_use', id: 'toolu_1', name: 'orders__find_order', input: { number: 'A-17', on: '2026-11-10' } }], stop_reason: 'tool_use' });
+    replies.push({ content: [{ type: 'text', text: 'Done.' }] });
+    await provider().agent(agentRequest({ tools: [...tools, connected] }));
+    expect(seen[0]!.body.tools[1]).toEqual({ name: 'orders__find_order', description: 'Look up an order.', input_schema: parameters, eager_input_streaming: true });
+    expect(taken).toEqual([{ number: 'A-17', on: '2026-11-10' }]);
+  });
+
   it('offers web search and page reading only when the organisation allows it', async () => {
     replies.push({ content: [{ type: 'text', text: 'Done.' }] });
     await provider().agent(agentRequest({ webSearch: { perRequest: 3, perTask: 8 } }));

@@ -45,6 +45,11 @@ export interface AgentTool {
   name: string;
   description: string;
   schema: z.ZodType<Record<string, unknown>>;
+  /**
+   * What the tool takes, as a JSON Schema, where it comes with one of its own, as a tool on a connected server does.
+   * The model is shown this in place of what `schema` gives, and `schema` still checks what the model sends.
+   */
+  parameters?: Record<string, unknown>;
   run(input: Record<string, unknown>): Promise<string>;
 }
 

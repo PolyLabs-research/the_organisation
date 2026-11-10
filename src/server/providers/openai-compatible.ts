@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import type { Effort } from '../../shared/types';
 import { nearestEffort, type Dialect, type Price } from './catalogue';
-import { extractJson, strictSchema, type JsonSchema } from './schema';
+import { extractJson, strictSchema, toolParameters, type JsonSchema } from './schema';
 import { ProviderError, type AgentRequest, type AgentResult, type CallUsage, type StructuredRequest, type SystemPrompt } from './types';
 
 // Any model that is reached through an OpenAI-compatible Chat Completions
@@ -290,8 +290,7 @@ export class OpenAICompatibleProvider {
    */
   async agent(req: AgentRequest): Promise<AgentResult> {
     const tools: Tool[] = req.tools.map((tool) => {
-      const { $schema: _dialect, ...parameters } = z.toJSONSchema(tool.schema) as Record<string, unknown>;
-      return { type: 'function', function: { name: tool.name, description: tool.description, parameters } };
+      return { type: 'function', function: { name: tool.name, description: tool.description, parameters: toolParameters(tool) } };
     });
     const messages: Message[] = [
       { role: 'system', content: systemText(req.system) },

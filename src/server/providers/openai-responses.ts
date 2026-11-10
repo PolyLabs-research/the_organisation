@@ -22,7 +22,7 @@ import {
   systemText,
   whileItLasts,
 } from './openai-compatible';
-import { extractJson, strictSchema, type JsonSchema } from './schema';
+import { extractJson, strictSchema, toolParameters, type JsonSchema } from './schema';
 import { ProviderError, type AgentRequest, type AgentResult, type CallUsage, type StructuredRequest } from './types';
 
 // OpenAI's own models, through its Responses API. OpenAI's current models
@@ -135,9 +135,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
   /** The same loop as for every other provider: tools run here, spend is counted between turns, and a turn that fails is sent again by itself. */
   override async agent(req: AgentRequest): Promise<AgentResult> {
     const tools: Item[] = req.tools.map((tool) => {
-      const { $schema: _dialect, ...parameters } = z.toJSONSchema(tool.schema) as Record<string, unknown>;
       // Not strict: the arguments are checked here when they arrive, and a strict schema has rules of its own to trip over.
-      return { type: 'function', name: tool.name, description: tool.description, parameters, strict: false };
+      return { type: 'function', name: tool.name, description: tool.description, parameters: toolParameters(tool), strict: false };
     });
     const instructions = systemText(req.system);
     const input: Item[] = [{ role: 'user', content: req.prompt }];

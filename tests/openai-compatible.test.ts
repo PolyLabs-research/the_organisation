@@ -533,6 +533,16 @@ describe('an agent run', () => {
     expect(third.messages[6].content).toBe('engineering/spec.md');
   });
 
+  it('shows the model a tool’s own schema where it brings one, and hands the tool what the model sent', async () => {
+    const taken: unknown[] = [];
+    const parameters = { type: 'object', properties: { number: { type: 'string', description: 'The order number' }, on: { type: 'string', format: 'date' } }, required: ['number'] };
+    const connected: AgentTool = { name: 'orders__find_order', description: 'Look up an order.', schema: z.record(z.string(), z.unknown()), parameters, run: async (input) => (taken.push(input), 'Found.') };
+    api.replies = [{ calls: [{ id: 'call_a', name: 'orders__find_order', arguments: { number: 'A-17', on: '2026-11-10' } }] }, { content: 'Done.' }];
+    await run(provider(), { tools: [...tools(), connected] });
+    expect(api.chats[0].tools[2]).toEqual({ type: 'function', function: { name: 'orders__find_order', description: 'Look up an order.', parameters } });
+    expect(taken).toEqual([{ number: 'A-17', on: '2026-11-10' }]);
+  });
+
   it('sends a model\'s reasoning back with its tool calls where the endpoint wants it kept, and not where it does not', async () => {
     const replies = () => [
       { reasoning: 'I should look at the files first.', calls: [{ id: 'call_a', name: 'list_files', arguments: { directory: '' } }] },

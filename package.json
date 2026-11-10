@@ -32,6 +32,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.5.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ajv": "^8.20.0",
     "express": "^5.3.0",
     "imapflow": "^2.11.0",
     "ipaddr.js": "^2.5.0",

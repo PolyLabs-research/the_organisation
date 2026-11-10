@@ -453,6 +453,8 @@ describe('an agent run through Claude Code', () => {
 
   it('answers a run’s tool calls only at the address that run was given, and to nothing that could be a web page', async () => {
     const kit = tools();
+    const connected: AgentTool = { name: 'orders__find_order', description: 'Look up an order.', schema: z.record(z.string(), z.unknown()), parameters: { type: 'object', properties: { number: { type: 'string' }, on: { type: 'string', format: 'date' } }, required: ['number'] }, run: async (input) => `Found ${String(input.number)} on ${String(input.on)}.` };
+    kit.tools.push(connected);
     const cut = new AbortController();
     const hung = provider({ FAKE_CLAUDE_MODE: 'hang' }).agent(task({ tools: kit.tools, signal: cut.signal }));
     await waitFor(() => existsSync(log), 'the run to start');
@@ -463,10 +465,14 @@ describe('an agent run through Claude Code', () => {
     const listed = await post(url);
     expect(listed.status).toBe(200);
     const list = (await listed.json()) as { result: { tools: Array<{ name: string; inputSchema: Record<string, unknown>; _meta: Record<string, unknown> }> } };
-    expect(list.result.tools.map((t) => t.name)).toEqual(['list_files', 'write_file']);
+    expect(list.result.tools.map((t) => t.name)).toEqual(['list_files', 'write_file', 'orders__find_order']);
     // Offered from the first turn, and allowed results as long as a file an agent may read.
     expect(list.result.tools[1]!._meta).toEqual({ 'anthropic/alwaysLoad': true, 'anthropic/maxResultSizeChars': 200_000 });
     expect(list.result.tools[1]!.inputSchema).toMatchObject({ type: 'object', required: ['path', 'content'] });
+    // A tool that brings a schema of its own, as one on a connected server does, is listed with that schema as it is.
+    expect(list.result.tools[2]).toMatchObject({ name: 'orders__find_order', inputSchema: connected.parameters });
+    const called = (await (await post(url, {}, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'orders__find_order', arguments: { number: 'A-17', on: '2026-11-10' } } })).json()) as { result: { content: Array<{ text: string }> } };
+    expect(called.result.content[0]!.text).toBe('Found A-17 on 2026-11-10.');
 
     expect((await post(url.replace(/[0-9a-f]{48}$/, 'f'.repeat(48)))).status).toBe(404);
     expect((await post(url, { origin: 'https://evil.example' })).status).toBe(403);

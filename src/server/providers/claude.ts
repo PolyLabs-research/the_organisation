@@ -4,7 +4,7 @@ import type { BetaMessageStream } from '@anthropic-ai/sdk/lib/BetaMessageStream'
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
 import { hasCause, translate } from './errors';
-import { strictSchema, type JsonSchema } from './schema';
+import { strictSchema, toolParameters, type JsonSchema } from './schema';
 import { ManagedResources } from './managed/resources';
 import { DEFAULT_TIMINGS, PlanSession, archiveSession, holdSession, threadDetail, type SessionTimings } from './managed/session';
 import { scrub } from './openai-compatible';
@@ -224,11 +224,10 @@ export class ClaudeProvider implements Provider {
    */
   async agent(req: AgentRequest): Promise<AgentResult> {
     const tools: Anthropic.Beta.BetaToolUnion[] = req.tools.map((tool) => {
-      const { $schema: _dialect, ...schema } = z.toJSONSchema(tool.schema) as Record<string, unknown>;
       return {
         name: tool.name,
         description: tool.description,
-        input_schema: schema as Anthropic.Beta.BetaTool.InputSchema,
+        input_schema: toolParameters(tool) as Anthropic.Beta.BetaTool.InputSchema,
         // Stream file contents as they are generated instead of buffering them server-side.
         // The server then no longer validates the input, so it is validated below before use.
         eager_input_streaming: true,

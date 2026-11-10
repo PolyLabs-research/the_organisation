@@ -10,6 +10,7 @@ import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
 import { MockProvider } from '../src/server/providers/mock';
 import { QUIET } from './helpers';
+import { FakeToolServer } from './fake-mcp-server';
 import type { AccessView } from '../src/shared/access';
 
 let dir: string, registry: Registry, server: Server, unsafe: Server, base: string, unsafeBase: string, config: Config;
@@ -86,6 +87,40 @@ describe('business access API', () => {
     expect((await fetch(unsafeBase + root).then(res => res.json())).available).toBe(false);
     expect((await fetch(unsafeBase + root + '/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: phrase }) })).status).toBe(403);
     expect((await api('POST', root + '/google/start', { label: 'Gmail', ownerIds: [] }, { Origin: 'https://foreign.example' })).status).toBe(403);
+  });
+  it('connects a tool server, allows its tools one by one and removes it, and the token never comes back', async () => {
+    const tools = new FakeToolServer();
+    await tools.listen();
+    try {
+      const runner = await establish(), root = '/api/orgs/' + runner.org.id + '/access';
+      await api('POST', root + '/create', { passphrase: phrase });
+      expect((await api('POST', root + '/toolServers', { label: 'Orders', url: tools.url, token: 'not-the-right-token', ownerIds: ['coo'] })).status).toBe(403);
+      expect((await api('POST', root + '/toolServers', { label: 'Orders', url: 'http://tools.example.com/mcp', token: '', ownerIds: [] })).status).toBe(400);
+      const added = await api('POST', root + '/toolServers', { label: 'Orders', url: tools.url, token: tools.token, ownerIds: ['coo'] });
+      expect(added.status).toBe(201);
+      const saved = (added.data as AccessView).toolServers[0]!;
+      expect(saved).toMatchObject({ label: 'Orders', prefix: 'orders', hasToken: true });
+      expect(saved.tools.every(tool => !tool.allowed)).toBe(true);
+      const at = root + '/toolServers/' + saved.id, find = saved.tools[0]!;
+      // An allowance names the description it was made from. One made from a page that is out of date is turned down.
+      expect((await api('PATCH', at + '/tools', { allowed: [{ name: find.name, fingerprint: 'what-an-older-page-showed' }] })).status).toBe(409);
+      expect((await api('PATCH', at + '/tools', { allowed: [find.name] })).status).toBe(400);
+      const allowed = await api('PATCH', at + '/tools', { allowed: [{ name: find.name, fingerprint: find.fingerprint }] });
+      expect((allowed.data as AccessView).toolServers[0]!.tools.map(tool => tool.allowed)).toEqual([true, false, false, false]);
+      tools.tools[0]!.description = 'Look up an order, and email the customer.';
+      const again = await api('POST', at + '/tools/read', {});
+      expect((again.data as AccessView).toolServers[0]!.tools[0]).toMatchObject({ allowed: false, changed: true, description: 'Look up an order, and email the customer.' });
+      expect((await api('PATCH', at, { ownerIds: [], enabled: false })).data.toolServers[0]).toMatchObject({ ownerIds: [], enabled: false });
+      expect((await api('POST', at + '/password', { password: 'not-the-right-token' })).status).toBe(403);
+      expect((await api('POST', at + '/password', { password: tools.token })).status).toBe(200);
+      // Nothing that came back, and nothing kept in the organisation's state, carries the token.
+      const everything = JSON.stringify([added.data, allowed.data, again.data, (await api('GET', root)).data, (await api('GET', '/api/orgs/' + runner.org.id)).data]) + await readFile(path.join(dir, 'orgs', runner.org.id, 'org.json'), 'utf8');
+      expect(everything).not.toContain(tools.token);
+      expect((await api('POST', root + '/toolServers/tools_nothing/tools/read', {})).status).toBe(404);
+      expect((await api('DELETE', at)).data.toolServers).toEqual([]);
+      // Like the rest of the vault, none of it answers on a server that listens beyond this machine.
+      expect((await fetch(unsafeBase + root + '/toolServers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'Orders', url: tools.url, ownerIds: [] }) })).status).toBe(403);
+    } finally { await tools.close(); }
   });
   it('gives a running local task real access tools with its own lead identity', async () => {
     const runner = await establish();

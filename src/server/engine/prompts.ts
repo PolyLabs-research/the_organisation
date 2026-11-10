@@ -144,8 +144,8 @@ export function systemFor(org: Organisation, exec: Executive, where: 'local' | '
 
 export function systemForAgent(org: Organisation, lead: Executive, canSearch = org.settings.webResearch): SystemPrompt {
   const web = canSearch
-    ? 'You can search the web and read pages: web_fetch reads a page whose address came from a search result, your task or a file. Use them for facts you would otherwise have to assume: search to find a source, then read the page itself before relying on what it says, and cite the address next to anything you take from it. A task has a limited number of searches. A search or fetch that comes back with an error has hit that limit or a page that could not be read: it is not a ban on research. Try another source or carry on with what you have, and say in your report exactly what you could not check. You cannot run code. Outside systems are available only through explicitly granted business email and account tools.'
-    : 'You cannot run code or browse arbitrary websites. You can use explicitly granted business email and account tools.';
+    ? 'You can search the web and read pages: web_fetch reads a page whose address came from a search result, your task or a file. Use them for facts you would otherwise have to assume: search to find a source, then read the page itself before relying on what it says, and cite the address next to anything you take from it. A task has a limited number of searches. A search or fetch that comes back with an error has hit that limit or a page that could not be read: it is not a ban on research. Try another source or carry on with what you have, and say in your report exactly what you could not check. You cannot run code. Outside systems are available only through explicitly granted business email and account tools, and through tools a person has connected for your team.'
+    : 'You cannot run code or browse arbitrary websites. You can use explicitly granted business email and account tools, and tools a person has connected for your team.';
   const limits = limitsOf(org, lead, 'local');
   return {
     charter: charter(org),
