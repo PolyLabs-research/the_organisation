@@ -43,13 +43,14 @@ function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: K
   // Removing takes two presses: what is saved here goes for good, and for a password generated here there is no other copy.
   const [removing, setRemoving] = useState(false);
   useEffect(() => setOwners(record.ownerIds), [record.ownerIds.join(',')]);
-  const update = (enabled: boolean) => void action.run(async () => onView(await call(org.id, 'PATCH', '/' + kind + '/' + record.id, { ownerIds: owners, enabled })));
+  // Ticks are saved by "Save team access" and by nothing else. Disabling or enabling keeps the teams already saved: a press that says nothing of teams must not give one access.
+  const update = (ownerIds: string[], enabled: boolean) => void action.run(async () => onView(await call(org.id, 'PATCH', '/' + kind + '/' + record.id, { ownerIds, enabled })));
   const lost = kind === 'repositories' ? 'Its saved token is deleted for good.' : kind === 'accounts' ? 'Its saved password is deleted for good. If that is its only copy, reveal it and note it first.' : 'Its saved password or Google sign-in is deleted for good, and so are the drafts prepared from it.';
   return <details className="access-details"><summary>Manage access</summary>
     <TeamPicker org={org} value={owners} onChange={setOwners} />
     <div className="access-actions">
-      <button type="button" className="button" disabled={action.busy} onClick={() => update(record.enabled)}>Save team access</button>
-      <button type="button" className="button" disabled={action.busy} onClick={() => update(!record.enabled)}>{record.enabled ? 'Disable' : 'Enable'}</button>
+      <button type="button" className="button" disabled={action.busy} onClick={() => update(owners, record.enabled)}>Save team access</button>
+      <button type="button" className="button" disabled={action.busy} onClick={() => update(record.ownerIds, !record.enabled)}>{record.enabled ? 'Disable' : 'Enable'}</button>
       {removing ? <>
         <span className="pre-wrap">Remove {record.label}? {lost}</span>
         <button type="button" className="button button-danger" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'DELETE', '/' + kind + '/' + record.id)))}>Yes, remove it</button>

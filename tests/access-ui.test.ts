@@ -98,10 +98,16 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     expect(accountBrowser.run.mock.calls.slice(-2).map(call => call[3])).toEqual([expect.not.objectContaining({ element: expect.anything() }), expect.not.objectContaining({ element: expect.anything() })]);
     await page.getByText('Account browser', { exact: true }).click();
     await page.getByText('Manage access', { exact: true }).click();
+    // A team ticked and not saved is not given access by disabling or enabling the connection: only "Save team access" assigns it.
+    await page.getByRole('checkbox', { name: /^CRO/ }).check();
     await page.getByRole('button', { name: 'Disable', exact: true }).click();
     await page.getByRole('button', { name: 'Enable', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Enable', exact: true }).click();
     await page.getByRole('button', { name: 'Disable', exact: true }).waitFor();
+    expect(await text()).toContain('COO: signs in and reads only');
+    expect(await text()).not.toContain('CRO: signs in');
+    expect(await page.getByRole('checkbox', { name: /^CRO/ }).isChecked()).toBe(true);
+    await page.getByRole('checkbox', { name: /^CRO/ }).uncheck();
     await page.getByText('Manage access', { exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
     if (process.env.UPDATE_SCREENSHOTS === '1') await page.screenshot({ path: 'docs/only-paperclips-access.png', fullPage: true });
