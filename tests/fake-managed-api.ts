@@ -449,7 +449,9 @@ export class FakeManagedApi {
       const agent = url.searchParams.get('agent_id');
       const since = url.searchParams.get('created_at[gte]');
       const found = [...this.sessions.values()].filter((s) => (!agent || s.created.agent?.id === agent) && (!since || s.createdAt >= since));
-      return send(200, { data: found.reverse().map((s) => s.json()), next_page: null, prev_page: null });
+      // Newest first unless asked otherwise, as the real listing is.
+      if (url.searchParams.get('order') !== 'asc') found.reverse();
+      return send(200, { data: found.map((s) => s.json()), next_page: null, prev_page: null });
     }
     match = /^\/v1\/sessions\/([^/]+)(\/.*)?$/.exec(path);
     const session = match ? this.sessions.get(match[1]!) : undefined;

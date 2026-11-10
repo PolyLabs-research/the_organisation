@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { PLAN_TOOLS, ProviderError, type BoardReportDraft, type Briefing, type HookReply, type PhaseRecord, type PlanJob, type PlanOutcome, type SessionSpend } from '../types';
 import { Uploads, download, listOutputs, type SessionFile } from './files';
@@ -146,6 +148,21 @@ function describe(input: Record<string, unknown>): string {
 }
 
 const timeOf = (event: SessionEvent | StreamEvent): string | null => ('processed_at' in event && typeof event.processed_at === 'string' ? event.processed_at : null);
+
+/**
+ * A request to create a plan's session, kept on disk from before it goes out until it is known what came of
+ * it. A request can get through although its reply never arrives, and the session it made is then working on the
+ * plan, under its cap, with nothing here that knows of it.
+ */
+interface Creating {
+  /** The mark put on the request. The session carries it if the request got through. */
+  attempt: string;
+  /** A little before the request went out: sessions older than this are not the one. */
+  since: string;
+  leadId: string;
+  /** How far the plan's first message brought the lead up to date with the board's instructions. */
+  instructions: number;
+}
 
 /** Something the session is waiting for this side to answer. */
 interface PendingCall {
@@ -296,6 +313,8 @@ export class PlanSession {
     };
 
     if (job.session) {
+      // The plan's session is known, so a request for one that is still on file is not waiting for an answer.
+      await this.creating(null);
       this.sessionId = job.session.id;
       this.consoleUrl = this.linkTo(this.sessionId);
       this.cursor = job.session.cursor;
@@ -321,6 +340,8 @@ export class PlanSession {
       await this.raise(job.budgetUsd);
       return;
     }
+
+    if (await this.takeUp()) return;
 
     const uploads = new Uploads(this.client, job.stateDir);
     let resources = await this.deps.resources.ensure(team);
@@ -351,9 +372,14 @@ export class PlanSession {
         // Not sent again automatically: a second request could start a second session working on the same plan.
         { maxRetries: 0 },
       );
+    const request = async () => {
+      // On file before it goes out. If this try ends without learning what came of it, the next one looks first.
+      await this.creating({ attempt, since, leadId: resources.lead.id, instructions: job.kickoff.instructions });
+      return create();
+    };
     let session: Session;
     try {
-      session = await create();
+      session = await request();
     } catch (err) {
       if (err instanceof Anthropic.NotFoundError || (err instanceof Anthropic.BadRequestError && /file/i.test(err.message))) {
         // Ids kept from an earlier run can stop being valid: made with another key, or removed by hand.
@@ -362,27 +388,74 @@ export class PlanSession {
         else await this.deps.resources.forget();
         resources = await this.deps.resources.ensure(team);
         mounts = await uploads.ensure(job.files, job.signal);
-        session = await create();
+        session = await request();
       } else if (reached(err)) {
         // The request may have got through although no reply came back. If it did, that session is this plan's.
+        // If it cannot be found now, the request stays on file and the next try looks again (see `takeUp`).
         const made = await this.find(resources.lead.id, attempt, since).catch(() => null);
         if (!made) throw err;
         session = made;
       } else {
+        // Refused, so no session was made and there is nothing to look for.
+        await this.creating(null);
         throw err;
       }
     }
     this.sessionId = session.id;
     this.consoleUrl = this.linkTo(session.id);
     this.capped(job.budgetUsd);
+    await this.creating(null);
     this.hooks.instructed(job.kickoff.instructions);
     this.read(session);
+  }
+
+  /** Keep on disk the request for this plan's session that is about to go out, or with null remove it. */
+  private async creating(request: Creating | null): Promise<void> {
+    const file = path.join(this.job.stateDir, `creating-${this.job.planId}.json`);
+    if (!request) return fs.rm(file, { force: true });
+    await fs.mkdir(this.job.stateDir, { recursive: true });
+    await fs.writeFile(file, JSON.stringify(request), 'utf8');
+  }
+
+  /**
+   * Take up the session that an earlier try at starting this plan asked for, if that try ended without learning
+   * what came of its request and the request did get through. True if it did: the session is this plan's, and
+   * no other is created beside it.
+   */
+  private async takeUp(): Promise<boolean> {
+    let asked: Creating;
+    try {
+      asked = JSON.parse(await fs.readFile(path.join(this.job.stateDir, `creating-${this.job.planId}.json`), 'utf8')) as Creating;
+    } catch (err) {
+      // Nothing is on file. (A request cut off while it was being written down never went out.)
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || err instanceof SyntaxError) return false;
+      throw err;
+    }
+    // If this look fails, so does the try. While it is not known whether a session exists, no second one is made.
+    const session = await this.find(asked.leadId, asked.attempt, asked.since);
+    if (!session) {
+      await this.creating(null);
+      return false;
+    }
+    this.sessionId = session.id;
+    this.consoleUrl = this.linkTo(session.id);
+    // It still has the cap it was created with. The engine is told of it before anything else can fail.
+    this.capped(session.budget ? usd(session.budget.max_list_cost) : this.job.budgetUsd);
+    await this.creating(null);
+    this.hooks.instructed(asked.instructions);
+    this.read(session);
+    // One that has ended since is this plan's all the same: what it spent is counted, and it is given up as lost.
+    if (session.status === 'terminated') this.outcome = { status: 'lost', reason: 'the session had ended.' };
+    // It has been working under its first cap. From here on it has what the plan is allowed now.
+    else await this.raise(this.job.budgetUsd);
+    return true;
   }
 
   /** The session an earlier request created, if it did create one. */
   private async find(leadId: string, attempt: string, since: string): Promise<Session | null> {
     let looked = 0;
-    for await (const session of this.sessions.list({ agent_id: leadId, 'created_at[gte]': since, order: 'desc' }, QUICK)) {
+    // Oldest first: the look can come long after the request, and the lead's later sessions are not the one.
+    for await (const session of this.sessions.list({ agent_id: leadId, 'created_at[gte]': since, order: 'asc' }, QUICK)) {
       if (session.metadata?.attempt === attempt) return session;
       if (++looked >= 50) break;
     }
