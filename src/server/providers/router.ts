@@ -117,7 +117,8 @@ export class ProviderRouter implements Provider {
    * stands today. Null if none is known.
    */
   private priceOf(connection: Connection, model: string): Price | null {
-    const own = connection.prices[model];
+    // Looked up as the connection's own entry: a model may be named after something every object has.
+    const own = Object.hasOwn(connection.prices, model) ? connection.prices[model] : undefined;
     if (own) return own;
     const live = connection.models.find((m) => m.id === model)?.price;
     if (live) return live;

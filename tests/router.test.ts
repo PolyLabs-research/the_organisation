@@ -354,6 +354,20 @@ describe('calling a model', () => {
     await expect(router.setPrice('custom', 'model-a', { input: -1, output: 2 })).rejects.toThrow(/A price is a number/);
   });
 
+  it('does not take something every object has for a price set by hand, when a model is named after it', async () => {
+    api.models = [{ id: 'constructor' }, { id: 'toString' }];
+    const { router } = await setup();
+    await router.connect({ presetId: 'custom', baseURL: api.baseURL, apiKey: 'sk-test' });
+    const usage: CallUsage[] = [];
+    const reply = { content: '{"ok":true}', usage: { prompt_tokens: 1_000_000, completion_tokens: 100_000 } };
+    api.replies = [reply, reply];
+    await ask(router, 'custom:constructor', (u) => usage.push(u));
+    await ask(router, 'custom:toString', (u) => usage.push(u));
+    // No price was set for either, so both are counted at the stand-in price: a number, where it was not one.
+    expect(usage.map((u) => u.costUsd)).toEqual([UNKNOWN_PRICE.input + UNKNOWN_PRICE.output / 10, UNKNOWN_PRICE.input + UNKNOWN_PRICE.output / 10]);
+    expect(router.info().models.map((m) => [m.id, m.priced])).toEqual([['custom:constructor', false], ['custom:toString', false]]);
+  });
+
   it('uses the prices a gateway\'s own listing gives', async () => {
     api.models = [{ id: 'maker/model-a', name: 'Maker: Model A', pricing: { prompt: '0.000003', completion: '0.000015' }, supported_parameters: ['tools'] }, { id: 'maker/no-tools', pricing: { prompt: '0', completion: '0' }, supported_parameters: [] }];
     const { router } = await setup();
