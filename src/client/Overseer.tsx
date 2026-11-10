@@ -39,13 +39,19 @@ const CATEGORY_LABEL: Record<Category, string> = {
 };
 
 /** The whole log from disk, kept current with what arrives live. */
-function useHistory(orgId: string, live: ActivityEntry[]): { entries: ActivityEntry[]; loading: boolean } {
+function useHistory(orgId: string, live: ActivityEntry[]): { entries: ActivityEntry[]; loading: boolean; failed: string | null } {
   const [history, setHistory] = useState<ActivityEntry[] | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
     let gone = false;
     api.history(orgId).then(
       (entries) => !gone && setHistory(entries),
-      () => !gone && setHistory([]),
+      (err: Error) => {
+        if (gone) return;
+        // The views are still drawn, from the calls the page has: but they are not the whole record, and say so.
+        setHistory([]);
+        setFailed(err.message);
+      },
     );
     return () => {
       gone = true;
@@ -56,7 +62,7 @@ function useHistory(orgId: string, live: ActivityEntry[]): { entries: ActivityEn
     const seen = new Set(base.map((e) => `${e.at}|${e.id}`));
     return [...base, ...live.filter((e) => !seen.has(`${e.at}|${e.id}`))].sort((a, b) => a.at.localeCompare(b.at));
   }, [history, live]);
-  return { entries, loading: history === null };
+  return { entries, loading: history === null, failed };
 }
 
 /**
@@ -122,7 +128,7 @@ type View = 'timeline' | 'effort' | 'spend' | 'bottlenecks';
 
 export function Overseer({ view, activity }: { view: OrgView; activity: ActivityEntry[] }) {
   const { org } = view;
-  const { entries, loading } = useHistory(org.id, activity);
+  const { entries, loading, failed } = useHistory(org.id, activity);
   const [shown, setShown] = useState<View>('timeline');
   // A clock for the "now" line and the forecast, moved on while the organisation runs.
   const [now, setNow] = useState(() => Date.now());
@@ -151,6 +157,7 @@ export function Overseer({ view, activity }: { view: OrgView; activity: Activity
         ]}
       />
       {loading ? <p className="muted">Reading the organisation’s activity…</p> : null}
+      {failed ? <p className="note note-warn">The organisation’s record of its calls could not be read, so these views are drawn from the most recent calls only. {failed}</p> : null}
       {!loading && shown === 'timeline' ? <Timeline org={org} entries={entries} projected={projected} now={anchor} running={running} /> : null}
       {!loading && shown === 'effort' ? <EffortView org={org} entries={entries} /> : null}
       {!loading && shown === 'spend' ? <SpendView org={org} entries={entries} projected={projected} /> : null}

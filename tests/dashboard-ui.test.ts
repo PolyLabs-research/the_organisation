@@ -14,6 +14,7 @@ import { MockProvider } from '../src/server/providers/mock';
 import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
 import type { BoardMessage } from '../src/shared/types';
+import { plan } from './client-helpers';
 import { QUIET, TEAM } from './helpers';
 
 // The built dashboard in a real browser, against a real server on a simulated provider: what a person sees
@@ -204,6 +205,40 @@ describe.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('t
       await page.reload();
       await page.getByRole('heading', { name: 'Another one', exact: true }).waitFor();
       expect(await selected(page)).toBe('Board');
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('says so when an agent’s whole report cannot be fetched', async () => {
+    const runner = await organisation('Long reports');
+    // A finished task whose report is longer than is sent with the rest, so the whole of it is fetched on request.
+    const report = 'The first paragraph of the report. '.repeat(40);
+    plan(runner.org, 'cto', 'p-1').phases[0]!.tasks.push({ id: 't-1', title: 'Draft the specification', brief: 'Write it.', status: 'done', agent: 1, rework: false, result: report, files: [], error: null, attempts: 1, startedAt: null, finishedAt: null, effort: null });
+    const page = await open('/#/org/' + runner.org.id);
+    await page.route('**/api/orgs/*/tasks/*', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Something went wrong on the server.' }) }));
+    try {
+      await page.getByRole('tab', { name: /^Plans/ }).click();
+      await page.getByText('Draft the specification', { exact: true }).click();
+      await page.getByRole('button', { name: 'Read the whole report', exact: true }).click();
+      await page.getByText('The report could not be read. Something went wrong on the server.').waitFor();
+      // Asked again once the server answers, the report comes and the note goes.
+      await page.unroute('**/api/orgs/*/tasks/*');
+      await page.getByRole('button', { name: 'Read the whole report', exact: true }).click();
+      await page.getByRole('button', { name: 'Read the whole report', exact: true }).waitFor({ state: 'detached' });
+      expect(await page.getByText('The report could not be read.').count()).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('says so when the record of an organisation’s calls cannot be read for the Overseer', async () => {
+    const runner = await organisation('Unread history');
+    const page = await open('/#/org/' + runner.org.id);
+    await page.route('**/api/orgs/*/activity/history', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Something went wrong on the server.' }) }));
+    try {
+      await page.getByRole('tab', { name: 'Overseer', exact: true }).click();
+      await page.getByText('The organisation’s record of its calls could not be read, so these views are drawn from the most recent calls only. Something went wrong on the server.').waitFor();
     } finally {
       await page.close();
     }

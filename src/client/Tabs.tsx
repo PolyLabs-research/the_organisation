@@ -123,16 +123,21 @@ function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task;
   const [fetched, setFetched] = useState<Task | null>(null);
   const [loading, setLoading] = useState(false);
   const [nothing, setNothing] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const shown = fetched ?? task;
   const load = () => {
     setLoading(true);
+    setFailed(null);
     api.task(orgId, task.id).then(
       (r) => {
         setFetched(r.task);
         setNothing(!r.task.result);
         setLoading(false);
       },
-      () => setLoading(false),
+      (err: Error) => {
+        setFailed(err.message);
+        setLoading(false);
+      },
     );
   };
   // An agent in a workflow run is given its work by the run, so what it was asked and what it returned are read on request.
@@ -169,6 +174,7 @@ function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task;
               </button>
             )
           ) : null}
+          {failed ? <p className="note note-bad">The report could not be read. {failed}</p> : null}
           {task.files.length ? (
             <ul className="file-links">
               {task.files.map((path) => (
