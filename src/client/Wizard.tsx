@@ -4,6 +4,7 @@ import { hueFor } from '../shared/profiles';
 import type { ExecutiveDraft, OperatingProfile, OrgSettings, SopPhase } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
+import { LadderEditor } from './Ladder';
 import { ModelPicker, canHost, canSearch } from './ModelPicker';
 import { ErrorNote, Field, HostedNotes, SeatBadge, Sop, Stepper, money } from './ui';
 
@@ -442,6 +443,15 @@ export function Wizard({ meta }: { meta: Meta }) {
                 value={settings.workerModel}
                 models={models}
                 onChange={(id) => setModel('workerModel', id)}
+              />
+              <LadderEditor
+                value={(settings.workerLadder ?? []).filter((rung) => rung.model !== settings.workerModel)}
+                learns={settings.workerLadderLearns ?? true}
+                models={models}
+                workerModel={settings.workerModel}
+                hosted={settings.execution === 'managed'}
+                onChange={(next) => set('workerLadder', next)}
+                onLearns={(next) => set('workerLadderLearns', next)}
               />
             </div>
             {fellBack ? (

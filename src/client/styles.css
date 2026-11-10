@@ -2585,6 +2585,39 @@ a.provider:hover {
   margin-top: 1px;
 }
 
+/* ---- the ladder of cheaper agent models ---- */
+
+/* Across both columns of the form it sits in, with each rung a row of its own. */
+.ladder {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.ladder-rung {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.ladder-rung > .button {
+  align-self: end;
+}
+
+.ladder > .button {
+  justify-self: start;
+}
+
+@media (max-width: 700px) {
+  .ladder-rung {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* ---- narrow screens ---- */
 
 @media (max-width: 1000px) {

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Effort, Organisation, OrgSettings, OrgView } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
+import { LadderEditor } from './Ladder';
 import { ModelPicker, canHost, canSearch } from './ModelPicker';
 import { ErrorNote, Field, HostedNotes } from './ui';
 
@@ -107,6 +108,15 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
           </Field>
           <ModelPicker label="Model for the executives" value={draft.executiveModel} models={models} onChange={(id) => setModel('executiveModel', id)} />
           <ModelPicker label="Model for the agents" value={draft.workerModel} models={models} onChange={(id) => setModel('workerModel', id)} />
+          <LadderEditor
+            value={(draft.workerLadder ?? []).filter((rung) => rung.model !== draft.workerModel)}
+            learns={draft.workerLadderLearns ?? true}
+            models={models}
+            workerModel={draft.workerModel}
+            hosted={draft.execution === 'managed'}
+            onChange={(next) => set('workerLadder', next)}
+            onLearns={(next) => set('workerLadderLearns', next)}
+          />
           <Field label="Effort for the executives">
             <select value={draft.executiveEffort} onChange={(e) => set('executiveEffort', e.target.value as Effort)}>
               {EFFORTS.map((e) => (

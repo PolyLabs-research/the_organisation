@@ -354,6 +354,49 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     }
   });
 
+  it('puts lighter tasks on a cheaper model from settings, and shows which model did each task', async () => {
+    const runner = await registry.create({ name: 'Two models', idea: 'A subscription box that sends people a new houseplant every month.', executives: [{ profileId: 'engineering', agentCount: 3 }], settings: { budgetUsd: 100, maxCycles: 1 } });
+    const page = await open('/#/org/' + runner.org.id);
+    const sent: unknown[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'PATCH' && request.url().endsWith('/settings')) sent.push(request.postDataJSON());
+    });
+    try {
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      // The cheapest model the agents are not already on is offered first, for tasks rated up to 2.
+      await page.getByRole('button', { name: 'Add a cheaper model', exact: true }).click();
+      const level = page.locator('.ladder-rung').first().getByLabel(/^Takes tasks rated up to/);
+      expect(await level.inputValue()).toBe('2');
+      await level.selectOption('3');
+      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+      await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor({ state: 'detached' });
+      expect(sent).toEqual([{ workerLadder: [{ model: 'claude-haiku-5-5', upTo: 3 }] }]);
+      expect(runner.org.routing?.rungs).toEqual([{ model: 'claude-haiku-5-5', upTo: 3, ceiling: null, recent: [] }]);
+
+      // The simulated lead rates its tasks 4, 3 and 2: the first stays on the agents' model, the others go to the lighter one.
+      await page.getByRole('button', { name: 'Start', exact: true }).click();
+      await expect.poll(() => runner.org.pauseReason, { timeout: 20_000 }).toBe('cycle_limit');
+      await page.getByRole('tab', { name: /^Plans/ }).click();
+      // A plan that is over is shown folded away.
+      const plan = page.locator('details.plan').first();
+      if (!(await plan.evaluate((el) => (el as HTMLDetailsElement).open))) await plan.locator('summary').first().click();
+      const tags = page.locator('.task .agent-tag');
+      await tags.filter({ hasText: 'claude-haiku-5-5' }).first().waitFor();
+      expect(await tags.filter({ hasText: 'claude-opus-5-5' }).count()).toBeGreaterThan(0);
+      expect(await tags.filter({ hasText: 'claude-haiku-5-5' }).count()).toBeGreaterThan(await tags.filter({ hasText: 'claude-opus-5-5' }).count());
+
+      // The Overseer says where the ladder stands.
+      await page.getByRole('tab', { name: 'Overseer', exact: true }).click();
+      await page.getByRole('button', { name: 'Effort', exact: true }).click();
+      const standing = page.locator('table', { hasText: 'Its recent tasks' });
+      await standing.waitFor();
+      expect(await standing.locator('tbody tr').first().innerText()).toMatch(/claude-haiku-5-5\s+tasks rated 1 to 3\s+tasks rated 1 to 3\s+\d+ of \d+ let stand/);
+      expect(await standing.locator('tbody tr').last().innerText()).toMatch(/claude-opus-5-5\s+tasks rated 4 to 10, and any not rated/);
+    } finally {
+      await page.close();
+    }
+  });
+
   it('names, above the list of organisations, any the server could not load', async () => {
     // What the server keeps when it starts and finds an organisation on disk that it cannot read.
     registry.unreadable.push({ folder: 'org_damaged', reason: 'its saved state is damaged: no settings.' });

@@ -119,7 +119,7 @@ function TaskIcon({ status, held }: { status: Task['status']; held: boolean }) {
   return <CircleDashed size={16} className="icon-idle" aria-label="Queued" />;
 }
 
-function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task; held: boolean; onOpenFile: (path: string) => void }) {
+function TaskRow({ orgId, task, held, ladder, onOpenFile }: { orgId: string; task: Task; held: boolean; ladder: boolean; onOpenFile: (path: string) => void }) {
   const [fetched, setFetched] = useState<Task | null>(null);
   const [loading, setLoading] = useState(false);
   const [nothing, setNothing] = useState(false);
@@ -150,6 +150,8 @@ function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task;
           <span className="task-title">{task.title}</span>
           {task.rework ? <span className="tag">Rework</span> : null}
           {task.agent ? <span className="agent-tag">Agent {task.agent}</span> : inRun ? <span className="agent-tag">In a run</span> : null}
+          {/* Which model the task was given to, where the agents have more than one to go to. */}
+          {task.model && ladder ? <span className="agent-tag" title={task.effort ? `Rated ${task.effort} for effort` : 'Not rated for effort'}>{task.model}</span> : null}
         </summary>
         <div className="task-detail">
           <p className="field-label">Brief</p>
@@ -375,7 +377,7 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
   );
 }
 
-function PhaseBlock({ orgId, phase, index, held, waitsFor, onOpenFile }: { orgId: string; phase: PlanPhase; index: number; held: boolean; waitsFor: string[]; onOpenFile: (path: string) => void }) {
+function PhaseBlock({ orgId, phase, index, held, ladder, waitsFor, onOpenFile }: { orgId: string; phase: PlanPhase; index: number; held: boolean; ladder: boolean; waitsFor: string[]; onOpenFile: (path: string) => void }) {
   const waiting = phase.status === 'working' && phase.evidence?.state === 'waiting';
   const state =
     phase.status === 'done'
@@ -400,7 +402,7 @@ function PhaseBlock({ orgId, phase, index, held, waitsFor, onOpenFile }: { orgId
       {phase.tasks.length ? (
         <ul className="tasks">
           {phase.tasks.map((task) => (
-            <TaskRow key={task.id} orgId={orgId} task={task} held={held} onOpenFile={onOpenFile} />
+            <TaskRow key={task.id} orgId={orgId} task={task} held={held} ladder={ladder} onOpenFile={onOpenFile} />
           ))}
         </ul>
       ) : null}
@@ -505,6 +507,7 @@ function PlanCard({ org, plan, open, simulated, onOpenFile }: { org: Organisatio
               phase={phase}
               index={i}
               held={held}
+              ladder={(org.settings.workerLadder ?? []).length > 0}
               waitsFor={phase.status === 'pending' ? (phase.waitsFor ?? []).filter((w) => !waitMet(org, w)).map((w) => describeWait(org, w)) : []}
               onOpenFile={onOpenFile}
             />
