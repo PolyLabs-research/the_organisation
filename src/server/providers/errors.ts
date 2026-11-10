@@ -43,8 +43,12 @@ export function translate(err: unknown): ProviderError {
     const retryable = err.status === undefined || err.status >= 500 || err.status === 408 || err.status === 409;
     return new ProviderError(`Anthropic API error${err.status ? ` ${err.status}` : ''}: ${err.message}`, retryable ? 'unavailable' : 'bad_request', retryable);
   }
+  // With no key, token or login to send, the SDK sends nothing and says so in these words, which are all it gives.
+  if (err instanceof Error && /^Could not resolve authentication method/.test(err.message)) {
+    return new ProviderError(`No usable Anthropic credentials were found: ${err.message}`, 'auth', false);
+  }
   // A response that was cut off part-way is not an API error: the SDK raises a plain error wrapping the transport failure.
   if (hasCause(err)) return new ProviderError(`The connection to Anthropic was lost part-way through a reply: ${(err as Error).message}`, 'unavailable', true);
-  // Anything else was raised before a response arrived, e.g. no credentials could be resolved.
+  // Anything else was raised before a response arrived.
   return new ProviderError(err instanceof Error ? err.message : String(err), 'bad_request', false);
 }

@@ -1,6 +1,9 @@
+import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ClaudeProvider } from '../src/server/providers/claude';
 import { ProviderError, type AgentTool, type CallUsage } from '../src/server/providers/types';
@@ -653,5 +656,58 @@ describe('agent runs', () => {
     const err = await failure(provider().agent(agentRequest()));
     expect([err.code, err.retryable]).toEqual(['refusal', false]);
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe('with no credentials to send', () => {
+  // The provider is handed no key, as it is for a login the client finds by itself, and there is none to be found:
+  // nothing in the environment, and an empty directory where a login would be kept.
+  const NAMES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_PROFILE', 'ANTHROPIC_FEDERATION_RULE_ID', 'ANTHROPIC_ORGANIZATION_ID', 'ANTHROPIC_CONFIG_DIR'];
+  const saved = new Map<string, string | undefined>();
+  let empty: string;
+  beforeEach(async () => {
+    empty = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-no-login-'));
+    for (const name of NAMES) {
+      saved.set(name, process.env[name]);
+      delete process.env[name];
+    }
+    process.env.ANTHROPIC_CONFIG_DIR = empty;
+  });
+  afterEach(async () => {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await rm(empty, { recursive: true, force: true });
+  });
+  const keyless = () => new ClaudeProvider({ baseURL, maxRetries: 0, turnRetryDelayMs: 0 });
+  const task = { kind: 'task' as const, system, prompt: 'Write the spec.', model: 'claude-opus-5-5', effort: 'medium' as const, tools: [], webSearch: null, maxTurns: 10, context: {} };
+
+  it('says that is what is wrong, and does not wait and try again as if a connection had dropped', async () => {
+    for (const call of [() => keyless().structured(structuredRequest()), () => keyless().agent(task)]) {
+      const err = await failure(call());
+      expect([err.code, err.retryable]).toEqual(['auth', false]);
+      expect(err.message).toContain('Could not resolve authentication method');
+      expect(err.message).not.toMatch(/connection|part-way|tool call/);
+    }
+    // Nothing was sent, since there was nothing to send it with.
+    expect(seen).toHaveLength(0);
+  });
+
+  it('says the same of a login that is named and cannot be found', async () => {
+    process.env.ANTHROPIC_PROFILE = 'no-such-login';
+    for (const call of [() => keyless().structured(structuredRequest()), () => keyless().agent(task)]) {
+      const err = await failure(call());
+      expect([err.code, err.retryable]).toEqual(['auth', false]);
+      expect(err.message).toContain('no-such-login');
+      expect(err.message).not.toMatch(/tool call/);
+    }
+    expect(seen).toHaveLength(0);
+  });
+
+  it('says so for a call that is not a reply to be read, such as asking after a hosted session', async () => {
+    const err = await failure(keyless().hasSession('sesn_1'));
+    expect([err.code, err.retryable]).toEqual(['auth', false]);
+    expect(seen).toHaveLength(0);
   });
 });
