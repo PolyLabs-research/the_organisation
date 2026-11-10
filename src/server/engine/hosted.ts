@@ -515,6 +515,34 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     },
   };
 
+  // Once following has ended, nothing more is taken from whoever was following. A look at the session that was
+  // still on its way when the session was let go of can come back afterwards, and what it says then is about a
+  // session that is no longer this plan's to follow: taken as it stands, it could put a session that has just been
+  // given up back as the plan's own.
+  let over = false;
+  const tooLate: { [K in keyof PlanHooks]: ReturnType<PlanHooks[K]> } = {
+    session: undefined,
+    phase: { ok: false, message: 'This session is no longer being followed.' },
+    report: { ok: false, message: 'This session is no longer being followed.' },
+    assigned: undefined,
+    reported: undefined,
+    agentEnded: undefined,
+    run: undefined,
+    spend: undefined,
+    note: undefined,
+    declined: undefined,
+    output: Promise.resolve(null),
+    hasOutput: true,
+    instructions: null,
+    instructed: undefined,
+    halt: 'pause',
+    moreBudget: null,
+    checkpoint: undefined,
+  };
+  const whileFollowed = new Proxy(hooks, {
+    get: (target, key) => (...args: unknown[]) => (over ? tooLate[key as keyof PlanHooks] : (target[key as keyof PlanHooks] as (...given: unknown[]) => unknown)(...args)),
+  });
+
   let outcome: PlanOutcome;
   try {
     const files = mountable(await workspace.list());
@@ -548,7 +576,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       files: files.map((f) => ({ ...f, absolutePath: path.join(workspace.root, f.path) })),
       stateDir: ctx.stateDir,
       signal: ctx.signal,
-      hooks,
+      hooks: whileFollowed,
       context: {
         seat: {
           id: lead.id,
@@ -569,7 +597,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       },
     };
     outcome = await provider.executePlan(job);
+    over = true;
   } catch (err) {
+    over = true;
     // The session, if there is one, is still there and can be picked up again.
     if (managed.state === 'starting' || managed.state === 'running') managed.state = 'paused';
     if (!capConfirmed) managed.budgetUsd = capBefore;

@@ -650,6 +650,45 @@ describe('a hosted session and money', () => {
 });
 
 describe('a hosted session that goes wrong', () => {
+  it('takes nothing more from whoever was following a session once that has ended', async () => {
+    let late: PlanJob['hooks'] | undefined;
+    let tries = 0;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async (job) => {
+        tries += 1;
+        if (tries === 1) {
+          late = job.hooks;
+          job.hooks.session({ id: 'sesn_first', consoleUrl: null, budgetUsd: job.budgetUsd });
+          return { status: 'lost', reason: 'the sandbox was shut down.' };
+        }
+        job.hooks.session({ id: 'sesn_second', consoleUrl: null, budgetUsd: job.budgetUsd });
+        while (job.hooks.halt() === null) await new Promise((resolve) => setTimeout(resolve, 2));
+        return { status: 'paused' };
+      }),
+    });
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.managed?.sessionId === 'sesn_second', 'the session that takes over');
+
+    // A look at the first session that was still on its way when it was given up comes back now.
+    late!.session({ id: 'sesn_first', consoleUrl: null, budgetUsd: 9 });
+    late!.checkpoint('2026-11-05T10:00:00.000Z', '2026-11-05T10:00:00.000Z');
+    late!.note('Still here.');
+    expect(late!.halt()).toBe('pause');
+    expect(late!.moreBudget(1)).toBeNull();
+    expect(late!.phase({ phase: 'Spec', summary: 'Done.', decisions: [] } as never)).toMatchObject({ ok: false });
+    expect(await late!.output({ id: 'f1', name: 'engineering/late.md', bytes: new Uint8Array([1]) })).toBeNull();
+
+    // The plan is still in the session that took over, with the first one on record as given up.
+    const managed = planOf(h.org).managed!;
+    expect(managed).toMatchObject({ sessionId: 'sesn_second', cursor: null, note: null, files: [] });
+    expect(managed.past).toEqual([{ sessionId: 'sesn_first', archivedAt: null }]);
+    expect(planOf(h.org).phases.every((p) => p.status !== 'done')).toBe(true);
+    h.runner.pause();
+    await h.runner.idle();
+  });
+
   it('is replaced once by a new session that takes over from the phases already recorded', async () => {
     h = await harness({ settings: HOSTED, executives: ONE_LEAD, mock: { lostSessions: 1, runs: 'never' } });
     await runToRest(h.runner);
