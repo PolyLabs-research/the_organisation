@@ -447,7 +447,7 @@ The [Arena text leaderboard](https://arena.ai/leaderboard/text) of 27 October 20
 
 **Prices.** Spend is estimated from the tokens each call reports and the model's list price, so a budget is only as good as the price behind it.
 
-- The picks carry list prices read from each provider's own pricing page on 5 November 2026. Price changes that providers had already announced (Google's, above) take effect on their date. Where a provider charges more for a long prompt, or less for input read from its cache, that is counted.
+- The picks carry list prices read from each provider's own pricing page on 5 November 2026; Claude's were read again on 10 November. Price changes that providers had already announced (Google's, above) take effect on their date. Where a provider charges more for a long prompt, or less for input read from its cache, that is counted.
 - A model that is not one of the picks has no known price unless its listing carries one (OpenRouter's does). It is counted at $5 in and $25 out per million tokens, enough that an unknown model is never the cheap choice by accident, and the interface says so wherever the model is chosen. Set its real price on the Models and keys page.
 - Any price can be corrected there, and a price set by hand stands over everything else.
 - DeepSeek charges half outside its peak hours; spend is counted at the peak price. On the mainland platforms prices are in yuan and mostly lower than the dollar prices used here. In both cases the estimate errs high, which pauses an organisation early instead of letting it overspend.
