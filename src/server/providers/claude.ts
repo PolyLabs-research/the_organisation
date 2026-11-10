@@ -434,7 +434,7 @@ function checkStop(message: Anthropic.Beta.BetaMessage): void {
   }
   if (message.stop_reason === 'model_context_window_exceeded') {
     // Trying the same work again would end the same way, so this is a failure of the work, not of the provider.
-    throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+    throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
   }
 }
 

@@ -247,8 +247,21 @@ describe('structured calls', () => {
   it('treats work that outgrew the context window as a failure of the work, not of the provider', async () => {
     replies.push({ content: [], stop_reason: 'model_context_window_exceeded' });
     const err = await failure(provider().structured(structuredRequest()));
-    expect(err.code).toBe('invalid_output');
+    expect(err.code).toBe('too_long');
     expect(err.retryable).toBe(false);
+  });
+
+  it.each([
+    [400, 'prompt is too long: 210432 tokens > 200000 maximum'],
+    [400, 'input length and `max_tokens` exceed context limit: 180000 + 32000 > 200000, decrease input length or `max_tokens` and try again'],
+    [413, 'Request exceeds the maximum allowed number of bytes.'],
+  ])('says the same when the API turns the request itself away as too long (%i: %s)', async (status, message) => {
+    // A 400 is tried once more with the conservative schema form before it is reported.
+    const refused: Reply = { status, error: { type: status === 413 ? 'request_too_large' : 'invalid_request_error', message } };
+    replies.push(refused, refused);
+    const err = await failure(provider().structured(structuredRequest()));
+    expect([err.code, err.retryable]).toEqual(['too_long', false]);
+    expect(err.message).toContain(message);
   });
 
   it('prices every attempt at the rates of the model that made it', async () => {

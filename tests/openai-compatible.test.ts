@@ -185,13 +185,25 @@ describe('fitting a request to the endpoint', () => {
     api.rules = [() => "This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages."];
     const p = provider();
     // A failure of the task, which the lead sees at its gate, where a fault of the provider's would pause everything.
-    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'invalid_output', retryable: false, message: expect.stringContaining('outgrew the model’s context window') });
+    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false, message: expect.stringContaining('outgrew the model’s context window') });
     expect(api.chats.map((b) => b.max_completion_tokens)).toEqual([32000, 4096]);
     // Nothing was learned about the model from it.
     api.rules = [];
     api.replies = [{ content: GOOD }];
     await ask(p);
     expect(api.chats.at(-1).max_completion_tokens).toBe(32000);
+  });
+
+  it('knows a prompt that is too long by the code the endpoint gives it, whatever words come with it', async () => {
+    api.replies = [{ status: 400, error: 'Please shorten the request.', code: 'context_length_exceeded' }, { status: 400, error: 'Please shorten the request.', code: 'context_length_exceeded' }];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
+    // Sent once more with less room for the reply, and then given up: not tried in every other form.
+    expect(api.chats.map((b) => b.max_completion_tokens)).toEqual([32000, 4096]);
+    // A request too large for the endpoint to take in at all is the same failure.
+    api.seen.length = 0;
+    api.replies = [{ status: 413, error: 'Request Entity Too Large' }];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
+    expect(api.chats).toHaveLength(1);
   });
 
   it('reshapes a request refused with a 422 as it would one refused with a 400', async () => {
@@ -783,7 +795,7 @@ describe('an agent run', () => {
     expect(api.chats).toHaveLength(2);
 
     api.replies = [{ content: '', finish: 'model_context_window_exceeded' }];
-    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'bad_request', retryable: false });
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
   });
 
   it('does not take a reply for finished when the stream closed without saying so', async () => {

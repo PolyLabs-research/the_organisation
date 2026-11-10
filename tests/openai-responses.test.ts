@@ -223,7 +223,11 @@ describe('fitting a request to what a model takes', () => {
     expect(api.asked.at(-1).max_output_tokens).toBe(32000);
 
     api.rules = [() => overflow];
-    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'invalid_output', retryable: false });
+    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
+    // A response that was accepted and then failed for the same reason says so by its code.
+    api.rules = [];
+    api.responses = [{ failed: { code: 'context_length_exceeded', message: 'The request exceeds the model’s context window.' } }];
+    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
   });
 
   it('does not mistake a refusal about a reasoning item for one about the effort level', async () => {

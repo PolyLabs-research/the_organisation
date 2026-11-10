@@ -24,6 +24,8 @@ export interface FakeCall {
 export interface FakeReply {
   status?: number;
   error?: string;
+  /** The code the refusal carries, where an endpoint gives one. */
+  code?: string;
   content?: string;
   /** Reasoning text, sent in the field named. */
   reasoning?: string;
@@ -163,7 +165,7 @@ export class FakeOpenAI {
       if (reason) return void fail(400, reason);
     }
     const reply = this.replies.shift() ?? this.auto.chat?.(body) ?? { content: 'Done.' };
-    if (reply.status && reply.status >= 400) return void fail(reply.status, reply.error ?? 'failed', reply.status === 429 && /quota/.test(reply.error ?? '') ? 'insufficient_quota' : undefined);
+    if (reply.status && reply.status >= 400) return void fail(reply.status, reply.error ?? 'failed', reply.code ?? (reply.status === 429 && /quota/.test(reply.error ?? '') ? 'insufficient_quota' : undefined));
 
     const usage = reply.usage === null ? undefined : { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200, ...reply.usage };
     const finish = reply.finish ?? (reply.calls?.length ? 'tool_calls' : 'stop');

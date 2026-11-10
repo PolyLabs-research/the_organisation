@@ -852,6 +852,11 @@ export class ClaudeCodeProvider implements Provider {
       const how = outcome.code !== null ? ` (exit ${outcome.code})` : outcome.signal ? ` (${outcome.signal})` : '';
       throw new ProviderError(`Claude Code ended without an answer${how}${said ? `: ${said}` : '.'}`, 'unavailable', true);
     }
+    // What was sent, or what the agent had read since, is more than the model takes. Claude Code names this ending
+    // in its result, and says "Prompt is too long" in place of a reply.
+    if (result.terminal_reason === 'prompt_too_long' || (result.is_error === true && /^Prompt is too long/i.test(text(result.result)))) {
+      throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
+    }
     if (result.is_error !== true) {
       if (result.stop_reason === 'refusal') throw new ProviderError('The model declined this request.', 'refusal', false);
       return result;

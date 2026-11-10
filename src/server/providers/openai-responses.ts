@@ -6,12 +6,12 @@ import {
   AGENT_MAX_TOKENS,
   MAX_BAD_ARGUMENTS,
   NOT_ABOUT_FORM,
-  OVERFLOW,
   OpenAICompatibleProvider,
   STRUCTURED_MAX_TOKENS,
   TURN_RETRIES,
   WRAP_UP,
   lowerCap,
+  overflows,
   refusesForm,
   runTool,
   safeParse,
@@ -253,10 +253,10 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         } else if (include && /\binclude\b|encrypted_content/i.test(said)) {
           now.include = false;
           lessons.push(() => this.noInclude.add(model));
-        } else if (OVERFLOW.test(said)) {
+        } else if (overflows(err)) {
           // The exchange and the room asked for the reply do not fit the model's window together. A shorter
           // reply may fit: for this request only, since the next exchange may well be shorter.
-          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
           squeezed = true;
           now.cap = SQUEEZED_CAP;
         } else if (/max_output_tokens|(output|completion) tokens/i.test(said) && now.cap > 1024) {
@@ -347,6 +347,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
   /** A response that failed after it was accepted: what it means, by the code it carries. */
   private failure(code: string, message: string): ProviderError {
     if (/policy|safety|content_filter/.test(code)) return new ProviderError(`The model declined this request: ${message}`, 'refusal', false);
+    if (code === 'context_length_exceeded') return new ProviderError(`The work outgrew the model’s context window: ${message}`, 'too_long', false);
     if (/rate_limit/.test(code)) return new ProviderError(`${this.label} is rate limiting this key: ${message}`, 'rate_limit', true);
     if (code === '' || /server_error|overloaded|timeout|unavailable/.test(code)) return new ProviderError(`${this.label} failed part-way through a reply: ${message}`, 'unavailable', true);
     return new ProviderError(`${this.label} rejected the request: ${message}`, 'bad_request', false);

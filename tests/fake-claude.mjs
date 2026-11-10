@@ -14,7 +14,7 @@
 //   FAKE_CLAUDE_LOG      a file to append one JSON line to for each run
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
 //                        | silent | extra | extra-once | credits | needscredits | loop | stubborn | badloop | parallel | notools
-//                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow
+//                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow | toolong | toolong-words
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -223,6 +223,14 @@ async function main() {
       return fail(404, `There's an issue with the selected model (${model}). It may not exist or you may not have access to it. Run --model to pick a different model.`);
     case 'overloaded':
       return fail(529, 'API Error: Repeated 529 Overloaded errors');
+    case 'toolong':
+    case 'toolong-words':
+      // What was sent is more than the model takes. This ending was not seen from the real command: it is the one
+      // its own schema names for it (terminal_reason "prompt_too_long"), with the words the command has for it.
+      emit({ type: 'assistant', session_id: session, message: { id: 'synthetic', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+      finish({ is_error: true, result: 'Prompt is too long', api_error_status: 400, terminal_reason: MODE === 'toolong' ? 'prompt_too_long' : 'api_error', stop_reason: 'stop_sequence', total_cost_usd: 0, modelUsage: {} });
+      process.exit(1);
+    // eslint-disable-next-line no-fallthrough
     case 'crash':
       console.error('Segmentation fault (stand-in)');
       process.exit(134);

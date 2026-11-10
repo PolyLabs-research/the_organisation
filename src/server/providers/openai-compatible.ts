@@ -81,6 +81,8 @@ export const NOT_ABOUT_FORM =
 
 /** A refusal that says the prompt, or the prompt and the room asked for the reply together, is more than the model can read. */
 export const OVERFLOW = /context (length|window|size|limit)|maximum context|context_length|prompt is too long|input.{0,30}too long|too many (input |prompt )?tokens|exceeds? the (model'?s? )?(maximum )?(context|input)/i;
+/** The same said by its code, which OpenAI and the endpoints that copy it give, whatever the words. */
+export const overflows = (err: InstanceType<typeof OpenAI.APIError>): boolean => err.code === 'context_length_exceeded' || OVERFLOW.test(err.message);
 /** The room left for a reply when a request is sent again after overflowing the model's window. */
 const SQUEEZED_CAP = 4096;
 
@@ -364,7 +366,7 @@ export class OpenAICompatibleProvider {
     const finish = reply.finish ?? '';
     if (REFUSED.test(finish)) throw new ProviderError('The model declined this request.', 'refusal', false);
     if (finish === 'network_error' || finish === 'error' || finish === 'insufficient_system_resource') throw new ProviderError(`${this.label} lost the reply part-way through.`, 'unavailable', true);
-    if (/context_window|context_length/.test(finish)) throw new ProviderError('The conversation grew longer than the model can read.', 'bad_request', false);
+    if (/context_window|context_length/.test(finish)) throw new ProviderError('The conversation grew longer than the model can read.', 'too_long', false);
   }
 
   private checkFinish(reply: Reply): void {
@@ -443,10 +445,10 @@ export class OpenAICompatibleProvider {
         } else if (choice && /tool_choice/i.test(said)) {
           now.choice = false;
           lessons.push(() => (this.toolChoiceNone = false));
-        } else if (OVERFLOW.test(said)) {
+        } else if (overflows(err)) {
           // The prompt and the room asked for the reply do not fit the model's window together. A shorter
           // reply may fit: for this request only, since the next prompt may well be shorter.
-          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
           squeezed = true;
           now.cap = SQUEEZED_CAP;
         } else if (/max_completion_tokens/i.test(said) && /unsupported|unrecognized|unknown|not supported|not permitted|unexpected|instead/i.test(said) && now.capParam === 'max_completion_tokens') {
@@ -628,6 +630,8 @@ export class OpenAICompatibleProvider {
     if (err instanceof OpenAI.APIConnectionError) return new ProviderError(`Could not reach ${who}: ${err.message}`, 'unavailable', true);
     if (err instanceof OpenAI.APIError) {
       if (err.status === 402) return new ProviderError(`${who} says the account is out of credit: ${err.message}`, 'auth', false);
+      // A request too large for the endpoint to take in at all: the same work sent again would be as large.
+      if (err.status === 413) return new ProviderError(`The work outgrew what ${who} takes in one request: ${err.message}`, 'too_long', false);
       const retryable = err.status === undefined || err.status >= 500 || err.status === 408 || err.status === 409;
       return new ProviderError(`${who} ${retryable ? 'failed' : 'rejected the request'}${err.status ? ` (${err.status})` : ''}: ${err.message}`, retryable ? 'unavailable' : 'bad_request', retryable);
     }
