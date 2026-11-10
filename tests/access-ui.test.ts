@@ -6,6 +6,7 @@ import os from 'node:os';
 import express from 'express';
 import { chromium } from 'playwright-core';
 import { expect, it, vi } from 'vitest';
+import type { AccountBrowser } from '../src/server/access-browser';
 import { GitHubHost } from '../src/server/access-github';
 import { createApp } from '../src/server/app';
 import type { Config } from '../src/server/config';
@@ -22,7 +23,14 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
   const mail = { check: vi.fn(async () => {}), list: vi.fn(async () => [{ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', date: '' }]), read: vi.fn(async () => ({ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', text: 'Your fixture verification code is 123456.', date: '', truncated: false })), send: vi.fn(async (_box: unknown, _draft: { subject: string }) => {}) };
   const github = new FakeGitHub();
   await github.listen();
-  const registry = new Registry(store, new MockProvider(QUIET), { access: { mail, code: new GitHubHost(github.base) } });
+  // A stand-in for a service's site: two pages, each with its own elements, numbered from nothing as the real browser numbers them.
+  const sites = [
+    { url: 'https://supplier.paperclips.example/login', title: 'Sign in', text: 'Sign in to the supplier portal.', notice: '', elements: [{ id: 0, tag: 'input', type: 'email', label: 'Email' }, { id: 1, tag: 'input', type: 'password', label: 'Password' }, { id: 2, tag: 'button', type: 'submit', label: 'Sign in' }] },
+    { url: 'https://supplier.paperclips.example/home', title: 'Supplier home', text: 'Welcome back.', notice: '', elements: [{ id: 0, tag: 'a', type: '', label: 'Orders' }, { id: 1, tag: 'a', type: '', label: 'Invoices' }, { id: 2, tag: 'button', type: 'submit', label: 'Place order' }] },
+  ];
+  let site = 0;
+  const accountBrowser = { run: vi.fn<AccountBrowser['run']>(async (_account, _email, _key, action) => sites[action.action === 'click' ? (site = 1) : site]!), close: vi.fn(async () => {}) };
+  const registry = new Registry(store, new MockProvider(QUIET), { access: { mail, browser: accountBrowser, code: new GitHubHost(github.base) } });
   const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: true, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
   const app = createApp(registry, config); app.use(express.static(path.resolve('dist/client')));
   const server = app.listen(0, '127.0.0.1');
@@ -70,6 +78,25 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     expect(await text()).toContain('test-supplier-secret');
     await page.getByRole('button', { name: 'Hide password', exact: true }).click();
     expect(await text()).not.toContain('test-supplier-secret');
+    // In the account browser a choice of element is for one action. The page that comes back numbers its elements afresh, so nothing stays chosen and nothing can be pressed until something is.
+    await page.getByText('Account browser', { exact: true }).click();
+    await page.getByRole('button', { name: 'Open login', exact: true }).click();
+    const element = page.getByLabel('Page element', { exact: true });
+    await element.waitFor();
+    expect(await element.inputValue()).toBe('');
+    expect(await page.getByRole('button', { name: 'Click element', exact: true }).isDisabled()).toBe(true);
+    await element.selectOption({ label: '2: button submit — Sign in' });
+    await page.getByRole('button', { name: 'Click element', exact: true }).click();
+    await page.getByRole('heading', { name: 'Supplier home', exact: true }).waitFor();
+    expect(accountBrowser.run.mock.calls.at(-1)![3]).toMatchObject({ action: 'click', element: 2 });
+    expect(await element.inputValue()).toBe('');
+    expect(await page.getByRole('button', { name: 'Click element', exact: true }).isDisabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Fill element', exact: true }).isDisabled()).toBe(true);
+    await page.getByRole('button', { name: 'Inspect page', exact: true }).click();
+    await page.getByRole('button', { name: 'Close session', exact: true }).click();
+    await element.waitFor({ state: 'detached' });
+    expect(accountBrowser.run.mock.calls.slice(-2).map(call => call[3])).toEqual([expect.not.objectContaining({ element: expect.anything() }), expect.not.objectContaining({ element: expect.anything() })]);
+    await page.getByText('Account browser', { exact: true }).click();
     await page.getByText('Manage access', { exact: true }).click();
     await page.getByRole('button', { name: 'Disable', exact: true }).click();
     await page.getByRole('button', { name: 'Enable', exact: true }).waitFor();
