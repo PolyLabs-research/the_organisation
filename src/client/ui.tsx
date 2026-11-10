@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { Component, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Executive, Organisation, PauseReason, SopPhase } from '../shared/types';
 
@@ -161,6 +161,34 @@ export function ErrorNote({ children, onDismiss }: { children: ReactNode; onDism
       ) : null}
     </div>
   );
+}
+
+/**
+ * Keeps an error thrown while something is being drawn to the part of the page it happened in, and says so there.
+ * Left to itself, React answers such an error by taking the whole page away, and every control with it.
+ */
+export class ErrorBoundary extends Component<{ what: string; page?: boolean; children: ReactNode }, { failed: string | null }> {
+  override state: { failed: string | null } = { failed: null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { failed: error instanceof Error ? error.message : String(error) };
+  }
+
+  override render() {
+    if (this.state.failed === null) return this.props.children;
+    const note = (
+      <div className="note note-bad" role="alert">
+        <span>
+          <strong>{this.props.what} could not be shown.</strong> Drawing it failed with “{this.state.failed}”. That is a fault in this page, and stops nothing that was running.
+          Reload the page to try again.
+        </span>
+        <button type="button" className="button" onClick={() => window.location.reload()}>
+          Reload the page
+        </button>
+      </div>
+    );
+    return this.props.page ? <main className="page">{note}</main> : note;
+  }
 }
 
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {

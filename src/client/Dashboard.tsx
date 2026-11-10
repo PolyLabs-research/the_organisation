@@ -15,7 +15,7 @@ import { HelpButton, HelpProvider } from './Guide';
 import { SettingsPanel } from './SettingsPanel';
 import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
-import { Empty, ErrorNote, PAUSE_REASONS, money } from './ui';
+import { Empty, ErrorBoundary, ErrorNote, PAUSE_REASONS, money } from './ui';
 
 type Tab = 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity' | 'overseer';
 
@@ -207,21 +207,26 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
             ))}
           </div>
           <div className="tab-panel" role="tabpanel">
-            {tab === 'access' ? <Suspense fallback={<p className="muted">Loading email and accounts…</p>}><Access org={org} /></Suspense> : null}
-            {tab === 'privileges' ? <Privileges org={org} onView={setView} onSettings={() => setSettingsOpen(true)} /> : null}
-            {tab === 'approaches' ? <Approaches org={org} onView={setView} /> : null}
-            {tab === 'calendar' ? <Operations org={org} calendar onView={setView} onOpenPlan={openPlan} /> : null}
-            {tab === 'business' ? <Operations org={org} onView={setView} onOpenPlan={openPlan} /> : null}
-            {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
-            {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
-            {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
+            {/* A tab that cannot be drawn says so in its own place, and the rest of the page carries on, Pause and Stop included. Choosing a tab starts it afresh. */}
+            <ErrorBoundary key={tab} what="This tab">
+              {tab === 'access' ? <Suspense fallback={<p className="muted">Loading email and accounts…</p>}><Access org={org} /></Suspense> : null}
+              {tab === 'privileges' ? <Privileges org={org} onView={setView} onSettings={() => setSettingsOpen(true)} /> : null}
+              {tab === 'approaches' ? <Approaches org={org} onView={setView} /> : null}
+              {tab === 'calendar' ? <Operations org={org} calendar onView={setView} onOpenPlan={openPlan} /> : null}
+              {tab === 'business' ? <Operations org={org} onView={setView} onOpenPlan={openPlan} /> : null}
+              {tab === 'board' ? <Board org={org} onOpenPlan={openPlan} /> : null}
+              {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
+              {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
+              {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
+              {tab === 'overseer' ? <Suspense fallback={<p className="muted">Loading the overseer…</p>}><Overseer view={view} activity={activity} /></Suspense> : null}
+              {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
+            </ErrorBoundary>
             {/* Kept in place while another tab is shown, so that an answer half typed is still there after reading the file a request points to. */}
             <div hidden={tab !== 'signatory'}>
-              <Signatory org={org} shown={tab === 'signatory'} onView={setView} onOpenPlan={openPlan} onOpenFile={openFile} onSettings={() => setSettingsOpen(true)} />
+              <ErrorBoundary what="This tab">
+                <Signatory org={org} shown={tab === 'signatory'} onView={setView} onOpenPlan={openPlan} onOpenFile={openFile} onSettings={() => setSettingsOpen(true)} />
+              </ErrorBoundary>
             </div>
-            {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
-            {tab === 'overseer' ? <Suspense fallback={<p className="muted">Loading the overseer…</p>}><Overseer view={view} activity={activity} /></Suspense> : null}
-            {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
           </div>
         </section>
       </div>
