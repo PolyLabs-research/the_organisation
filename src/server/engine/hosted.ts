@@ -442,6 +442,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       let rel: string;
       try {
         rel = workspace.normalise(outputPath(file.name, team));
+        // A name can climb out of the team's directory and still be inside the workspace ("../marketing/plan.md"),
+        // where it would replace another team's file.
+        if (!rel.startsWith(`${team}/`)) throw new WorkspaceError(`path leaves ${team}/`);
         const written = await workspace.writeBytes(rel, file.bytes);
         rel = written.path;
       } catch (err) {

@@ -284,6 +284,43 @@ describe('a plan carried out in a hosted session', () => {
   });
 });
 
+describe('a file a session names so as to leave its team\'s directory', () => {
+  it('is not written into another team\'s directory, and is left in the session', async () => {
+    const paths: Array<string | null> = [];
+    let done = false;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks }) => {
+        hooks.session({ id: 'sesn_test', consoleUrl: null, budgetUsd: 5 });
+        const bytes = new TextEncoder().encode('from the session');
+        paths.push(await hooks.output({ id: 'f1', name: '../marketing/plan.md', bytes }));
+        paths.push(await hooks.output({ id: 'f2', name: 'engineering/../marketing/plan.md', bytes }));
+        paths.push(await hooks.output({ id: 'f3', name: '..\\marketing\\plan.md', bytes }));
+        paths.push(await hooks.output({ id: 'f4', name: '/mnt/session/outputs/engineering/drafts/../../marketing/plan.md', bytes }));
+        // Dots that stay inside the team's directory are only an odd way of writing the path.
+        paths.push(await hooks.output({ id: 'f5', name: 'engineering/drafts/../spec.md', bytes }));
+        done = true;
+        while (hooks.halt() === null) await new Promise((resolve) => setTimeout(resolve, 2));
+        return { status: 'paused' };
+      }),
+    });
+    // Another team's file, which a session of the engineering lead has no business replacing.
+    await h.runner.workspace.write('marketing/plan.md', 'from marketing');
+    h.runner.start();
+    await waitFor(() => done, 'the outputs');
+    h.runner.pause();
+    await h.runner.idle();
+
+    expect(paths).toEqual([null, null, null, null, 'engineering/spec.md']);
+    expect((await h.runner.workspace.read('marketing/plan.md')).content).toBe('from marketing');
+    expect((await h.runner.workspace.list()).map((f) => f.path)).toEqual(['engineering/spec.md', 'marketing/plan.md']);
+    expect(planOf(h.org).managed!.files).toEqual(['engineering/spec.md']);
+    expect(planOf(h.org).managed!.note).toContain('could not be kept');
+    expect(planOf(h.org).managed!.note).toContain('path leaves engineering/');
+  });
+});
+
 describe('a hosted session and the organisation\'s controls', () => {
   it('is held when the organisation is paused, and carries on from where it was', async () => {
     h = await harness({ settings: HOSTED, executives: ONE_LEAD, mock: { delayMs: 2, runs: 'never' } });
