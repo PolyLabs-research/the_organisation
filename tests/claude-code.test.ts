@@ -509,6 +509,18 @@ describe('an agent run through Claude Code', () => {
     expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(1005);
   });
 
+  it('counts a reply that a fallback model wrote at that model’s price, as it comes', async () => {
+    const usage: CallUsage[] = [];
+    // The run is cut off before it gives its own account, so the count made along the way is all there is.
+    const cut = await failure(provider({ FAKE_CLAUDE_MODE: 'fallback' }, { idleTimeoutMs: 300 }).structured(ask({ onUsage: (u) => usage.push(u) })));
+    expect(cut.code).toBe('unavailable');
+    expect(usage.every((u) => u.model === 'claude-opus-4-8')).toBe(true);
+    expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2000);
+    expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(500);
+    // Not a model an organisation can be set to, but one with a price: $5 in and $25 out per million tokens.
+    expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo((2000 * 5 + 500 * 25) / 1e6, 10);
+  });
+
   it('settles a run to its own account when the model goes by another name there', async () => {
     const usage: CallUsage[] = [];
     await provider({ FAKE_CLAUDE_MODE: 'renamed' }).structured(ask({ onUsage: (u) => usage.push(u) }));

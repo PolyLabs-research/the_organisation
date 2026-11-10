@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
-import { MODELS, costOfRequest, isKnownModel } from './pricing';
+import { MODELS, costOfRequest, hasRates, isKnownModel } from './pricing';
 import { ProviderError, type AgentRequest, type AgentResult, type AgentTool, type CallUsage, type Provider, type StructuredRequest, type SystemPrompt } from './types';
 
 // Runs the organisation on Claude through Claude Code, the program, instead
@@ -669,7 +669,8 @@ export class ClaudeCodeProvider implements Provider {
         const before = replies.get(id);
         const total = most(before ?? NO_TOKENS, known);
         const plain = canonical(model);
-        const costUsd = Math.max(before?.costUsd ?? 0, isKnownModel(plain) ? costOfRequest(plain, total) : 0);
+        // A reply the model's fallback wrote, after a refusal, is counted at the fallback's rates as it comes.
+        const costUsd = Math.max(before?.costUsd ?? 0, hasRates(plain) ? costOfRequest(plain, total) : 0);
         replies.set(id, { ...total, model: plain, costUsd });
         const more = beyond(total, before ?? NO_TOKENS);
         const moreCost = costUsd - (before?.costUsd ?? 0);

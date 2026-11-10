@@ -15,7 +15,7 @@
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
 //                        | silent | extra | extra-once | credits | needscredits | loop | stubborn | badloop | parallel | notools
 //                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow | toolong | toolong-words
-//                        | filtered | blocked
+//                        | filtered | blocked | fallback
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -102,13 +102,15 @@ const endReply = () => {
   if (partial) emit({ type: 'stream_event', session_id: session, api_message_id: id, event: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 2000, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
 };
 /** One reply: its input in full when it starts and only a little of its output, as the real stream reports it, and its whole size when it ends. */
+/** The model the replies say they are from: the one asked for, unless another stood in for it. */
+let served = model;
 const reply = (content, partialOut = 5) => {
   endReply();
   messages += 1;
   const id = `msg_${messages}`;
   const usage = { input_tokens: 2000, output_tokens: partialOut, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-  if (partial) emit({ type: 'stream_event', session_id: session, event: { type: 'message_start', message: { id, type: 'message', role: 'assistant', model, content: [], usage: { ...usage, output_tokens: 1 } } } });
-  emit({ type: 'assistant', session_id: session, message: { id, type: 'message', role: 'assistant', model, content, stop_reason: null, usage } });
+  if (partial) emit({ type: 'stream_event', session_id: session, event: { type: 'message_start', message: { id, type: 'message', role: 'assistant', model: served, content: [], usage: { ...usage, output_tokens: 1 } } } });
+  emit({ type: 'assistant', session_id: session, message: { id, type: 'message', role: 'assistant', model: served, content, stop_reason: null, usage } });
   ending = id;
 };
 const limits = (more = {}) =>
@@ -224,6 +226,12 @@ async function main() {
       return fail(404, `There's an issue with the selected model (${model}). It may not exist or you may not have access to it. Run --model to pick a different model.`);
     case 'overloaded':
       return fail(529, 'API Error: Repeated 529 Overloaded errors');
+    case 'fallback':
+      // The model asked for declined, and the model that stands in for it wrote the reply. The run gets no further.
+      served = 'claude-opus-4-8';
+      reply([{ type: 'text', text: 'Working.' }]);
+      endReply();
+      return new Promise(() => setInterval(() => {}, 1000));
     case 'filtered':
       // The API's content filter stopped the reply and answered with an error. Not seen from the real command:
       // these are the words it has for it.

@@ -68,6 +68,11 @@ export function isKnownModel(id: string): boolean {
   return BY_ID.has(id);
 }
 
+/** Whether a model has rates of its own here: one an organisation can be set to, or one that can stand in for it. */
+export function hasRates(id: string): boolean {
+  return BY_ID.has(id) || Object.hasOwn(FALLBACK_RATES, id);
+}
+
 /** The fetch tool comes in the same two generations as search: a model takes the one that matches its search tool. */
 export function webFetchToolFor(model: string): 'web_fetch_20260209' | 'web_fetch_20250910' {
   return webSearchToolFor(model) === 'web_search_20260209' ? 'web_fetch_20260209' : 'web_fetch_20250910';
