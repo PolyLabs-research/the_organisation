@@ -5,6 +5,7 @@ import { isOpen } from '../shared/signatory';
 import { INTERRUPTED, type ActivityEntry, type Organisation, type OrgView, type WorkKind } from '../shared/types';
 import { describeWait, heldBy } from '../shared/waits';
 import { api } from './api';
+import { LadderStanding } from './Ladder';
 import { Empty, duration, money, seatName } from './ui';
 
 // ---- shared ----
@@ -451,10 +452,13 @@ function EffortView({ org, entries }: { org: Organisation; entries: ActivityEntr
 
   if (!samples.length) {
     return (
-      <Empty title="No rated work has finished yet.">
-        Leads rate every plan, phase and task from 1 to 10. Once rated tasks finish, this shows what each level actually takes here, and how far apart the models are.
-        {unrated ? ` ${unrated} finished task${unrated === 1 ? ' was' : 's were'} done before ratings were recorded.` : ''}
-      </Empty>
+      <>
+        <LadderStanding org={org} />
+        <Empty title="No rated work has finished yet.">
+          Leads rate every plan, phase and task from 1 to 10. Once rated tasks finish, this shows what each level actually takes here, and how far apart the models are.
+          {unrated ? ` ${unrated} finished task${unrated === 1 ? ' was' : 's were'} done before ratings were recorded.` : ''}
+        </Empty>
+      </>
     );
   }
   return (
@@ -465,6 +469,7 @@ function EffortView({ org, entries }: { org: Organisation; entries: ActivityEntr
       </p>
       <Legend items={charted.map((m, i) => ({ swatch: <span className={`viz-swatch slot-${i + 1}`} />, label: m }))} />
       <CalibrationChart calibration={tasks} models={charted} />
+      <LadderStanding org={org} />
       <h4 className="viz-heading">Tasks, by effort</h4>
       <LevelTable calibration={tasks} models={models} />
       <h4 className="viz-heading">Phases, by effort</h4>

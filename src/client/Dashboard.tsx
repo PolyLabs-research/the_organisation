@@ -52,15 +52,17 @@ function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void })
 export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const { view, setView, activity, connected, missing, resumed } = useOrgStream(id);
   const control = useAction();
-  const [tab, setTab] = useState<Tab>(new URLSearchParams(window.location.search).get('access') === 'connected' ? 'access' : 'board');
+  // What brought the browser back here from a sign-in elsewhere, if that is how it came: a mailbox connected, or a tool server signed in to.
+  const [arrived] = useState(() => new URLSearchParams(window.location.search).get('access'));
+  const [tab, setTab] = useState<Tab>(arrived === 'connected' || arrived === 'tools' ? 'access' : 'board');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planTarget, setPlanTarget] = useState<string | null>(null);
   const [file, setFile] = useState<string | null>(null);
-  // The address says a mailbox has just been connected, which is why this page opened on that tab. Once it has, the note
-  // is taken out of the address: left there, every organisation opened from here on, and every reload, opened on that tab too.
+  // The address says a mailbox has just been connected, or a tool server signed in to, which is why this page opened on that
+  // tab. Once it has, the note is taken out of the address: left there, every organisation opened from here on, and every reload, opened on that tab too.
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (url.searchParams.get('access') !== 'connected') return;
+    if (!url.searchParams.has('access')) return;
     url.searchParams.delete('access');
     window.history.replaceState(window.history.state, '', url);
   }, []);
@@ -217,7 +219,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
           <div className="tab-panel" role="tabpanel">
             {/* A tab that cannot be drawn says so in its own place, and the rest of the page carries on, Pause and Stop included. Choosing a tab starts it afresh. */}
             <ErrorBoundary key={tab} what="This tab">
-              {tab === 'access' ? <Suspense fallback={<p className="muted">Loading email and accounts…</p>}><Access org={org} /></Suspense> : null}
+              {tab === 'access' ? <Suspense fallback={<p className="muted">Loading email and accounts…</p>}><Access org={org} arrived={arrived === 'tools' ? 'tools' : null} /></Suspense> : null}
               {tab === 'privileges' ? <Privileges org={org} onView={setView} onSettings={() => setSettingsOpen(true)} /> : null}
               {tab === 'approaches' ? <Approaches org={org} onView={setView} /> : null}
               {tab === 'calendar' ? <Operations org={org} calendar onView={setView} onOpenPlan={openPlan} /> : null}

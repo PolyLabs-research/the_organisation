@@ -144,8 +144,8 @@ export function systemFor(org: Organisation, exec: Executive, where: 'local' | '
 
 export function systemForAgent(org: Organisation, lead: Executive, canSearch = org.settings.webResearch): SystemPrompt {
   const web = canSearch
-    ? 'You can search the web and read pages: web_fetch reads a page whose address came from a search result, your task or a file. Use them for facts you would otherwise have to assume: search to find a source, then read the page itself before relying on what it says, and cite the address next to anything you take from it. A task has a limited number of searches. A search or fetch that comes back with an error has hit that limit or a page that could not be read: it is not a ban on research. Try another source or carry on with what you have, and say in your report exactly what you could not check. You cannot run code. Outside systems are available only through explicitly granted business email and account tools.'
-    : 'You cannot run code or browse arbitrary websites. You can use explicitly granted business email and account tools.';
+    ? 'You can search the web and read pages: web_fetch reads a page whose address came from a search result, your task or a file. Use them for facts you would otherwise have to assume: search to find a source, then read the page itself before relying on what it says, and cite the address next to anything you take from it. A task has a limited number of searches. A search or fetch that comes back with an error has hit that limit or a page that could not be read: it is not a ban on research. Try another source or carry on with what you have, and say in your report exactly what you could not check. You cannot run code. Outside systems are available only through explicitly granted business email and account tools, and through tools a person has connected for your team.'
+    : 'You cannot run code or browse arbitrary websites. You can use explicitly granted business email and account tools, and tools a person has connected for your team.';
   const limits = limitsOf(org, lead, 'local');
   return {
     charter: charter(org),
@@ -553,9 +553,11 @@ ${filesBlock(files)}${codeBlock(plan, branch)}`;
 }
 
 function taskReport(task: Task): string {
-  if (task.status === 'failed') return `## ${task.title}${task.rework ? ' (rework)' : ''}\nFAILED: ${task.error ?? 'no result'}`;
+  // The id is how a lead says whose work a rework task puts right.
+  const head = `## ${task.title}${task.rework ? ' (rework)' : ''}\nTask id: ${task.id}`;
+  if (task.status === 'failed') return `${head}\nFAILED: ${task.error ?? 'no result'}`;
   const files = task.files.length ? `\nFiles: ${task.files.join(', ')}` : '\nFiles: none written';
-  return `## ${task.title}${task.rework ? ' (rework)' : ''}\n${(task.result ?? '').slice(0, 6000)}${files}`;
+  return `${head}\n${(task.result ?? '').slice(0, 6000)}${files}`;
 }
 
 export interface ReviewFile {
@@ -593,7 +595,7 @@ export function phaseReviewPrompt(org: Organisation, plan: Plan, index: number, 
       ? 'The system has not passed this gate, so the phase cannot pass and will go back for rework whatever you decide. Give the tasks that will fix it. Agents can read the checks and the logs of failed runs with read_repository.'
       : 'The system has not passed this gate and the phase cannot be sent back again, so the plan stops here. Say in your summary what was tried and what is left.'
     : canRework
-      ? 'Pass the phase if it meets its purpose and deliverable well enough for the next phase to rely on. Send it back for rework only if a specific, fixable gap would undermine what follows, and then give the tasks that close the gap.'
+      ? 'Pass the phase if it meets its purpose and deliverable well enough for the next phase to rely on. Send it back for rework only if a specific, fixable gap would undermine what follows, and then give the tasks that close the gap. For each of those, say which task\'s work it puts right, by that task\'s id, or leave that empty if it is work no task was asked to do.'
       : 'This phase has already been sent back as often as it can be. Pass it now, and record in your summary anything that remains open so the next phase can allow for it.';
   return `Your agents have finished phase ${index + 1} of ${plan.phases.length}, ${phase.name}.
 

@@ -149,6 +149,39 @@ export interface OrgSettings {
    * person, since nothing here can move money or sign a document.
    */
   signatory: SignatoryHolder;
+  /**
+   * Cheaper models for the agents' lighter tasks, lightest first. A task rated at or below a rung's level goes to
+   * that rung's model; a task rated above the last rung, or not rated at all, goes to the agents' model. Empty
+   * means every task goes to the agents' model. Work on this machine only: a hosted session has one model for
+   * its agents.
+   */
+  workerLadder: LadderRung[];
+  /** Whether those levels move as results come in: down when a model's work is sent back, up when it holds. */
+  workerLadderLearns: boolean;
+}
+
+/** One step of the ladder below the agents' model: a cheaper model, and the highest effort level it is given. */
+export interface LadderRung {
+  model: string;
+  /** 1 to 9 on the effort scale. */
+  upTo: number;
+}
+
+/** What the organisation has seen of one rung of the ladder, and where the rung stands now because of it. */
+export interface RungRecord {
+  model: string;
+  /** The highest level this rung takes now. It starts where the settings put it; 0 means it takes nothing. */
+  upTo: number;
+  /** Set when the rung has given a level up: it is not tried above this level again. */
+  ceiling: number | null;
+  /** What became of its most recent tasks since its level last moved, oldest first. */
+  recent: Array<{ level: number; ok: boolean }>;
+}
+
+/** Where the ladder stands, and the settings it was built from: a change to those starts it afresh. */
+export interface Routing {
+  from: LadderRung[];
+  rungs: RungRecord[];
 }
 
 export type SignatoryHolder = 'human' | 'ai';
@@ -232,6 +265,12 @@ export interface Task {
   effort: number | null;
   /** For work done in a hosted session: the session thread of the agent that did it. */
   threadId?: string | null;
+  /** The model the task was given to, on this machine. Absent on a task from before this was recorded. */
+  model?: string | null;
+  /** For rework: the task whose work this puts right, where the lead named one. */
+  redoes?: string | null;
+  /** What the lead's review found: work let stand, work sent back, or a task that had failed. Absent until the phase has been reviewed. */
+  judged?: 'accepted' | 'sent_back' | 'failed';
 }
 
 export type PhaseStatus = 'pending' | 'working' | 'done';
@@ -597,6 +636,8 @@ export interface Organisation {
   signatory: SignatoryDesk;
   usage: UsageTotals;
   usageByExec: Record<string, UsageTotals>;
+  /** Where the ladder of agent models stands. Null, or absent, when every task goes to the agents' model. */
+  routing?: Routing | null;
 }
 
 /** Something the organisation is doing right now; transient, never persisted. */

@@ -80,7 +80,7 @@ export class Registry {
       settings.executiveModel ??= fallback;
       settings.workerModel ??= fallback;
     }
-    for (const [seat, model] of [['executives', settings.executiveModel], ['agents', settings.workerModel]] as const) {
+    for (const [seat, model] of [['executives', settings.executiveModel], ['agents', settings.workerModel], ...(settings.workerLadder ?? []).map((rung) => ['agents’ lighter tasks', rung.model] as const)] as const) {
       if (model && this.provider.knows && !this.provider.knows(model)) {
         throw new ValidationError(`The model chosen for the ${seat}, "${model}", is not one a connected key can call. Add its key under Models and keys, or pick another model.`);
       }

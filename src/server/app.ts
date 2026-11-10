@@ -1,5 +1,5 @@
 import { createOnlyPaperclips } from './only-paperclips';
-import { accessRoutes } from './access-routes';
+import { SIGN_IN_CALLBACK, accessRoutes, toolSignIns } from './access-routes';
 import { AccessError } from './access-vault';
 import { googleRoutes } from './access-google';
 import { operatingDigest } from '../shared/business';
@@ -338,7 +338,11 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
   });
 
   googleRoutes(app, registry, config);
-  app.use('/api/orgs/:id/access', accessRoutes(registry, config));
+  // A service sends the person's browser back here from another site, so this one address stands outside the access
+  // routes, which take nothing that comes from another site. What it will finish is decided by what it is handed.
+  const signIns = toolSignIns(registry, config);
+  app.get(SIGN_IN_CALLBACK, signIns.callback);
+  app.use('/api/orgs/:id/access', accessRoutes(registry, config, signIns));
 
   app.get('/api/orgs/:id/activity', (req, res) => {
     res.json(runnerOf(req).activity);

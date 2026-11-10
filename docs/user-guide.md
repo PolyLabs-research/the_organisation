@@ -15,6 +15,7 @@ A step-by-step guide to running an organisation of agents, from first start to r
 - [Set what each role may do](#set-what-each-role-may-do)
 - [Choose how roles may work](#choose-how-roles-may-work)
 - [Work on code](#work-on-code)
+- [Give it tools from other services](#give-it-tools-from-other-services)
 - [Change the settings](#change-the-settings)
 - [If it stops](#if-it-stops)
 - [Keep your data safe](#keep-your-data-safe)
@@ -97,7 +98,7 @@ The left side shows the hierarchy: you, the CEO, the signatory, and each lead wi
 | --- | --- |
 | **Board** | Everything said at board level, newest first. Start here |
 | **Calendar** | Commitments, with owners, dependencies and dates |
-| **Email & accounts** | Mailboxes, accounts, repositories, drafts and requests for help |
+| **Email & accounts** | Mailboxes, accounts, repositories, tool servers, drafts and requests for help |
 | **Privileges** | What each role may do |
 | **Approaches** | Which ways of working each role may use |
 | **Business** | Digest, customers, scorecard, finances, knowledge, events and history |
@@ -159,7 +160,7 @@ Most things start on. These start off:
 - **Act on accounts** and **Create accounts**
 - **Push branches and open pull requests**, **Start build workflows** and **Change build pipelines**
 
-Give them one role at a time, for a reason. The panel warns you if a role can both read mail and act on accounts, because an email could steer what it does. See [what each role may do](../README.md#what-each-role-may-do).
+Give them one role at a time, for a reason. The panel warns you if a role can read mail and also act on accounts or call connected tools, because an email could steer what it does. See [what each role may do](../README.md#what-each-role-may-do).
 
 ![Privileges](only-paperclips-privileges.png)
 
@@ -200,6 +201,17 @@ Open the plan under **Plans** to see the branch, the pull request and what the s
 **You merge.** Review the pull request on GitHub and merge it if you are happy. Agents have no way to. The commitment then waits in **Calendar** for you to verify it.
 
 If a gate cannot pass, the plan stops and the board says why. Fix the cause, then steer the organisation to try again.
+
+## Give it tools from other services
+
+Agents can call tools on a server that speaks the Model Context Protocol (MCP), such as an issue tracker's or one you run yourself. This has been tested against a server on the same machine, and not yet against a third party's. The [full guide](tool-servers.md) covers what can be connected and the limits.
+
+1. Get the server's address, and a token for it if it asks for one. Make the token as narrow as the service allows.
+2. In **Email & accounts**, open **Tool servers** and fill in **Connect a tool server**. Assign it to a team. For a service that asks you to sign in instead of giving a token, leave the token empty and click **Sign in to the server**: you are sent to the service and brought back.
+3. On the server's card, read what each tool does, tick the ones agents may call, and click **Save allowed tools**. None is allowed until you do.
+4. Under **Privileges**, tick **Use connected tools** for that role.
+
+Agents work on this machine for this, so keep **On this machine** selected. Every call is listed under **Access history**. No person checks a call before it is made, so allow only tools you would let the agents use unwatched.
 
 ## Change the settings
 

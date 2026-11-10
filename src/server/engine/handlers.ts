@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
-import { accessTools } from '../access-tools';
+import { accessTools, connectedTools } from '../access-tools';
 import { codeTools } from '../access-code-tools';
 import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
@@ -16,6 +16,7 @@ import { AGENT_BRANCHES } from '../access';
 import { gateEvidence, type CheckTimes } from './evidence';
 import { closeOpenWork, executeInSession } from './hosted';
 import * as prompts from './prompts';
+import { judgeRound } from './routing';
 import { MAX_RESULT_CHARS, bullets, clean, fileReport, logRemitDecisions, newTask, now } from './records';
 import * as schemas from './schemas';
 import { raiseRequests, ruleOnRequest, withdrawRequests } from './signatory';
@@ -522,6 +523,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       });
       tools.push(...businessTools(org, { id: exec.id, worker: true }, ctx.touch, () => !ctx.halting() && !ctx.signal.aborted && isPlanActive(plan)));
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
+      tools.push(...connectedTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(
         ...codeTools(
           ctx.access,
@@ -546,12 +548,14 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       );
       const files = await workspace.list();
       // Web search is switched on for the organisation, but only some providers' models can do it.
-      const canSearch = org.settings.webResearch && allows(org, exec.id, 'web_search') && (provider.searches?.(org.settings.workerModel) ?? true);
+      // The model the task was given to when it was started: by its rating, where the agents have a ladder of models.
+      const model = task.model ?? org.settings.workerModel;
+      const canSearch = org.settings.webResearch && allows(org, exec.id, 'web_search') && (provider.searches?.(model) ?? true);
       const result = await provider.agent({
         kind: 'task',
         system: prompts.systemForAgent(org, exec, canSearch),
         prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files, planBranch(org, plan)) + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
-        model: org.settings.workerModel,
+        model,
         effort: org.settings.workerEffort,
         tools,
         // The whole allowance is open in any one request, so a search is only ever refused for the limit once the task has used it up.
@@ -604,7 +608,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const data = await ask(system, prompts.phaseReviewPrompt(org, plan, item.phaseIndex, canRework, written, proof), schemas.PhaseReview, {
         plan: planContext(org, plan),
         phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex },
-        tasks: phase.tasks.map((t) => ({ title: t.title, status: t.status, files: t.files })),
+        tasks: phase.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, files: t.files })),
         canRework,
       });
       return () => {
@@ -625,10 +629,22 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         if (held || (data.verdict === 'rework' && canRework && rework.length)) {
           phase.reworkRounds += 1;
           // Check names come from the repository, so they are left out of a brief an agent takes as its instructions.
-          if (held && !rework.length) rework.push({ title: `Clear the ${phase.name} gate`, brief: `The system did not pass this gate. Read the checks and the logs of any failed runs with read_repository, find out why, put it right and push the fix to the plan's branch.`, effort: 0 });
-          phase.tasks.push(...rework.map((t) => rated(newTask(org, t.title, t.brief, true), t.effort)));
+          if (held && !rework.length) rework.push({ title: `Clear the ${phase.name} gate`, brief: `The system did not pass this gate. Read the checks and the logs of any failed runs with read_repository, find out why, put it right and push the fix to the plan's branch.`, effort: 0, redoes: '' });
+          const added = rework.map((t) => {
+            const task = rated(newTask(org, t.title, t.brief, true), t.effort);
+            // Whose work this puts right, as the lead named it: by its id, or failing that by its title.
+            const named = t.redoes.trim().toLowerCase();
+            task.redoes = (named ? phase.tasks.find((done) => done.id.toLowerCase() === named) ?? phase.tasks.find((done) => done.title.toLowerCase() === named) : undefined)?.id ?? null;
+            return task;
+          });
+          // What the lead has read is judged before the new tasks join it. Work the lead named is sent back and the
+          // rest stands. Stopped by the system's own checks with nobody named, all of it is taken as sent back.
+          const named = new Set(added.flatMap((task) => (task.redoes ? [task.redoes] : [])));
+          judgeRound(org, exec, phase, held && !named.size ? 'all' : named);
+          phase.tasks.push(...added);
         } else {
           phase.status = 'done';
+          judgeRound(org, exec, phase, new Set());
         }
         // What the plan now needs paid for or signed goes to the signatory. The plan does not wait for it.
         raiseRequests(org, exec, plan, phase.name, data.requests);
