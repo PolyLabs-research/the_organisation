@@ -79,6 +79,18 @@ export const ABOUT_FORMAT = /response_format|text\.format|json_schema|json_objec
 export const NOT_ABOUT_FORM =
   /does not exist|not found|no such model|unknown model|not have access|api[ _-]?key|unauthori[sz]ed|authenticat|context (length|window)|too (long|large|many)|content (policy|filter|management)|moderation|inspection|safety|balance|quota|billing|credit|arrears/i;
 
+/**
+ * The codes and types endpoints put on a request they turned away for what it says, not for how it was put:
+ * OpenAI's content_policy_violation and its *_policy codes, content_filter (Azure, Moonshot), Alibaba's
+ * data_inspection_failed, moderation_blocked, ByteDance's SensitiveContentDetected, Zhipu's 1301.
+ */
+const REFUSED_CODE = /policy|safety|content_filter|data_inspection|moderation|sensitive_?content|\b1301\b/i;
+/** The same in words, for an endpoint or a gateway in front of one that gives no code for it. */
+const REFUSED_WORDS = /content (policy|filter|management)|inappropriate content|content exists risk|(prompt|input) was flagged/i;
+/** Whether a refusal, by its code or failing that its words, is of what a request says. Sent again in any form, it would be refused again. */
+export const refusesContent = (code: string, message: string): boolean => REFUSED_CODE.test(code) || REFUSED_WORDS.test(message);
+export const refusedForContent = (err: InstanceType<typeof OpenAI.APIError>): boolean => refusesContent(`${err.code ?? ''} ${err.type ?? ''}`, err.message);
+
 /** A refusal that says the prompt, or the prompt and the room asked for the reply together, is more than the model can read. */
 export const OVERFLOW = /context (length|window|size|limit)|maximum context|context_length|prompt is too long|input.{0,30}too long|too many (input |prompt )?tokens|exceeds? the (model'?s? )?(maximum )?(context|input)/i;
 /** The same said by its code, which OpenAI and the endpoints that copy it give, whatever the words. */
@@ -427,6 +439,8 @@ export class OpenAICompatibleProvider {
         return reply;
       } catch (err) {
         if (!refusesForm(err)) throw err;
+        // Nothing about the form of a request changes what it says.
+        if (refusedForContent(err)) throw this.translate(err);
         if (adaptations >= MAX_ADAPTATIONS) throw unexplained ?? err;
         const said = err.message;
         // The way a structured answer is asked for is the caller's to change.
@@ -617,6 +631,8 @@ export class OpenAICompatibleProvider {
     if (err instanceof ProviderError) return err;
     const who = this.label;
     if (err instanceof OpenAI.APIUserAbortError) return new ProviderError('The call was interrupted.', 'aborted', false);
+    // Turned away for what the request says, under whatever status: some gateways answer 403, which is not a key refused.
+    if (err instanceof OpenAI.APIError && refusedForContent(err)) return new ProviderError(`${who} declined this request: ${err.message}`, 'refusal', false);
     // One provider answers a bad key with a 400 that says so, where the rest answer 401.
     const keyRefused = err instanceof OpenAI.BadRequestError && /api[ _-]?key/i.test(err.message) && /valid|incorrect|missing|expired|not found/i.test(err.message);
     if (err instanceof OpenAI.AuthenticationError || err instanceof OpenAI.PermissionDeniedError || keyRefused) {

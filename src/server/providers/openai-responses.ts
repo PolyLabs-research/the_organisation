@@ -12,6 +12,8 @@ import {
   WRAP_UP,
   lowerCap,
   overflows,
+  refusedForContent,
+  refusesContent,
   refusesForm,
   runTool,
   safeParse,
@@ -243,6 +245,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         return turn;
       } catch (err) {
         if (!refusesForm(err)) throw err;
+        // Nothing about the form of a request changes what it says.
+        if (refusedForContent(err)) throw this.translate(err);
         if (adaptations >= MAX_ADAPTATIONS) throw unexplained ?? err;
         const said = err.message;
         // The way a structured answer is asked for is the caller's to change.
@@ -346,7 +350,7 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
 
   /** A response that failed after it was accepted: what it means, by the code it carries. */
   private failure(code: string, message: string): ProviderError {
-    if (/policy|safety|content_filter/.test(code)) return new ProviderError(`The model declined this request: ${message}`, 'refusal', false);
+    if (refusesContent(code, message)) return new ProviderError(`The model declined this request: ${message}`, 'refusal', false);
     if (code === 'context_length_exceeded') return new ProviderError(`The work outgrew the model’s context window: ${message}`, 'too_long', false);
     if (/rate_limit/.test(code)) return new ProviderError(`${this.label} is rate limiting this key: ${message}`, 'rate_limit', true);
     if (code === '' || /server_error|overloaded|timeout|unavailable/.test(code)) return new ProviderError(`${this.label} failed part-way through a reply: ${message}`, 'unavailable', true);

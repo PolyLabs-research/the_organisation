@@ -869,6 +869,11 @@ export class ClaudeCodeProvider implements Provider {
     const status = num(result.api_error_status);
     // The kinds of refusal Claude Code names for itself, wherever in the result it names them.
     const whole = JSON.stringify(result);
+    // Turned away for what the request says: by the API's content filter, a safety monitor, or the organisation's own
+    // rules on what may be sent. The same request would be turned away again.
+    if (/safety_monitor_blocked|dlp_request_denied/.test(whole) || /Output blocked by content filtering policy/i.test(said)) {
+      throw new ProviderError(`The model declined this request: ${said}`, 'refusal', false);
+    }
     if (/model_requires_usage_credits|long_context_credits_required/.test(whole)) {
       throw new ProviderError(`Claude Code would have to bill this call to paid usage, which your plan does not cover: ${said} The organisation is paused. Move it to another model, or allow the usage in Claude Code yourself and resume.`, 'rate_limit', false);
     }

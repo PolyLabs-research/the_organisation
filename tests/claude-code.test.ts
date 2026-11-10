@@ -272,6 +272,8 @@ describe('one call through Claude Code', () => {
     ['invalid', 'invalid_output', true, /did not match the expected structure \(proposal/],
     ['nostructured', 'invalid_output', true, /gave no structured reply: Here is my answer in prose instead\./],
     ['refusal', 'refusal', false, /declined this request/],
+    ['filtered', 'refusal', false, /declined this request: .*content filtering policy/],
+    ['blocked', 'refusal', false, /declined this request/],
     ['toolong', 'too_long', false, /outgrew the model’s context window/],
     ['toolong-words', 'too_long', false, /outgrew the model’s context window/],
   ] as const)('turns a run that ends in "%s" into an error the organisation can act on', async (mode, code, retryable, message) => {

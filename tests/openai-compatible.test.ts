@@ -839,6 +839,26 @@ describe('an agent run', () => {
     ]);
   });
 
+  it('takes a request the endpoint turned away for what it says as declined, and does not send it again in another form', async () => {
+    // Said by a code, as most endpoints say it.
+    api.replies = [{ status: 400, error: 'Input data may contain inappropriate content.', code: 'data_inspection_failed' }];
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false, message: expect.stringContaining('Testco declined this request') });
+    expect(api.chats).toHaveLength(1);
+    // Said in words alone, to a call that has three ways of asking for its answer: it is asked for once.
+    api.seen.length = 0;
+    api.rules = [() => "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry."];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false });
+    expect(api.chats).toHaveLength(1);
+    // A gateway that checks what is sent answers 403. That is not a key that was refused.
+    api.seen.length = 0;
+    api.rules = [];
+    api.replies = [{ status: 403, error: 'big-model requires moderation. Your input was flagged for "violence".' }];
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false });
+    // Any other 403 is still the key.
+    api.replies = [{ status: 403, error: 'You do not have access to this model.' }];
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'auth', retryable: false });
+  });
+
   it('never runs a tool call that was cut off at the output limit', async () => {
     api.replies = [{ calls: [{ id: 'call_a', name: 'write_file', arguments: '{"path":"x.md","content":"ha' }], finish: 'length' }];
     expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'truncated', retryable: true });

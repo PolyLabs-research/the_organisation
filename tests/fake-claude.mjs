@@ -15,6 +15,7 @@
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
 //                        | silent | extra | extra-once | credits | needscredits | loop | stubborn | badloop | parallel | notools
 //                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow | toolong | toolong-words
+//                        | filtered | blocked
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -223,6 +224,16 @@ async function main() {
       return fail(404, `There's an issue with the selected model (${model}). It may not exist or you may not have access to it. Run --model to pick a different model.`);
     case 'overloaded':
       return fail(529, 'API Error: Repeated 529 Overloaded errors');
+    case 'filtered':
+      // The API's content filter stopped the reply and answered with an error. Not seen from the real command:
+      // these are the words it has for it.
+      return fail(400, 'API Error: 400 Output blocked by content filtering policy');
+    case 'blocked':
+      // A safety monitor on the API's side blocked the reply. Not seen either: the kind is the one its schema names.
+      emit({ type: 'assistant', session_id: session, message: { id: 'synthetic', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'API Error: the response was blocked.' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+      finish({ is_error: true, result: 'API Error: the response was blocked.', api_error_status: 400, api_error: 'safety_monitor_blocked', terminal_reason: 'api_error', total_cost_usd: 0, modelUsage: {} });
+      process.exit(1);
+    // eslint-disable-next-line no-fallthrough
     case 'toolong':
     case 'toolong-words':
       // What was sent is more than the model takes. This ending was not seen from the real command: it is the one

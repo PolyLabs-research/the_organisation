@@ -119,6 +119,16 @@ describe('a structured answer from the Responses API', () => {
     expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false });
     api.responses = [{ failed: { code: 'invalid_prompt', message: 'The prompt was not valid.' } }];
     expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'bad_request', retryable: false });
+    // The same code is what a prompt turned away for its content comes back under, and then the words say so.
+    const flagged = 'Invalid prompt: your prompt was flagged as potentially violating our usage policy. Please try again with a different prompt.';
+    api.responses = [{ failed: { code: 'invalid_prompt', message: flagged } }];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false });
+    // Turned away before any response began, it is declined all the same, and asked for once.
+    api.seen.length = 0;
+    api.rules = [() => flagged];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false });
+    expect(api.asked).toHaveLength(1);
+    api.rules = [];
     api.responses = [{ text: 'half', cut: true }];
     expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'unavailable', retryable: true });
     api.responses = [{ status: 401, error: 'Incorrect API key provided.' }];

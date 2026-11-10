@@ -13,6 +13,12 @@ export function hasCause(err: unknown): boolean {
  */
 const TOO_LONG = /prompt is too long|input is too long for requested model|input length and `max_tokens` exceed context limit/i;
 
+/**
+ * How the API words a reply its content filter stopped, when it answers with an error where a refusal would be.
+ * Again there is no code for it, and again these are the words Claude Code looks for.
+ */
+const FILTERED = /Output blocked by content filtering policy/i;
+
 /** Map the SDK's typed errors onto what the engine needs to know: what happened and whether retrying can help. */
 export function translate(err: unknown): ProviderError {
   if (err instanceof ProviderError) return err;
@@ -20,6 +26,10 @@ export function translate(err: unknown): ProviderError {
   // Too much to read, or too large a request to take in at all: sending the same work again would end the same way.
   if (err instanceof Anthropic.ContentTooLargeError || (err instanceof Anthropic.BadRequestError && TOO_LONG.test(err.message))) {
     return new ProviderError(`The work outgrew the model’s context window: ${err.message}`, 'too_long', false);
+  }
+  // The filter answers 400, or with an error event part-way through a reply, which carries no status at all.
+  if (err instanceof Anthropic.APIError && (err.status === 400 || err.status === undefined) && FILTERED.test(err.message)) {
+    return new ProviderError(`The model declined this request: ${err.message}`, 'refusal', false);
   }
   if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
     return new ProviderError(`Anthropic rejected the credentials: ${err.message}`, 'auth', false);

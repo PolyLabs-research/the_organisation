@@ -137,7 +137,8 @@ export class ClaudeProvider implements Provider {
       // as supported, so a reply can only name ids that exist. Should the API
       // refuse such a schema, repeat the call with the SDK's more conservative
       // form and keep to that form afterwards.
-      if (!(err instanceof Anthropic.BadRequestError) || this.plainSchemas) throw translate(err);
+      // A request turned away for what it says, or for its length, would be turned away in either form.
+      if (!(err instanceof Anthropic.BadRequestError) || this.plainSchemas || translate(err).code !== 'bad_request') throw translate(err);
       try {
         message = await this.requestStructured(req, true);
         this.plainSchemas = true;
