@@ -256,7 +256,7 @@ The vault normally locks after 30 minutes without use. For scheduled unattended 
 
 | Privilege | At the start | What enforces it |
 | --- | --- | --- |
-| Search the web | On | The search tool is not given, locally or in a hosted session. Web search must also be on for the organisation. |
+| Search the web | On | The search tool is not given, locally or to a hosted session that starts without it. Web search must also be on for the organisation. |
 | Update business records | On | The tool is not given, and updates from structured calls and hosted sessions are refused. The CEO has this one too. |
 | Ask the signatory to pay or sign | On | The request is not filed, and the board is told what was refused. |
 | Read assigned mailboxes | On | The tool is not given, and the access service refuses the read, also when it comes back from the mail server. |
@@ -269,7 +269,7 @@ The vault normally locks after 30 minutes without use. For scheduled unattended 
 | Start build workflows | **Off** | The tool is not given, and the access service refuses anything not on the repository's list. |
 | Change build pipelines | **Off** | Anything under `.github` is refused in a commit. |
 
-Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account or a repository is stopped and its browser closed. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
+Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account or a repository is stopped and its browser closed. The one thing a change cannot reach is the web access of a hosted session that has already started: a session is given its tools and its network when it starts and keeps them until its plan is over. The board says so when that happens, and pausing the organisation holds the session. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
 
 **Without Act on accounts**, a session gets one sign-in, on the page it opened, and from then on the browser refuses any request but GET, HEAD and OPTIONS. That is a limit on the network, so it holds whichever element an agent presses and whatever a page's own scripts try to send. Nothing leaves. The agent is told, and can read on or ask a person for help.
 
@@ -525,7 +525,7 @@ This way of working is built on [Claude Managed Agents](https://platform.claude.
 
 **What a session may do.** Tool calls in the sandbox are judged by the platform one at a time (the `auto` permission policy): calls it judges safe run, calls it judges high-risk are refused, and calls it cannot judge wait for approval. Nobody is watching these sessions, so those are declined, and the agent is told to find another way. Each plan shows how many calls were declined and the most recent one.
 
-**Network.** With web search off, the sandbox can reach package registries and nothing else. With web search on, agents get web search and fetch, and the sandbox's network is open: code the agents run there can reach any site. That is the only way to give hosted agents general web access, so it is tied to the same switch, and the wizard and settings say so when you turn it on.
+**Network.** With web search off, the sandbox can reach package registries and nothing else. With web search on, agents get web search and fetch, and the sandbox's network is open: code the agents run there can reach any site. That is the only way to give hosted agents general web access, so it is tied to the same switch, and the wizard and settings say so when you turn it on. Both are settled when a session starts. Turning web search off, or taking the privilege from a role, reaches the sessions that start afterwards; one already under way keeps what it started with, and the board names it.
 
 **Files.** The most recent files in the workspace (up to 200, none over 5 MB) are mounted read-only in the sandbox under `/mnt/session/uploads/workspace/`. Whatever a session writes under `/mnt/session/outputs/` is brought back to the workspace when each phase is recorded and at the end, always inside the owning team's directory. Files over 25 MB stay in the session.
 

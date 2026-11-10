@@ -167,6 +167,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
   ctx.touch();
 
   const models = org.settings.executiveModel === org.settings.workerModel ? org.settings.executiveModel : `${org.settings.executiveModel} + ${org.settings.workerModel}`;
+  // Whether a session that starts now is given web search and an open network. One that exists keeps what it started with.
+  const web = org.settings.webResearch && allows(org, lead.id, 'web_search');
   const pendingInstructions = () => plan.amendments.slice(managed.instructionsSent);
   const changed = () => {
     plan.updatedAt = now();
@@ -184,6 +186,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         managed.agents = [];
         managed.cursor = null;
         managed.handledTo = null;
+        managed.web = web;
       }
       managed.consoleUrl = info.consoleUrl;
       managed.budgetUsd = info.budgetUsd;
@@ -515,7 +518,6 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
   let outcome: PlanOutcome;
   try {
     const files = mountable(await workspace.list());
-    const web = org.settings.webResearch && allows(org, lead.id, 'web_search');
     const job: PlanJob = {
       planId: plan.id,
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),

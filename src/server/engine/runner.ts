@@ -275,7 +275,9 @@ export class OrgRunner {
       }
     }
     const oldInterval = org.settings.reviewIntervalMinutes;
+    const hadWeb = org.settings.webResearch;
     org.settings = next;
+    if (hadWeb && !next.webResearch) this.sayWhoKeepsWeb(null);
     if (next.reviewIntervalMinutes !== 0 && next.reviewIntervalMinutes !== oldInterval) org.business.nextReviewAt = new Date(Date.now() + next.reviewIntervalMinutes * 60_000).toISOString();
     if (next.reviewIntervalMinutes === 0) { org.business.waiting = false; this.clearWake(); }
     if (org.settings.execution !== before) {
@@ -467,7 +469,37 @@ export class OrgRunner {
     const { changed, removed } = changePrivilege(this.org, seatId, privilege, allowed);
     // Hosted sessions cannot reach the vault, so a privilege that does not apply there is one that works through it.
     if (removed && !PRIVILEGE_BY_ID[privilege as Privilege].hosted) await this.access.revoke(String(seatId));
+    if (removed && privilege === 'web_search') this.sayWhoKeepsWeb(String(seatId));
     if (changed) this.changed();
+  }
+
+  /**
+   * A hosted session is given its tools and its network when it starts, and they cannot be changed afterwards.
+   * When web search is taken away, from one role or from the whole organisation, a session that started with it
+   * goes on having it until its plan is over. Nothing here can alter that, so the board is told which sessions
+   * those are, and what does stop one.
+   */
+  private sayWhoKeepsWeb(seatId: string | null): void {
+    const org = this.org;
+    const keeping = org.plans.filter(
+      (p) =>
+        isPlanActive(p) &&
+        (!seatId || p.ownerId === seatId) &&
+        !!p.managed?.sessionId &&
+        p.managed.web === true &&
+        p.managed.state !== 'finished' &&
+        !(org.settings.webResearch && allows(org, p.ownerId, 'web_search')),
+    );
+    if (!keeping.length) return;
+    const who = [...new Set(keeping.map((p) => execById(org, p.ownerId)?.short ?? p.ownerId))];
+    const many = keeping.length !== 1;
+    postToBoard(
+      org,
+      'system',
+      'system',
+      many ? 'Hosted sessions keep the web access they started with' : `The ${who[0]} session keeps the web access it started with`,
+      `Web search has been taken away, but a hosted session is given its tools and its network when it starts, and they cannot be changed afterwards. ${many ? `The sessions carrying out the plans of ${who.join(', ')} started` : `The session carrying out the ${who[0]} plan started`} with web search and an open network, and ${many ? 'keep' : 'keeps'} both until ${many ? 'their plans are' : 'its plan is'} over. Work that starts from now on is without them. To stop ${many ? 'these sessions' : 'this session'} sooner, pause the organisation: a session that is held can run nothing.`,
+    );
   }
 
   setWorkApproach(seatId: unknown, approachId: unknown, allowed: unknown): void {
