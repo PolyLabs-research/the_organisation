@@ -319,7 +319,12 @@ describe('the API', () => {
     const runner = registry.get(org.id)!;
     const warn = console.warn;
     console.warn = () => {};
-    const failing = vi.spyOn(Store.prototype, 'save').mockRejectedValueOnce(new Error('ENOSPC: no space left on device'));
+    // Saving fails for this organisation and no other: the others in this file are still at work, and one of them
+    // saving first would otherwise be the one that failed.
+    const save = Store.prototype.save;
+    const failing = vi.spyOn(Store.prototype, 'save').mockImplementation(function (this: Store, saved) {
+      return saved.id === org.id ? Promise.reject(new Error('ENOSPC: no space left on device')) : save.call(this, saved);
+    });
     try {
       const answer = await api('POST', `/api/orgs/${org.id}/steer`, { text: 'Keep to the budget.' });
       expect(answer.status).toBe(500);

@@ -110,6 +110,8 @@ export class OrgRunner {
   /** Set while a session that was left to itself still has to be held: when to try again. */
   private holdTimer: NodeJS.Timeout | null = null;
   private holdTries = 0;
+  /** Whether the board has been told that a session could not be held, and so is owed word when that is over. */
+  private holdSaid = false;
   private readonly holdRetryMs: number;
   /** Work done beside the loop (archiving sessions), so that coming to rest can wait for it. */
   private chores: Promise<unknown> = Promise.resolve();
@@ -399,9 +401,11 @@ export class OrgRunner {
 
   /**
    * Hold the sessions that were left to themselves when the server stopped without warning, beside the loop, and
-   * keep trying for as long as one of them cannot be held: until its cap has been brought down, such a session can
-   * go on spending up to it with the organisation paused. The board is told when the first try fails, and again
-   * when the sessions have been held after all.
+   * keep at it for as long as one of them is still left so: until its cap has been brought down, such a session
+   * can go on spending up to it whatever the organisation is doing. A session the organisation is picking up
+   * again is left to that, and looked at again later: it stops being left to itself once it is followed, and if it
+   * could not be picked up (there was nothing to give it, or the provider was out of reach) it is held then. The
+   * board is told when a session cannot be held, and again when none is left to itself any longer.
    */
   holdAdrift(): void {
     const adrift = () => this.org.plans.filter((p) => p.managed?.adrift && p.managed.sessionId && p.managed.state !== 'finished');
@@ -410,16 +414,19 @@ export class OrgRunner {
       .then(() => this.holdSessions())
       .then(({ left, why }) => {
         if (this.disposed) return;
-        if (!left) {
-          if (this.holdTries > 0) {
-            postToBoard(this.org, 'system', 'system', 'Hosted sessions held', 'The hosted sessions that were left running when the server stopped have now been held: their caps are down to what they have spent, and they carry on when the organisation is started.');
+        const plans = adrift();
+        if (!plans.length) {
+          if (this.holdSaid) {
+            postToBoard(this.org, 'system', 'system', 'Hosted sessions held', 'The hosted sessions that were left running when the server stopped are no longer left to themselves: each has been held, with its cap down to what it has spent, or is being followed again.');
             this.changed();
           }
+          this.holdSaid = false;
           this.holdTries = 0;
           return;
         }
-        if (this.holdTries === 0) {
-          const plans = adrift();
+        // Some are still left to themselves: they could not be held, or the organisation was picking them up just then.
+        if (left && !this.holdSaid) {
+          this.holdSaid = true;
           const room = plans.reduce((sum, p) => sum + Math.max(0, p.managed!.budgetUsd - p.managed!.spentUsd), 0);
           const many = plans.length !== 1;
           postToBoard(

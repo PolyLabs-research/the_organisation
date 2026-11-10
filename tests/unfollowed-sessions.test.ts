@@ -91,6 +91,36 @@ describe('a hosted session that was at work when the server stopped without warn
     expect(planOf(revived.org).managed).toMatchObject({ sessionId: session, adrift: false });
   });
 
+  it('is held all the same when its organisation starts by itself and cannot pick it up', async () => {
+    let unreachable = false;
+    h = await harness({
+      settings: { ...HOSTED, resumeOnRestart: true },
+      executives: ONE_LEAD,
+      mock: {
+        delayMs: 2,
+        runs: 'never',
+        onCall: (kind) => {
+          // Following a session cannot be done just now. Holding one, a single request, still can.
+          if (kind === 'execute' && unreachable) throw new ProviderError('Sessions cannot be followed just now.', 'bad_request', false);
+        },
+      },
+    });
+    const platform = h.provider as MockProvider;
+    const { session } = await diedAtWork(h);
+    unreachable = true;
+
+    revived = await restart(h, { holdRetryMs: 5 });
+    const back = revived;
+    // The organisation started, went to pick the session up, and stopped on the error.
+    await waitFor(() => back.org.status === 'paused', 'the organisation to stop');
+    expect(back.org.pauseReason).toBe('error');
+    // Nobody is following the session, so it is held, a moment later, as it would have been had the organisation stayed paused.
+    await waitFor(() => platform.held.length > 0, 'the session to be held');
+    await back.idle();
+    expect(platform.held).toEqual([session]);
+    expect(planOf(back.org).managed).toMatchObject({ sessionId: session, adrift: false });
+  });
+
   it('is tried again when it cannot be held, and the board is told that it may still be spending', async () => {
     let refusals = 2;
     h = await harness({

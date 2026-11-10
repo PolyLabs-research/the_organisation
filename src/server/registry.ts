@@ -57,9 +57,9 @@ export class Registry {
       try { runner.start(); } catch (error) { runner.org.lastError = 'Automatic resume: ' + (error as Error).message; await runner.flush(); }
     }
     // A hosted session that was at work when the server stopped without warning had nobody to hold it, and can go on
-    // spending up to its cap. One whose organisation has just started again is picked up there. The others are held
-    // now, beside everything else: starting must not wait on the provider, and the provider may be out of reach.
-    for (const runner of this.runners.values()) if (runner.org.status !== 'running') runner.holdAdrift();
+    // spending up to its cap. One whose organisation has just started again and is picking it up is left to that. The
+    // others are held, beside everything else: starting must not wait on the provider, which may be out of reach.
+    for (const runner of this.runners.values()) runner.holdAdrift();
   }
 
   list(): OrgSummary[] {
