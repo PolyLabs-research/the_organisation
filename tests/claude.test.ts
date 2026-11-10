@@ -447,6 +447,15 @@ describe('agent runs', () => {
     expect(written).toEqual([]);
   });
 
+  it('says so when the closing report was cut off at the token limit, and takes nothing at all for no report', async () => {
+    replies.push({ content: [{ type: 'text', text: 'I produced engineering/spec.md and the remaining wo' }], stop_reason: 'max_tokens' });
+    expect(await provider().agent(agentRequest())).toEqual({ text: 'I produced engineering/spec.md and the remaining wo', turns: 1, stopped: 'cut_short' });
+    // All of the room went on thinking: there is no report to keep, and another try may do better.
+    replies.push({ content: [], stop_reason: 'max_tokens' });
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['truncated', true]);
+  });
+
   it('asks for a closing report at the turn limit and stops there', async () => {
     const call = (id: string): Reply => ({ content: [{ type: 'tool_use', id, name: 'write_file', input: { path: `${id}.md`, content: 'x' } }], stop_reason: 'tool_use' });
     replies.push(call('toolu_1'), call('toolu_2'), { content: [{ type: 'text', text: 'Out of turns; two files written.' }] });

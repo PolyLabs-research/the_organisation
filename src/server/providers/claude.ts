@@ -289,7 +289,12 @@ export class ClaudeProvider implements Provider {
         .map((block) => block.text)
         .join('\n')
         .trim();
-      if (!calls.length) return { text, turns, stopped: wrapUpSent ? 'cut_short' : 'done' };
+      if (!calls.length) {
+        // Words cut off at the token limit are still a report, and are marked as one that was cut short. Nothing at
+        // all is not a report.
+        if (message.stop_reason === 'max_tokens' && !text) throw new ProviderError('The reply was cut off before it said anything.', 'truncated', true);
+        return { text, turns, stopped: wrapUpSent || message.stop_reason === 'max_tokens' ? 'cut_short' : 'done' };
+      }
 
       // A tool input cut off at the token limit can still parse as a smaller valid object, so never run it.
       if (message.stop_reason === 'max_tokens') {
