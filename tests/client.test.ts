@@ -5,19 +5,19 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { keepDataPrivate, serveClientFromSource } from '../src/server/client';
+import { keepDataPrivate, serveBuiltClient, serveClientFromSource } from '../src/server/client';
 
 const SECRET = 'sk-test-KEY-THAT-MUST-NOT-LEAVE';
 
 /** One request with its address sent exactly as written: fetch would tidy `..` and `//` away first. */
-function get(port: number, rawPath: string): Promise<{ status: number; body: string }> {
+function get(port: number, rawPath: string): Promise<{ status: number; body: string; location: string | undefined }> {
   return new Promise((resolve, reject) => {
     http
       .get({ host: '127.0.0.1', port, path: rawPath }, (res) => {
         let body = '';
         res.setEncoding('utf8');
         res.on('data', (chunk) => (body += chunk));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, location: res.headers.location }));
       })
       .on('error', reject);
   });
@@ -159,5 +159,58 @@ describe('the guard in front of whatever serves files', () => {
       await new Promise<void>((resolve) => other.close(() => resolve()));
       await rm(elsewhere, { recursive: true, force: true });
     }
+  });
+});
+
+describe('the client as it was built', () => {
+  let built: string;
+  let server: http.Server;
+  let port: number;
+
+  beforeAll(async () => {
+    built = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-built-'));
+    await writeFile(path.join(built, 'index.html'), '<!doctype html><title>the built client</title><div id="root"></div>');
+    await mkdir(path.join(built, 'assets'));
+    await writeFile(path.join(built, 'assets', 'index-abc123.js'), 'console.log("as built");\n');
+    const app = express();
+    serveBuiltClient(app, built);
+    server = app.listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(built, { recursive: true, force: true });
+  });
+
+  it('serves the page and what was built with it', async () => {
+    expect((await get(port, '/')).body).toContain('the built client');
+    // Where the browser is sent once a mailbox has been connected: the page, with a note in the address.
+    expect((await get(port, '/?access=connected')).body).toContain('the built client');
+    expect((await get(port, '/assets/index-abc123.js')).body).toContain('as built');
+  });
+
+  it('sends an address that reads like a page’s to the page, which has only the one', async () => {
+    for (const address of ['/org/org_1', '/models', '/new/', '/org/org_1?tab=board']) {
+      const answer = await get(port, address);
+      expect([answer.status, answer.location], address).toEqual([302, '/']);
+    }
+  });
+
+  it('says that a file is not there when it is not, and does not answer with the page', async () => {
+    // A script from before the last build, the icon a browser asks for unprompted, a file of the data folder.
+    for (const address of ['/assets/index-old999.js', '/favicon.ico', '/data/connections.json']) {
+      const answer = await get(port, address);
+      expect(answer.status, address).toBe(404);
+      expect(answer.body, address).not.toContain('the built client');
+    }
+  });
+
+  it('does not send the browser round for ever when the built page has gone', async () => {
+    await rm(path.join(built, 'index.html'));
+    const answer = await get(port, '/');
+    expect([answer.status, answer.location]).toEqual([404, undefined]);
   });
 });

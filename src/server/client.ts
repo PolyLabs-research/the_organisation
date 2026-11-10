@@ -75,8 +75,18 @@ export async function serveClientFromSource(app: express.Express, options: Sourc
   return { close: () => vite.close(), denied: vite.config.server.fs.deny };
 }
 
-/** Serve the client as it was built: only what is in the build folder, and the page itself for any other address. */
+/**
+ * Serve the client as it was built: only what is in the build folder. The page finds its own way from what follows
+ * "#" in the address, so "/" is the only address it has. Any other that reads like a page's is sent there, and one
+ * that reads like a file's (a script from before the last build, say) is simply not there: answered with the page
+ * and a 200, as it used to be, a missing script arrived as a page the browser could make nothing of. Neither
+ * answer reads anything from disk, so a flood of made-up addresses costs next to nothing.
+ */
 export function serveBuiltClient(app: express.Express, clientDir: string): void {
   app.use(express.static(clientDir));
-  app.get('/{*path}', (_req, res) => res.sendFile(path.join(clientDir, 'index.html')));
+  app.get('/{*path}', (req, res) => {
+    // "/" comes this far only if the built page has gone since the server started: sending it to "/" would go round for ever.
+    if (req.path === '/' || path.posix.extname(req.path)) res.status(404).type('text/plain').send('Not found.');
+    else res.redirect(302, '/');
+  });
 }
