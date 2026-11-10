@@ -113,6 +113,13 @@ export function emptyUsage(): UsageTotals {
   return { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: 0 };
 }
 
+const COUNTED = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'webSearches', 'costUsd'] as const;
+
+/** Whether what a call reported can be added to the totals: every count and the cost a real number. */
+export function countable(usage: Omit<CallUsage, 'model'>): boolean {
+  return COUNTED.every((key) => typeof usage[key] === 'number' && Number.isFinite(usage[key]));
+}
+
 export function addUsage(total: UsageTotals, call: CallUsage): void {
   if (!call.adjustment) total.calls += 1;
   total.inputTokens += call.inputTokens;

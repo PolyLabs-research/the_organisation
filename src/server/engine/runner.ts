@@ -29,6 +29,7 @@ import {
   addSpend,
   addSteer,
   addUsage,
+  countable,
   assertModelRefs,
   CEO_QUESTION,
   ceoOf,
@@ -65,7 +66,7 @@ export const SLOW_PACE_GAP_MS = 20_000;
 const MAX_ACTIVITY = 300;
 const MAX_HISTORY = 60;
 /** Failures that say something about one task rather than about the provider. */
-const TASK_LEVEL_ERRORS = new Set(['refusal', 'truncated', 'invalid_output']);
+const TASK_LEVEL_ERRORS = new Set(['refusal', 'truncated', 'too_long', 'invalid_output']);
 
 /** What a piece of work was part of, so the timeline can place it and the calibration can learn from it. */
 function placeOf(org: Organisation, item: WorkItem, agent: number | null): Pick<ActivityEntry, 'planId' | 'phaseIndex' | 'taskId' | 'agent' | 'effort'> {
@@ -684,6 +685,7 @@ export class OrgRunner {
       halting: () => this.halting,
       overBudget: () => org.usage.costUsd >= org.settings.budgetUsd,
       recordUsage: (execId: string, usage: CallUsage) => {
+        if (!countable(usage)) return this.uncounted(usage.model);
         addUsage(org.usage, usage);
         addUsage((org.usageByExec[execId] ??= emptyUsage()), usage);
         spent.model = usage.model;
@@ -693,6 +695,7 @@ export class OrgRunner {
         this.changed();
       },
       recordSpend: (execId, model, delta) => {
+        if (!countable(delta)) return this.uncounted(model);
         addSpend(org.usage, delta);
         addSpend((org.usageByExec[execId] ??= emptyUsage()), delta);
         spent.model = model;
@@ -740,6 +743,19 @@ export class OrgRunner {
       this.changed();
       this.pump();
     }
+  }
+
+  /**
+   * A call reported tokens or a cost that is not a number. Added to the totals it would make them not a number
+   * either, and such a total compares as less than any budget: the organisation would never pause on spend again.
+   * So it is left out, and the organisation stops until a person has put the model's price right.
+   */
+  private uncounted(model: string): void {
+    console.warn(`Organisation ${this.org.id}: a call on ${model || 'an unnamed model'} reported usage that is not a number.`);
+    this.pause(
+      'error',
+      `A call on ${model || 'a model'} reported a cost that is not a number, so what it spent could not be counted and the budget could not be kept. Nothing has been added to the spend for it. Check the price set for this model under Models and keys, or choose another model, before starting again.`,
+    );
   }
 
   /** Decide what a failed call means. Returns the message to log, or null if the failure needs no mention. */

@@ -67,10 +67,17 @@ export interface AgentResult {
   stopped: 'done' | 'cut_short' | 'interrupted';
 }
 
+/**
+ * What went wrong with a call, as far as the engine needs to tell them apart. `refusal`, `truncated`, `too_long`
+ * and `invalid_output` say something about the one piece of work that was asked for, not about the provider or
+ * the key: an agent's task that ends in one of them is failed and left to its lead, and the organisation carries on.
+ * `too_long` is a prompt, or a conversation grown by what an agent has read, that is more than the model takes.
+ */
 export type ProviderErrorCode =
   | 'auth'
   | 'refusal'
   | 'truncated'
+  | 'too_long'
   | 'rate_limit'
   | 'bad_request'
   | 'invalid_output'

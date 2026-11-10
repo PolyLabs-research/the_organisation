@@ -400,6 +400,26 @@ describe('phase gates', () => {
     expect(h.org.pauseReason).toBe('cycle_limit');
     expect(h.org.plans.every((p) => p.status === 'done')).toBe(true);
   });
+
+  it('treats a task that has outgrown what the model takes the same way: it is that task’s failure, not the organisation’s', async () => {
+    let failed = false;
+    h = await harness({
+      mock: {
+        onCall: (kind) => {
+          if (kind === 'task' && !failed) {
+            failed = true;
+            throw new ProviderError('The prompt is longer than the model takes: 412,031 tokens against a limit of 400,000.', 'too_long', false);
+          }
+        },
+      },
+    });
+    await runToRest(h.runner);
+    const lost = h.org.plans.flatMap((p) => p.phases.flatMap((ph) => ph.tasks)).filter((t) => t.status === 'failed');
+    expect(lost).toHaveLength(1);
+    expect(lost[0]!.error).toContain('longer than the model takes');
+    expect(h.org.pauseReason).toBe('cycle_limit');
+    expect(h.org.plans.every((p) => p.status === 'done')).toBe(true);
+  });
 });
 
 describe('shareholder steer', () => {
@@ -473,6 +493,41 @@ describe('shareholder steer', () => {
 });
 
 describe('limits and controls', () => {
+  it('stops, with its totals intact, when a call reports a cost that is not a number', async () => {
+    // A price that is not a number, or token counts that are not, would make the total not a number, and such a
+    // total is never "at least the budget": the organisation would never again pause on what it had spent.
+    let broken = 0;
+    class Unpriced extends MockProvider {
+      override async agent(req: AgentRequest): Promise<AgentResult> {
+        const result = await super.agent(req);
+        if (!broken++) req.onUsage?.({ model: req.model, inputTokens: 1200, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: Number.NaN });
+        return result;
+      }
+    }
+    h = await harness({ provider: new Unpriced(QUIET), executives: [{ profileId: 'engineering', agentCount: 1 }] });
+    await runToRest(h.runner);
+    expect(broken).toBeGreaterThan(0);
+    expect(h.org.status).toBe('paused');
+    expect(h.org.pauseReason).toBe('error');
+    expect(h.org.lastError).toMatch(/cost that is not a number.*Models and keys/);
+    expect(Number.isFinite(h.org.usage.costUsd)).toBe(true);
+    expect(Number.isFinite(h.org.usageByExec.cto!.costUsd)).toBe(true);
+    expect(h.org.usage.costUsd).toBeGreaterThan(0);
+    // Started again, it carries on counting from where it was.
+    const before = h.org.usage.costUsd;
+    await runToRest(h.runner);
+    expect(h.org.pauseReason).toBe('cycle_limit');
+    expect(h.org.usage.costUsd).toBeGreaterThan(before);
+  });
+
+  it('holds a hosted session’s spend to the same rule', async () => {
+    const { countable } = await import('../src/server/engine/state');
+    expect(countable({ inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: 0.5 })).toBe(true);
+    expect(countable({ inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(countable({ inputTokens: '12' as unknown as number, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: 0.5 })).toBe(false);
+    expect(countable({ inputTokens: 1, outputTokens: undefined as unknown as number, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: 0.5 })).toBe(false);
+  });
+
   it('pauses itself when the budget is spent and carries on once it is raised', async () => {
     h = await harness({ settings: { budgetUsd: 0.1 } });
     await runToRest(h.runner);
