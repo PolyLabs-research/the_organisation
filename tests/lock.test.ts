@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +50,24 @@ describe('one server to a data folder', () => {
     const beatAt = async () => Date.parse(JSON.parse(await readFile(lock(), 'utf8').catch(() => '{}')).beatAt ?? '');
     const first = await beatAt();
     await until(async () => (await beatAt()) > first);
+  });
+
+  it('is never found empty or half-written by whoever reads it, and is not put back once it has been let go', async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-lock-'));
+    // A beat every couple of milliseconds, read as fast as it can be read: a server that is starting reads this file.
+    const letGo = await claimDataDir(dir, 4780, { ...QUICK, beatMs: 2 });
+    const first = JSON.parse(await readFile(lock(), 'utf8')).beatAt as string;
+    const beats = new Set<string>();
+    const deadline = Date.now() + 5000;
+    while (beats.size < 40 && Date.now() < deadline) {
+      beats.add((JSON.parse(await readFile(lock(), 'utf8')) as { beatAt: string }).beatAt);
+    }
+    expect(beats.size).toBeGreaterThanOrEqual(40);
+    expect([...beats].every((at) => at >= first)).toBe(true);
+    // Let go in the middle of all that, the file is gone and stays gone, and nothing is left beside it.
+    await letGo();
+    await sleep(30);
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('refuses a folder another running server holds, and says which', async () => {

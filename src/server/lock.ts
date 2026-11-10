@@ -65,13 +65,22 @@ export async function claimDataDir(dataDir: string, port: number, times: Partial
   const { beatMs, staleMs, waitMs } = { ...LOCK_TIMES, ...times };
   const file = path.join(dataDir, 'server.lock');
   const mine = { pid: process.pid, host: os.hostname(), port, startedAt: new Date().toISOString() };
-  const write = (flag: 'wx' | 'w') => fs.writeFile(file, JSON.stringify({ ...mine, beatAt: new Date().toISOString() } satisfies Holder), { flag });
+  const said = () => JSON.stringify({ ...mine, beatAt: new Date().toISOString() } satisfies Holder);
+  // The first write fails if the file is already there, which is what makes one server the holder and no other.
+  const take = () => fs.writeFile(file, said(), { flag: 'wx' });
+  // Every later one replaces the file whole, written beside it and renamed over it: a server that is starting
+  // reads this file, and should never find it empty or half-written because it looked while a beat was going in.
+  const beside = `${file}.${process.pid}.tmp`;
+  const sayAgain = async () => {
+    await fs.writeFile(beside, said());
+    await fs.rename(beside, file);
+  };
   await fs.mkdir(dataDir, { recursive: true });
 
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      await write('wx');
+      await take();
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
@@ -95,8 +104,11 @@ export async function claimDataDir(dataDir: string, port: number, times: Partial
 
   const isMine = (holder: Holder | null) => holder !== null && holder.pid === mine.pid && holder.host === mine.host && holder.startedAt === mine.startedAt;
   let warned = false;
+  // The beat under way, if there is one, so that letting go can wait for it: a beat that landed after the file
+  // had been removed would put it back.
+  let beating: Promise<void> = Promise.resolve();
   const beat = setInterval(() => {
-    void (async () => {
+    beating = (async () => {
       try {
         const found = await holderOf(file);
         if (found && found.holder && !isMine(found.holder)) {
@@ -105,7 +117,7 @@ export async function claimDataDir(dataDir: string, port: number, times: Partial
           warned = true;
           return;
         }
-        await write('w');
+        await sayAgain();
       } catch {
         // A beat that could not be written is tried again at the next one.
       }
@@ -115,7 +127,9 @@ export async function claimDataDir(dataDir: string, port: number, times: Partial
 
   return async () => {
     clearInterval(beat);
+    await beating;
     const found = await holderOf(file).catch(() => null);
     if (found && isMine(found.holder)) await fs.rm(file, { force: true });
+    await fs.rm(beside, { force: true });
   };
 }
