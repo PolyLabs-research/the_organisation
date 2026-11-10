@@ -467,6 +467,12 @@ const beyond = (a: Tokens, b: Tokens): Tokens => ({
   cacheReadTokens: Math.max(0, a.cacheReadTokens - b.cacheReadTokens),
   cacheWriteTokens: Math.max(0, a.cacheWriteTokens - b.cacheWriteTokens),
 });
+const plus = (a: Tokens, b: Tokens): Tokens => ({
+  inputTokens: a.inputTokens + b.inputTokens,
+  outputTokens: a.outputTokens + b.outputTokens,
+  cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+  cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+});
 const any = (tokens: Tokens) => tokens.inputTokens + tokens.outputTokens + tokens.cacheReadTokens + tokens.cacheWriteTokens > 0;
 
 export class ClaudeCodeProvider implements Provider {
@@ -772,13 +778,21 @@ export class ClaudeCodeProvider implements Provider {
               costUsd: (sum?.costUsd ?? 0) + reply.costUsd,
             });
           }
+          // What was counted under a name the run's account does not use. An entry of the account that matches no
+          // counted name is those same replies under another name, whatever each is called: it is set against this,
+          // and takes from it what it accounts for, so that nothing is counted twice however many models are listed.
+          const named = new Set(exact.map((entry) => canonical(entry.model)));
+          let spare: Tokens & { costUsd: number } = { ...NO_TOKENS, costUsd: 0 };
+          for (const [name, sum] of counted) {
+            if (!named.has(name)) spare = { ...plus(spare, sum), costUsd: spare.costUsd + sum.costUsd };
+          }
           for (const entry of exact) {
-            // One model in the run and one in its account are the same model, whatever each is called.
-            const before = exact.length === 1 && counted.size === 1 ? [...counted.values()][0] : counted.get(canonical(entry.model));
             const plain = canonical(entry.model);
+            const before = counted.get(plain) ?? spare;
             const costUsd = entry.costUsd ?? (isKnownModel(plain) ? costOfRequest(plain, entry.tokens) : 0);
-            const more = beyond(entry.tokens, before ?? NO_TOKENS);
-            const moreCost = Math.max(0, costUsd - (before?.costUsd ?? 0));
+            const more = beyond(entry.tokens, before);
+            const moreCost = Math.max(0, costUsd - before.costUsd);
+            if (!counted.has(plain)) spare = { ...beyond(spare, entry.tokens), costUsd: Math.max(0, spare.costUsd - costUsd) };
             if (moreCost > 0 || entry.webSearches > 0 || any(more)) report(entry.model, more, moreCost, { webSearches: entry.webSearches });
           }
           // A run that gives only a total is settled to that total, under the model that was asked for.

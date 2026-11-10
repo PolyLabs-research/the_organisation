@@ -530,6 +530,15 @@ describe('an agent run through Claude Code', () => {
     expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.01, 9);
   });
 
+  it('still counts that model once when the account lists a second model beside it', async () => {
+    const usage: CallUsage[] = [];
+    await provider({ FAKE_CLAUDE_MODE: 'renamed-two' }).structured(ask({ onUsage: (u) => usage.push(u) }));
+    // The run's one reply, under whichever name, and the hundred tokens the second model read on the side.
+    expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2100);
+    expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(510);
+    expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.012, 9);
+  });
+
   it('ends a run that could not reach its tools, and the runs in flight when the connection is closed', async () => {
     const lost = await failure(provider({ FAKE_CLAUDE_MODE: 'notools' }).agent(task({ tools: tools().tools })));
     expect([lost.code, lost.retryable]).toEqual(['unavailable', true]);

@@ -15,7 +15,7 @@
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
 //                        | silent | extra | extra-once | credits | needscredits | loop | stubborn | badloop | parallel | notools
 //                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow | toolong | toolong-words
-//                        | filtered | blocked | fallback
+//                        | filtered | blocked | fallback | renamed-two
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -117,8 +117,10 @@ const limits = (more = {}) =>
   emit({ type: 'rate_limit_event', session_id: session, rate_limit_info: { status: 'allowed', resetsAt: 1794358800, rateLimitType: 'seven_day', utilization: 0.25, overageStatus: 'rejected', isUsingOverage: false, overageEnabled: false, ...more } });
 const finish = (more = {}) => {
   endReply();
-  const named = MODE === 'renamed' ? 'some-other-name-for-it' : model;
+  const named = MODE === 'renamed' || MODE === 'renamed-two' ? 'some-other-name-for-it' : model;
   const exact = { inputTokens: 2000 * messages, outputTokens: 500 * messages, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.01 * messages, canonicalModel: named };
+  // A second model that did some small thing on the side, which the run's account lists and its replies never showed.
+  const aside = MODE === 'renamed-two' ? { 'claude-sonnet-5-5': { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.002, canonicalModel: 'claude-sonnet-5-5' } } : {};
   emit({
     type: 'result',
     subtype: 'success',
@@ -130,9 +132,9 @@ const finish = (more = {}) => {
     terminal_reason: 'completed',
     api_error_status: null,
     permission_denials: [],
-    total_cost_usd: exact.costUSD,
+    total_cost_usd: exact.costUSD + (MODE === 'renamed-two' ? 0.002 : 0),
     usage: { input_tokens: exact.inputTokens, output_tokens: exact.outputTokens, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-    modelUsage: messages ? { [named]: exact } : {},
+    modelUsage: messages ? { ...aside, [named]: exact } : {},
     ...more,
   });
 };
