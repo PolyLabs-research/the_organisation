@@ -12,7 +12,7 @@ Dependencies refer to other job IDs. Cycles and self-dependencies are refused. O
 
 An owner or person submits delivery evidence. Verification requires a note from the owner, assigned independent reviewer, or a person. Worker agents cannot verify jobs. Once assigned, an independent reviewer can be changed only by the shareholders, CEO or COO.
 
-A recurring job requires a deadline and a positive number of days. Verification creates one future occurrence, linked to the completed one. If several dates were missed, they coalesce into one future occurrence; the engine never launches a burst of historical repeats. The interval is elapsed UTC time in 24-hour days, not a local-time calendar recurrence rule.
+A recurring job requires a deadline and a positive number of days. Verification creates one future occurrence, linked to the completed one. If several dates were missed, they coalesce into one future occurrence; the engine never launches a burst of historical repeats. The interval is a number of calendar days in the timezone of the machine the server runs on: the next occurrence falls at the same time of day there, also across a clock change. On a server whose timezone is UTC, which is usual in a container, that is the same as fixed 24-hour days. A repeat with only a deadline may start once the occurrence before it was due.
 
 ## Reviews, recovery and operating digest
 

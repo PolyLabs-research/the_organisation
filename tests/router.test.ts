@@ -176,6 +176,31 @@ describe('adding an Anthropic key', () => {
     expect(router.info().simulated).toBe(true);
   });
 
+  it('sends a key added in the interface with nothing the environment says to send with a key of its own', async () => {
+    const before = process.env.ANTHROPIC_CUSTOM_HEADERS;
+    // As a gateway in front of Anthropic is set up for: something to say who is calling, and what to sign in with.
+    process.env.ANTHROPIC_CUSTOM_HEADERS = 'x-gateway-secret: for-the-gateway-only\nAuthorization: Bearer the-gateway-s-own-token';
+    try {
+      const { router } = await setup();
+      // The key is checked when it is added. It is the key that goes out, and nothing meant for the gateway.
+      await router.connect({ presetId: 'anthropic', apiKey: 'sk-ant-good-key-7777', baseURL: address });
+      expect(seen.at(-1)!.authorization).toBe('Bearer sk-ant-good-key-7777');
+      expect(seen.at(-1)).not.toHaveProperty('x-gateway-secret');
+      // The same when a model is called. The stand-in has no model to call, but it sees what the call came with.
+      await ask(router, 'claude-opus-5-5').catch(() => {});
+      expect(seen.at(-1)!.authorization).toBe('Bearer sk-ant-good-key-7777');
+      expect(seen.at(-1)).not.toHaveProperty('x-gateway-secret');
+
+      // A key that comes from the environment is the one those headers were written for, and still goes out with them.
+      const beside = await setup({ ANTHROPIC_API_KEY: 'sk-ant-good-key-7777', ANTHROPIC_BASE_URL: address });
+      await beside.router.refresh('anthropic-env');
+      expect(seen.at(-1)).toMatchObject({ 'x-gateway-secret': 'for-the-gateway-only', authorization: 'Bearer the-gateway-s-own-token' });
+    } finally {
+      if (before === undefined) delete process.env.ANTHROPIC_CUSTOM_HEADERS;
+      else process.env.ANTHROPIC_CUSTOM_HEADERS = before;
+    }
+  });
+
   it('offers Claude\'s models under their plain names, with hosted sessions and web search, once the key is good', async () => {
     const { router } = await setup();
     const connection = await router.connect({ presetId: 'anthropic', apiKey: 'sk-ant-good-key-7777', baseURL: address });
@@ -226,7 +251,14 @@ describe('hosted sessions with more than one Anthropic key', () => {
         const session = /^\/v1\/sessions\/([^/]+)(\/archive)?$/.exec(url);
         if (!session || !this.sessions.includes(session[1]!)) return void json(404, { type: 'error', error: { type: 'not_found_error', message: 'Not found' } });
         if (session[2]) this.archived.add(session[1]!);
-        json(200, { id: session[1], type: 'session', status: 'idle', archived_at: this.archived.has(session[1]!) ? '2026-11-05T12:00:00Z' : null });
+        json(200, {
+          id: session[1],
+          type: 'session',
+          status: 'idle',
+          archived_at: this.archived.has(session[1]!) ? '2026-11-05T12:00:00Z' : null,
+          usage: { list_cost: { amount: '40', currency: 'USD' } },
+          budget: { type: 'limit', max_list_cost: { amount: '200', currency: 'USD' } },
+        });
       });
       await new Promise<void>((resolve) => this.server.listen(0, '127.0.0.1', resolve));
       this.address = `http://127.0.0.1:${(this.server.address() as AddressInfo).port}`;
@@ -278,6 +310,15 @@ describe('hosted sessions with more than one Anthropic key', () => {
     expect([...first.archived]).toEqual([]);
     // A session no connected key knows is gone, as far as anyone here can tell.
     expect(await router.archiveSession('sesn_nobodys')).toBe('gone');
+  });
+
+  it('holds a session on the account it is on, and nowhere else', async () => {
+    const { router } = await twoKeys();
+    expect(await router.holdSession('sesn_second')).toEqual({ budgetUsd: 0.41, spentUsd: 0.4 });
+    expect(second.asked).toContain('POST /v1/sessions/sesn_second');
+    expect(first.asked.filter((a) => a.startsWith('POST'))).toEqual([]);
+    // A session no connected key knows is not there to hold.
+    expect(await router.holdSession('sesn_nobodys')).toBeNull();
   });
 
   it('gives plain Claude names to the key called "anthropic" and to no other', async () => {
@@ -354,6 +395,20 @@ describe('calling a model', () => {
     await expect(router.setPrice('custom', 'model-a', { input: -1, output: 2 })).rejects.toThrow(/A price is a number/);
   });
 
+  it('does not take something every object has for a price set by hand, when a model is named after it', async () => {
+    api.models = [{ id: 'constructor' }, { id: 'toString' }];
+    const { router } = await setup();
+    await router.connect({ presetId: 'custom', baseURL: api.baseURL, apiKey: 'sk-test' });
+    const usage: CallUsage[] = [];
+    const reply = { content: '{"ok":true}', usage: { prompt_tokens: 1_000_000, completion_tokens: 100_000 } };
+    api.replies = [reply, reply];
+    await ask(router, 'custom:constructor', (u) => usage.push(u));
+    await ask(router, 'custom:toString', (u) => usage.push(u));
+    // No price was set for either, so both are counted at the stand-in price: a number, where it was not one.
+    expect(usage.map((u) => u.costUsd)).toEqual([UNKNOWN_PRICE.input + UNKNOWN_PRICE.output / 10, UNKNOWN_PRICE.input + UNKNOWN_PRICE.output / 10]);
+    expect(router.info().models.map((m) => [m.id, m.priced])).toEqual([['custom:constructor', false], ['custom:toString', false]]);
+  });
+
   it('uses the prices a gateway\'s own listing gives', async () => {
     api.models = [{ id: 'maker/model-a', name: 'Maker: Model A', pricing: { prompt: '0.000003', completion: '0.000015' }, supported_parameters: ['tools'] }, { id: 'maker/no-tools', pricing: { prompt: '0', completion: '0' }, supported_parameters: [] }];
     const { router } = await setup();
@@ -417,6 +472,7 @@ describe('looking after keys', () => {
     expect(router.searches('claude-opus-5-5')).toBe(false);
     // A real hosted session is not marked archived, or carried on, by a simulator that has never heard of it.
     await expect(router.archiveSession('sesn_real')).rejects.toThrow(/No Anthropic key is connected/);
+    await expect(router.holdSession('sesn_real')).rejects.toThrow(/No Anthropic key is connected/);
     await expect(router.executePlan({ executiveModel: 'claude-opus-5-5', workerModel: 'claude-opus-5-5', session: { id: 'sesn_real' } } as never)).rejects.toThrow(/no Anthropic key is connected to pick it up/);
     expect(api.seen).toHaveLength(0);
 

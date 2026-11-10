@@ -303,6 +303,45 @@ describe('keys from the environment', () => {
     expect(router.defaultModel()).toBe('claude-opus-5-5');
   });
 
+  it('keep the name they were first given, whatever becomes of a key added by hand for the same provider', async () => {
+    const stored = { id: 'anthropic', presetId: 'anthropic', label: 'Mine', baseURL: 'https://api.anthropic.com', apiKey: 'sk-ant-stored-0001', source: 'stored' as const, addedAt: new Date().toISOString(), models: [], checkedAt: null, listingError: null, prices: {}, extraModels: [] };
+    await (await withEnv({})).store.add(stored);
+    const env = { ANTHROPIC_API_KEY: 'sk-ant-from-env-1234' };
+    const beside = await withEnv(env);
+    expect(beside.store.list().map((c) => c.id)).toEqual(['anthropic-env', 'anthropic']);
+    // The key added by hand is removed. Plain model names were its own, and now have no key behind them.
+    await beside.router.disconnect('anthropic');
+    expect(beside.router.knows('claude-opus-5-5')).toBe(false);
+
+    // The server restarts. The key from the environment is still the one it was: it has not taken the other's
+    // name, and with it the plain model names and the other account's file of hosted-session ids.
+    const after = await withEnv(env);
+    expect(after.store.list().map((c) => [c.id, c.source, c.apiKey])).toEqual([['anthropic-env', 'env', 'sk-ant-from-env-1234']]);
+    expect(after.router.knows('claude-opus-5-5')).toBe(false);
+    expect(after.router.knows('anthropic-env:claude-opus-5-5')).toBe(true);
+    // A key added by hand from here on is the one called "anthropic", as the first was.
+    expect(after.store.freeId('anthropic')).toBe('anthropic');
+    await after.store.add({ ...stored, apiKey: 'sk-ant-stored-0002' });
+    expect((await withEnv(env)).store.list().map((c) => c.id)).toEqual(['anthropic-env', 'anthropic']);
+  });
+
+  it('keep the plain name when they had it first, and give it up only to a key that took it while they were away', async () => {
+    const env = { ANTHROPIC_API_KEY: 'sk-ant-from-env-1234' };
+    const first = await withEnv(env);
+    expect(first.store.list().map((c) => c.id)).toEqual(['anthropic']);
+    // A second key, added by hand, stands beside it under a name of its own.
+    const second = { id: first.store.freeId('anthropic'), presetId: 'anthropic', label: 'Other', baseURL: 'https://api.anthropic.com', apiKey: 'sk-ant-stored-0002', source: 'stored' as const, addedAt: new Date().toISOString(), models: [], checkedAt: null, listingError: null, prices: {}, extraModels: [] };
+    await first.store.add(second);
+    expect((await withEnv(env)).store.list().map((c) => c.id)).toEqual(['anthropic', 'anthropic-2']);
+
+    // The server is started without the variable, and a key added by hand takes the plain name. When the
+    // variable comes back, there cannot be two keys of one name: the one from the environment stands beside it.
+    const without = await withEnv({});
+    await without.store.add({ ...second, id: without.store.freeId('anthropic') });
+    expect(without.store.list().map((c) => c.id)).toEqual(['anthropic-2', 'anthropic']);
+    expect((await withEnv(env)).store.list().map((c) => c.id)).toEqual(['anthropic-env', 'anthropic-2', 'anthropic']);
+  });
+
   it('are read for every provider that names a variable, at the address the environment gives if it gives one', async () => {
     const name = other.env[0]!;
     const plain = await withEnv({ [name]: 'sk-env-key-5678' });

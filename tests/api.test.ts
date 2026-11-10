@@ -1,11 +1,11 @@
 import http from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/server/app';
-import type { Config } from '../src/server/config';
+import { loadConfig, type Config } from '../src/server/config';
 import { MockProvider } from '../src/server/providers/mock';
 import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
@@ -96,6 +96,14 @@ describe('the API', () => {
     const cto = data.profiles.find((p: any) => p.id === 'engineering');
     expect(cto.phases.map((p: any) => p.name)).toEqual(['Spec', 'Build', 'Test', 'Release']);
     expect(data.defaults.budgetUsd).toBeGreaterThan(0);
+    // Organisations on disk that could not be loaded are named, so that one missing from the list is no mystery.
+    expect(data.unreadable).toEqual([]);
+    registry.unreadable.push({ folder: 'org_cut', reason: 'its saved state is not valid JSON: the file is damaged or was cut short.' });
+    try {
+      expect((await api('GET', '/api/meta')).data.unreadable).toEqual([{ folder: 'org_cut', reason: 'its saved state is not valid JSON: the file is damaged or was cut short.' }]);
+    } finally {
+      registry.unreadable.length = 0;
+    }
   });
 
   it('recommends an executive team for an idea', async () => {
@@ -261,6 +269,75 @@ describe('the API', () => {
     expect(res.status).toBe(400);
   });
 
+  it('says what is wrong with a team it cannot read, and with a request too large to take', async () => {
+    const before = registry.list().length;
+    const teams: Array<[unknown, RegExp]> = [
+      [[null], /Seat 1 of the executive team cannot be read: it is not a seat/],
+      [[{ profileId: 'product' }, { profileId: 'custom', title: 42 }], /Seat 2 .* its title is not text/],
+      [[{ profileId: 'engineering', phases: 'four of them' }], /its phases are not a list of named phases/],
+      [[{ profileId: 'engineering', phases: [{ name: 7 }] }], /its phases are not a list of named phases/],
+      [[{ profileId: 'engineering', short: {} }], /its short is not text/],
+      [[{ profileId: 'engineering', agentCount: 'three' }], /its number of agents is not a number/],
+      [[{ title: 'Nobody' }], /it does not name a profile/],
+      ['engineering, product', /Give the executive team as a list of seats/],
+    ];
+    for (const [executives, message] of teams) {
+      const refused = await api('POST', '/api/orgs', { name: 'Unreadable', idea: IDEA, executives });
+      expect(refused.status, JSON.stringify(executives)).toBe(400);
+      expect(refused.data.error).toMatch(message);
+    }
+    // What the wizard and a recommendation send still reads: empty fields given as nothing at all.
+    const fine = await api<OrgView>('POST', '/api/orgs', { name: 'Readable', idea: IDEA, executives: [{ profileId: 'engineering', title: null, short: null, phases: null, agentCount: null }] });
+    expect(fine.status).toBe(201);
+    expect(fine.data.org.executives.find((e) => e.kind === 'lead')).toMatchObject({ id: 'cto', title: 'Chief Technology Officer', agentCount: 3 });
+    expect(registry.list().length).toBe(before + 1);
+
+    const huge = await api('POST', '/api/orgs', { name: 'Too much', idea: 'x'.repeat(1_200_000), executives: [{ profileId: 'product' }] });
+    expect(huge.status).toBe(413);
+    expect(huge.data.error).toMatch(/larger than this server takes/);
+  });
+
+  it('has a person’s decision on disk before it says the decision was taken', async () => {
+    const { org } = await establish();
+    const url = `/api/orgs/${org.id}`;
+    const onDisk = async () => JSON.parse(await readFile(path.join(dir, 'orgs', org.id, 'org.json'), 'utf8')) as OrgView['org'];
+    // Each is read back the moment the answer arrives: no waiting for the next routine save.
+    expect((await api('POST', `${url}/steer`, { text: 'Serve commuters in Leeds first.' })).status).toBe(200);
+    expect((await onDisk()).steers.map((s) => s.text)).toEqual(['Serve commuters in Leeds first.']);
+    expect((await api('PATCH', `${url}/privileges`, { seatId: 'cto', privilege: 'read_mail', allowed: false })).status).toBe(200);
+    expect((await onDisk()).privileges).toEqual({ cto: { read_mail: false } });
+    expect((await api('PATCH', `${url}/settings`, { budgetUsd: 7 })).status).toBe(200);
+    expect((await onDisk()).settings.budgetUsd).toBe(7);
+    expect((await api('PATCH', `${url}/executives/cto`, { agentCount: 5 })).status).toBe(200);
+    expect((await onDisk()).executives.find((e) => e.id === 'cto')!.agentCount).toBe(5);
+    expect((await api('POST', `${url}/signatory/notes`, { text: 'The bank needs two working days.' })).status).toBe(200);
+    expect((await onDisk()).signatory.messages.map((m) => m.text)).toEqual(['The bank needs two working days.']);
+  });
+
+  it('says so when a decision was taken but could not be saved', async () => {
+    const { org } = await establish();
+    const runner = registry.get(org.id)!;
+    const warn = console.warn;
+    console.warn = () => {};
+    // Saving fails for this organisation and no other: the others in this file are still at work, and one of them
+    // saving first would otherwise be the one that failed.
+    const save = Store.prototype.save;
+    const failing = vi.spyOn(Store.prototype, 'save').mockImplementation(function (this: Store, saved) {
+      return saved.id === org.id ? Promise.reject(new Error('ENOSPC: no space left on device')) : save.call(this, saved);
+    });
+    try {
+      const answer = await api('POST', `/api/orgs/${org.id}/steer`, { text: 'Keep to the budget.' });
+      expect(answer.status).toBe(500);
+      expect(answer.data.error).toMatch(/could not be saved \(ENOSPC.*may not outlast a restart/);
+    } finally {
+      failing.mockRestore();
+      console.warn = warn;
+    }
+    // Storage back, the next save carries it.
+    await runner.flush();
+    expect(JSON.parse(await readFile(path.join(dir, 'orgs', org.id, 'org.json'), 'utf8')).steers).toHaveLength(1);
+  });
+
   it('closes an open dashboard stream when its organisation is deleted', async () => {
     const { org } = await establish();
     const res = await fetch(`${base}/api/orgs/${org.id}/events`);
@@ -302,6 +379,62 @@ describe('who may call the API', () => {
     });
     expect(status).toBe(403);
     await new Promise<void>((resolve) => other.close(() => resolve()));
+  });
+
+  it('answers a server opened to other machines by address, and by no name it was not told is its own', async () => {
+    const config: Config = { port: 0, host: '0.0.0.0', allowedHosts: ['office-box.lan'], dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
+    const other = createApp(registry, config).listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => other.once('listening', resolve));
+    const { port } = other.address() as AddressInfo;
+    const ask = (host: string, method = 'GET', headers: Record<string, string> = {}) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, method, path: '/api/orgs', headers: { host, ...headers } }, (res) => {
+          let body = '';
+          res.on('data', (chunk) => (body += chunk));
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        });
+        req.on('error', reject);
+        req.end(method === 'GET' ? undefined : '{}');
+      });
+    try {
+      // An address cannot be pointed anywhere else, so a request that names one is addressed to this machine.
+      expect((await ask(`10.1.2.3:${port}`)).status).toBe(200);
+      expect((await ask(`[fd00::12]:${port}`)).status).toBe(200);
+      expect((await ask(`localhost:${port}`)).status).toBe(200);
+      expect((await ask(`Office-Box.lan:${port}`)).status).toBe(200);
+      // A page that has pointed a name of its own at this machine sends that name, and an Origin to match it.
+      const read = await ask(`attacker.example:${port}`);
+      expect(read.status).toBe(403);
+      expect(read.body).toContain('ORG_ALLOWED_HOSTS');
+      const before = registry.list().length;
+      const drive = await ask(`attacker.example:${port}`, 'POST', { origin: `http://attacker.example:${port}`, 'content-type': 'application/json' });
+      expect(drive.status).toBe(403);
+      expect(registry.list().length).toBe(before);
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
+  });
+
+  it('reads the names it may answer to from ORG_ALLOWED_HOSTS', () => {
+    expect(loadConfig({}).allowedHosts).toEqual([]);
+    expect(loadConfig({ ORG_ALLOWED_HOSTS: ' Office-Box.lan:4780, ,other.example ' }).allowedHosts).toEqual(['office-box.lan', 'other.example']);
+  });
+
+  it('answers to its own name when that is what it was told to listen on', async () => {
+    const config: Config = { port: 0, host: 'office-box.lan', dataDir: dir, provider: 'mock', providerReason: 'test', production: false, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
+    const other = createApp(registry, config).listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => other.once('listening', resolve));
+    const { port } = other.address() as AddressInfo;
+    const status = (host: string) =>
+      new Promise<number>((resolve, reject) => {
+        http.get({ host: '127.0.0.1', port, path: '/api/orgs', headers: { host } }, (res) => (res.resume(), resolve(res.statusCode ?? 0))).on('error', reject);
+      });
+    try {
+      expect(await status(`office-box.lan:${port}`)).toBe(200);
+      expect(await status(`other-box.lan:${port}`)).toBe(403);
+    } finally {
+      await new Promise<void>((resolve) => other.close(() => resolve()));
+    }
   });
 
   it('refuses to start an organisation that is being deleted', async () => {

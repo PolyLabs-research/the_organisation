@@ -79,8 +79,22 @@ export const ABOUT_FORMAT = /response_format|text\.format|json_schema|json_objec
 export const NOT_ABOUT_FORM =
   /does not exist|not found|no such model|unknown model|not have access|api[ _-]?key|unauthori[sz]ed|authenticat|context (length|window)|too (long|large|many)|content (policy|filter|management)|moderation|inspection|safety|balance|quota|billing|credit|arrears/i;
 
+/**
+ * The codes and types endpoints put on a request they turned away for what it says, not for how it was put:
+ * OpenAI's content_policy_violation and its *_policy codes, content_filter (Azure, Moonshot), Alibaba's
+ * data_inspection_failed, moderation_blocked, ByteDance's SensitiveContentDetected, Zhipu's 1301.
+ */
+const REFUSED_CODE = /policy|safety|content_filter|data_inspection|moderation|sensitive_?content|\b1301\b/i;
+/** The same in words, for an endpoint or a gateway in front of one that gives no code for it. */
+const REFUSED_WORDS = /content (policy|filter|management)|inappropriate content|content exists risk|(prompt|input) was flagged/i;
+/** Whether a refusal, by its code or failing that its words, is of what a request says. Sent again in any form, it would be refused again. */
+export const refusesContent = (code: string, message: string): boolean => REFUSED_CODE.test(code) || REFUSED_WORDS.test(message);
+export const refusedForContent = (err: InstanceType<typeof OpenAI.APIError>): boolean => refusesContent(`${err.code ?? ''} ${err.type ?? ''}`, err.message);
+
 /** A refusal that says the prompt, or the prompt and the room asked for the reply together, is more than the model can read. */
 export const OVERFLOW = /context (length|window|size|limit)|maximum context|context_length|prompt is too long|input.{0,30}too long|too many (input |prompt )?tokens|exceeds? the (model'?s? )?(maximum )?(context|input)/i;
+/** The same said by its code, which OpenAI and the endpoints that copy it give, whatever the words. */
+export const overflows = (err: InstanceType<typeof OpenAI.APIError>): boolean => err.code === 'context_length_exceeded' || OVERFLOW.test(err.message);
 /** The room left for a reply when a request is sent again after overflowing the model's window. */
 const SQUEEZED_CAP = 4096;
 
@@ -217,7 +231,7 @@ export class OpenAICompatibleProvider {
       const shaped = asked(mode);
       const format = formatFor(mode);
       try {
-        reply = await this.complete(req.model, shaped, { format }, req.effort, STRUCTURED_MAX_TOKENS, req.signal);
+        reply = await this.complete(req.model, shaped, { format }, req.effort, STRUCTURED_MAX_TOKENS, req.signal, req.onUsage);
         if (unexplained) this.structuredMode.set(req.model, modes.indexOf(mode));
         break;
       } catch (err) {
@@ -257,7 +271,7 @@ export class OpenAICompatibleProvider {
         { role: 'user', content: `That reply does not match the required structure (${result.problem}). Reply again with the corrected JSON object and nothing else.` },
       ];
       try {
-        const second = await this.complete(req.model, repair, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.signal);
+        const second = await this.complete(req.model, repair, { format: formatFor(mode) }, req.effort, STRUCTURED_MAX_TOKENS, req.signal, req.onUsage);
         req.onUsage?.(second.usage);
         this.checkFinish(second);
         result = read(second.content);
@@ -295,7 +309,7 @@ export class OpenAICompatibleProvider {
 
       let reply: Reply;
       try {
-        reply = await this.complete(req.model, messages, { tools, toolChoice: wrapUpSent ? 'none' : undefined }, req.effort, AGENT_MAX_TOKENS, req.signal);
+        reply = await this.complete(req.model, messages, { tools, toolChoice: wrapUpSent ? 'none' : undefined }, req.effort, AGENT_MAX_TOKENS, req.signal, req.onUsage);
       } catch (err) {
         const failure = this.translate(err);
         if (req.signal?.aborted) throw failure;
@@ -364,7 +378,7 @@ export class OpenAICompatibleProvider {
     const finish = reply.finish ?? '';
     if (REFUSED.test(finish)) throw new ProviderError('The model declined this request.', 'refusal', false);
     if (finish === 'network_error' || finish === 'error' || finish === 'insufficient_system_resource') throw new ProviderError(`${this.label} lost the reply part-way through.`, 'unavailable', true);
-    if (/context_window|context_length/.test(finish)) throw new ProviderError('The conversation grew longer than the model can read.', 'bad_request', false);
+    if (/context_window|context_length/.test(finish)) throw new ProviderError('The conversation grew longer than the model can read.', 'too_long', false);
   }
 
   private checkFinish(reply: Reply): void {
@@ -376,8 +390,9 @@ export class OpenAICompatibleProvider {
    * One request. Its form is adjusted to what the endpoint has been found to
    * accept; when the endpoint refuses something about the form, the request
    * is reshaped and sent again, and the lesson is kept for later requests.
+   * A reply that breaks off part-way returns nothing, so what it cost is told to `onLost`.
    */
-  private async complete(model: string, messages: Message[], shape: Shape, effort: Effort, wanted: number, signal?: AbortSignal): Promise<Reply> {
+  private async complete(model: string, messages: Message[], shape: Shape, effort: Effort, wanted: number, signal?: AbortSignal, onLost?: (usage: CallUsage) => void): Promise<Reply> {
     type Optional = 'effort' | 'extra' | 'choice' | 'usage';
     // How this request goes out. It starts from what earlier requests learned about the endpoint, and each
     // refusal changes it. A change is kept for later requests only once a request has gone through with it:
@@ -415,7 +430,7 @@ export class OpenAICompatibleProvider {
         ...(shape.format ? { response_format: shape.format } : {}),
       };
       try {
-        const reply = now.streaming ? await this.stream(model, body, usage, signal) : await this.whole(model, body, signal);
+        const reply = now.streaming ? await this.stream(model, body, usage, signal, onLost) : await this.whole(model, body, signal);
         for (const learn of lessons) learn();
         if (without.has('effort')) this.noEffort.add(model);
         if (without.has('extra')) for (const key of now.extra) this.noExtra.add(key);
@@ -424,6 +439,8 @@ export class OpenAICompatibleProvider {
         return reply;
       } catch (err) {
         if (!refusesForm(err)) throw err;
+        // Nothing about the form of a request changes what it says.
+        if (refusedForContent(err)) throw this.translate(err);
         if (adaptations >= MAX_ADAPTATIONS) throw unexplained ?? err;
         const said = err.message;
         // The way a structured answer is asked for is the caller's to change.
@@ -442,10 +459,10 @@ export class OpenAICompatibleProvider {
         } else if (choice && /tool_choice/i.test(said)) {
           now.choice = false;
           lessons.push(() => (this.toolChoiceNone = false));
-        } else if (OVERFLOW.test(said)) {
+        } else if (overflows(err)) {
           // The prompt and the room asked for the reply do not fit the model's window together. A shorter
           // reply may fit: for this request only, since the next prompt may well be shorter.
-          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
           squeezed = true;
           now.cap = SQUEEZED_CAP;
         } else if (/max_completion_tokens/i.test(said) && /unsupported|unrecognized|unknown|not supported|not permitted|unexpected|instead/i.test(said) && now.capParam === 'max_completion_tokens') {
@@ -489,7 +506,7 @@ export class OpenAICompatibleProvider {
     return nearestEffort(effort, own === undefined ? this.dialect.efforts : own);
   }
 
-  private async stream(model: string, body: Record<string, unknown>, withUsage: boolean, signal?: AbortSignal): Promise<Reply> {
+  private async stream(model: string, body: Record<string, unknown>, withUsage: boolean, signal?: AbortSignal, onLost?: (usage: CallUsage) => void): Promise<Reply> {
     const params = { ...body, stream: true, ...(withUsage ? { stream_options: { include_usage: true } } : {}) } as unknown as CreateParams;
     const stream = await this.client.chat.completions.create(params, { signal });
     let content = '';
@@ -499,7 +516,12 @@ export class OpenAICompatibleProvider {
     let usage: Usage | undefined;
     const kept: Record<string, unknown> = {};
     const calls: ToolCall[] = [];
-    for await (const chunk of stream as AsyncIterable<Chunk>) {
+    // A reply that breaks off once it has started was paid for as far as it got. It is counted as the endpoint
+    // reported it, if it had, and otherwise by its length. A call that was stopped on purpose is not counted.
+    const lost = () => {
+      if (!signal?.aborted) onLost?.(this.price(model, usage, messagesLength(body), content.length + reasoning.length + callsLength(finished(calls))));
+    };
+    for await (const chunk of whileItLasts(stream as AsyncIterable<Chunk>, lost)) {
       if (chunk.usage) usage = chunk.usage;
       const choice = chunk.choices?.[0];
       if (!choice) continue;
@@ -523,7 +545,10 @@ export class OpenAICompatibleProvider {
     }
     // Every reply ends by saying why it ended. A stream that closes without doing so was cut off somewhere
     // on the way, however cleanly, and what arrived is not the whole of it.
-    if (finish === null) throw new ProviderError(`${this.label} ended a reply without saying it was finished.`, 'unavailable', true);
+    if (finish === null) {
+      lost();
+      throw new ProviderError(`${this.label} ended a reply without saying it was finished.`, 'unavailable', true);
+    }
     const made = finished(calls);
     return { content, reasoning, reasoningField, kept, calls: made, finish, usage: this.price(model, usage, messagesLength(body), content.length + reasoning.length + callsLength(made)) };
   }
@@ -560,13 +585,13 @@ export class OpenAICompatibleProvider {
     const cached = details.cached_tokens ?? more.prompt_cache_hit_tokens;
     return this.cost(model, {
       // Without counts from the endpoint, the request is still charged for, at about four characters to a token.
-      prompt: usage?.prompt_tokens ?? Math.ceil(promptChars / 4),
-      cached: typeof cached === 'number' ? cached : 0,
-      written: typeof details.cache_write_tokens === 'number' ? details.cache_write_tokens : 0,
-      output: usage?.completion_tokens ?? Math.ceil(replyChars / 4),
+      prompt: counted(usage?.prompt_tokens) ?? Math.ceil(promptChars / 4),
+      cached: counted(cached) ?? 0,
+      written: counted(details.cache_write_tokens) ?? 0,
+      output: counted(usage?.completion_tokens) ?? Math.ceil(replyChars / 4),
       // A gateway that bills for others' models says what the request cost; that is taken over an estimate. A
       // cost of nothing is not: an endpoint that fills the field in without meaning it would make every call free.
-      billed: typeof more.cost === 'number' && more.cost > 0 ? more.cost : null,
+      billed: (counted(more.cost) ?? 0) > 0 ? (more.cost as number) : null,
     });
   }
 
@@ -606,6 +631,8 @@ export class OpenAICompatibleProvider {
     if (err instanceof ProviderError) return err;
     const who = this.label;
     if (err instanceof OpenAI.APIUserAbortError) return new ProviderError('The call was interrupted.', 'aborted', false);
+    // Turned away for what the request says, under whatever status: some gateways answer 403, which is not a key refused.
+    if (err instanceof OpenAI.APIError && refusedForContent(err)) return new ProviderError(`${who} declined this request: ${err.message}`, 'refusal', false);
     // One provider answers a bad key with a 400 that says so, where the rest answer 401.
     const keyRefused = err instanceof OpenAI.BadRequestError && /api[ _-]?key/i.test(err.message) && /valid|incorrect|missing|expired|not found/i.test(err.message);
     if (err instanceof OpenAI.AuthenticationError || err instanceof OpenAI.PermissionDeniedError || keyRefused) {
@@ -619,6 +646,8 @@ export class OpenAICompatibleProvider {
     if (err instanceof OpenAI.APIConnectionError) return new ProviderError(`Could not reach ${who}: ${err.message}`, 'unavailable', true);
     if (err instanceof OpenAI.APIError) {
       if (err.status === 402) return new ProviderError(`${who} says the account is out of credit: ${err.message}`, 'auth', false);
+      // A request too large for the endpoint to take in at all: the same work sent again would be as large.
+      if (err.status === 413) return new ProviderError(`The work outgrew what ${who} takes in one request: ${err.message}`, 'too_long', false);
       const retryable = err.status === undefined || err.status >= 500 || err.status === 408 || err.status === 409;
       return new ProviderError(`${who} ${retryable ? 'failed' : 'rejected the request'}${err.status ? ` (${err.status})` : ''}: ${err.message}`, retryable ? 'unavailable' : 'bad_request', retryable);
     }
@@ -626,6 +655,22 @@ export class OpenAICompatibleProvider {
       return new ProviderError(`The connection to ${who} was lost part-way through a reply: ${err.message}`, 'unavailable', true);
     }
     return new ProviderError(err instanceof Error ? err.message : String(err), 'bad_request', false);
+  }
+}
+
+/**
+ * A count an endpoint reported, if it is one: a number, and not below nothing. Anything else an endpoint may put in
+ * its place is no count at all, and would make a cost that cannot be added to the spend.
+ */
+export const counted = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
+
+/** The pieces of a streamed reply, as they come. If the stream fails before its end, `lost` is called before the failure is passed on. */
+export async function* whileItLasts<T>(stream: AsyncIterable<T>, lost: () => void): AsyncGenerator<T> {
+  try {
+    yield* stream;
+  } catch (err) {
+    lost();
+    throw err;
   }
 }
 

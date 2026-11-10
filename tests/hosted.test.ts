@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Organisation, Plan } from '../src/shared/types';
+import { cancelPlan } from '../src/server/engine/handlers';
 import { findPhase, outputPath } from '../src/server/engine/hosted';
 import { sessionAllowance, toClientView } from '../src/server/engine/state';
 import { MockProvider } from '../src/server/providers/mock';
@@ -179,6 +180,48 @@ describe('a plan carried out in a hosted session', () => {
     expect(h.org.decisions.filter((d) => d.kind === 'in_remit' && d.title === 'Scope')).toHaveLength(1);
   });
 
+  it('answers a record that is sent again with what became of its requests the first time, and with what the board has since ruled', async () => {
+    const replies: Array<{ ok: boolean; message: string; instructions?: number }> = [];
+    let toldBySending = -1;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks, context }) => {
+        hooks.session({ id: 'sesn_test', consoleUrl: null, budgetUsd: 5 });
+        const phases = (context.phases as Array<{ name: string }>).map((p) => p.name);
+        const record = {
+          phase: phases[0]!,
+          summary: 'Specified.',
+          decisions: [],
+          requests: [
+            { kind: 'payment', title: 'Hosting', detail: 'Needed.', amount: '5 USD', party: 'A host', files: [] },
+            { kind: 'signature', title: 'Terms with the host', detail: 'Sign them.', amount: '', party: 'A host', files: [] },
+            { kind: 'payment', title: '', detail: 'Nothing to call it.', amount: '1 USD', party: 'A host', files: [] },
+          ],
+        };
+        replies.push(hooks.phase(record));
+        // The board rules, and the same record arrives again: the answer to it could not be sent the first time.
+        planOf(h!.org).amendments.push('Keep the first version to one city.');
+        replies.push(hooks.phase(record));
+        // Stating an instruction in an answer is not yet having told it. That is said when the answer has gone.
+        toldBySending = planOf(h!.org).managed!.instructionsSent;
+        hooks.instructed(replies[1]!.instructions!);
+        for (const phase of phases.slice(1)) hooks.phase({ phase, summary: 'Done.', decisions: [] });
+        hooks.report({ headline: 'Done', summary: 'Done.', outcomes: [], asks: [] });
+        return { status: 'reported' };
+      }),
+    });
+    await runToRest(h.runner);
+    expect(replies[0]!.message).toContain('Recorded. 2 requests have gone to the signatory. 1 was not filed');
+    expect(replies[1]!.message).toMatch(/^Spec was already recorded\. 2 requests it asks for went to the signatory when the phase was first recorded\. 1 was not filed\. Build is next\./);
+    expect(replies[1]!.message).toContain('Binding instructions from the board:');
+    expect(replies[1]!.message).toContain('Keep the first version to one city.');
+    expect(replies[1]!.instructions).toBe(1);
+    expect(h.org.signatory.requests.map((r) => r.title)).toEqual(['Hosting', 'Terms with the host']);
+    expect(toldBySending).toBe(0);
+    expect(planOf(h.org).managed!.instructionsSent).toBe(1);
+  });
+
   it('leaves the report to the board to the lead in its session', async () => {
     // Every phase is recorded some time before the lead reports. Nothing else may write the report meanwhile.
     let recorded = false;
@@ -239,6 +282,43 @@ describe('a plan carried out in a hosted session', () => {
     const files = (await h.runner.workspace.list()).map((f) => f.path);
     expect(files).toEqual(['engineering/build.md', 'engineering/marketing/plan.md', 'engineering/spec.md', 'engineering/test.md']);
     expect(planOf(h.org).managed!.note).toContain('could not be kept');
+  });
+});
+
+describe('a file a session names so as to leave its team\'s directory', () => {
+  it('is not written into another team\'s directory, and is left in the session', async () => {
+    const paths: Array<string | null> = [];
+    let done = false;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks }) => {
+        hooks.session({ id: 'sesn_test', consoleUrl: null, budgetUsd: 5 });
+        const bytes = new TextEncoder().encode('from the session');
+        paths.push(await hooks.output({ id: 'f1', name: '../marketing/plan.md', bytes }));
+        paths.push(await hooks.output({ id: 'f2', name: 'engineering/../marketing/plan.md', bytes }));
+        paths.push(await hooks.output({ id: 'f3', name: '..\\marketing\\plan.md', bytes }));
+        paths.push(await hooks.output({ id: 'f4', name: '/mnt/session/outputs/engineering/drafts/../../marketing/plan.md', bytes }));
+        // Dots that stay inside the team's directory are only an odd way of writing the path.
+        paths.push(await hooks.output({ id: 'f5', name: 'engineering/drafts/../spec.md', bytes }));
+        done = true;
+        while (hooks.halt() === null) await new Promise((resolve) => setTimeout(resolve, 2));
+        return { status: 'paused' };
+      }),
+    });
+    // Another team's file, which a session of the engineering lead has no business replacing.
+    await h.runner.workspace.write('marketing/plan.md', 'from marketing');
+    h.runner.start();
+    await waitFor(() => done, 'the outputs');
+    h.runner.pause();
+    await h.runner.idle();
+
+    expect(paths).toEqual([null, null, null, null, 'engineering/spec.md']);
+    expect((await h.runner.workspace.read('marketing/plan.md')).content).toBe('from marketing');
+    expect((await h.runner.workspace.list()).map((f) => f.path)).toEqual(['engineering/spec.md', 'marketing/plan.md']);
+    expect(planOf(h.org).managed!.files).toEqual(['engineering/spec.md']);
+    expect(planOf(h.org).managed!.note).toContain('could not be kept');
+    expect(planOf(h.org).managed!.note).toContain('path leaves engineering/');
   });
 });
 
@@ -331,6 +411,38 @@ describe('a hosted session and the organisation\'s controls', () => {
     expect(plan.managed!.state).toBe('finished');
     expect(plan.reportId).toBeNull();
     expect(plan.phases.flatMap((p) => p.tasks).some((t) => t.status === 'running')).toBe(false);
+  });
+
+  it('has what its session left open closed when its plan is cancelled while nobody is following it', async () => {
+    let under = false;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks }) => {
+        hooks.session({ id: 'sesn_test', consoleUrl: null, budgetUsd: 5 });
+        hooks.assigned({ threadId: 'sthr_a', agentName: 'Team agent', brief: 'Write the spec.', runId: null });
+        hooks.run({ id: 'run_1', event: 'created', name: 'Sweep', steps: [{ id: 's1', name: 'Check' }] });
+        hooks.run({ id: 'run_1', event: 'step_started', stepId: 's1' });
+        under = true;
+        while (hooks.halt() === null) await new Promise((resolve) => setTimeout(resolve, 2));
+        return { status: 'paused' };
+      }),
+    });
+    h.runner.start();
+    await waitFor(() => under, 'the work to be under way');
+    h.runner.pause();
+    await h.runner.idle();
+    const plan = planOf(h.org);
+    // Held, with an agent and a workflow run in the middle of their work.
+    expect(plan.managed!.state).toBe('paused');
+    expect(plan.phases[0]!.tasks.map((t) => t.status)).toEqual(['running']);
+    expect(plan.managed!.runs[0]!.status).toBe('running');
+
+    cancelPlan(h.org, plan, 'The shareholders have dropped this line of work.', 'ceo');
+    expect(plan.status).toBe('cancelled');
+    expect(plan.managed!.state).toBe('finished');
+    expect(plan.phases[0]!.tasks[0]).toMatchObject({ status: 'failed', error: 'The plan was cancelled.' });
+    expect(plan.managed!.runs[0]).toMatchObject({ status: 'stopped', steps: [{ id: 's1', name: 'Check', status: 'done' }] });
   });
 
   it('does not hold up the board: its calls go on while sessions run, whatever the limit on calls', async () => {
@@ -437,6 +549,84 @@ describe('a hosted session and money', () => {
     expect(h.org.usage.costUsd).toBeLessThan(2);
   });
 
+  it('caps a session that takes over from a lost one at what the budget has left, not at that and what the lost one spent', async () => {
+    const none = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0 };
+    const caps: number[] = [];
+    let sessions = 0;
+    let left = 0;
+    let forAnother: number | null = 0;
+    h = await harness({
+      settings: { ...HOSTED, budgetUsd: 4 },
+      executives: ONE_LEAD,
+      provider: new Scripted(async (job) => {
+        sessions += 1;
+        caps.push(job.budgetUsd);
+        if (sessions === 1) {
+          job.hooks.session({ id: 'sesn_1', consoleUrl: null, budgetUsd: job.budgetUsd });
+          job.hooks.spend({ costUsd: 1, ...none });
+          return { status: 'lost', reason: 'the sandbox was shut down.' };
+        }
+        // The second session is about to be created. What is left is all promised to it, so another plan gets nothing.
+        left = h!.org.settings.budgetUsd - h!.org.usage.costUsd;
+        forAnother = sessionAllowance(h!.org, { id: 'another' } as Plan, 0);
+        job.hooks.session({ id: 'sesn_2', consoleUrl: null, budgetUsd: job.budgetUsd });
+        for (const phase of job.context.phases as Array<{ name: string }>) job.hooks.phase({ phase: phase.name, summary: 'Done.', decisions: [] });
+        job.hooks.report({ headline: 'Done', summary: 'Done.', outcomes: [], asks: [] });
+        return { status: 'reported' };
+      }),
+    });
+    await runToRest(h.runner);
+    expect(planOf(h.org).status).toBe('done');
+    expect(caps).toHaveLength(2);
+    // The dollar the first session spent is spent. The second may spend what is left, and no more.
+    expect(left).toBeLessThan(3);
+    expect(caps[1]).toBeGreaterThan(0);
+    expect(caps[1]).toBeLessThanOrEqual(left + 0.005);
+    expect(forAnother).toBeNull();
+    expect(h.org.usage.costUsd).toBeGreaterThanOrEqual(1);
+  });
+
+  it('is held, and carries on under a cap from the new budget, when the budget is lowered under it', async () => {
+    const jobs: Array<{ cap: number; pickedUp: boolean }> = [];
+    class Watching extends MockProvider {
+      override executePlan(job: PlanJob): Promise<PlanOutcome> {
+        jobs.push({ cap: job.budgetUsd, pickedUp: !!job.session });
+        return super.executePlan(job);
+      }
+    }
+    h = await harness({ settings: { ...HOSTED, budgetUsd: 50 }, executives: ONE_LEAD, provider: new Watching({ ...QUIET, delayMs: 2, runs: 'never' }) });
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.phases[0]?.status === 'done', 'the first phase');
+    const session = planOf(h.org).managed!.sessionId;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.cap).toBeGreaterThan(40);
+
+    // The shareholders lower the budget to far less than the session was told it could spend.
+    h.runner.updateSettings({ budgetUsd: 3 });
+    await h.runner.idle();
+    const plan = planOf(h.org);
+    expect(h.org.lastError).toBeNull();
+    expect(plan.status).toBe('done');
+    expect(plan.managed!.sessionId).toBe(session);
+    // The session was held, then picked up with a cap that the budget as it now stands covers.
+    expect(jobs).toHaveLength(2);
+    expect(jobs[1]!.pickedUp).toBe(true);
+    expect(jobs[1]!.cap).toBeLessThanOrEqual(3);
+    expect(h.org.usage.costUsd).toBeLessThan(3);
+  });
+
+  it('can be held by its id when nobody is following it', async () => {
+    h = await harness({ settings: HOSTED, executives: ONE_LEAD, mock: { runs: 'never' } });
+    await runToRest(h.runner);
+    const provider = h.provider as MockProvider;
+    const { sessionId, spentUsd } = planOf(h.org).managed!;
+    const held = await provider.holdSession(sessionId!);
+    expect(held).toEqual({ budgetUsd: Math.round((spentUsd + 0.02) * 100) / 100, spentUsd });
+    expect(provider.held).toEqual([sessionId]);
+    // A session it has never heard of is not there to hold.
+    expect(await provider.holdSession('sim_nobodys')).toBeNull();
+  });
+
   it('shares what is left between the plans that will want a session', () => {
     const plan = (id: string, managed: Partial<NonNullable<Plan['managed']>> | null, status: Plan['status'] = 'executing') =>
       ({ id, status, execution: 'managed', managed }) as unknown as Plan;
@@ -460,6 +650,45 @@ describe('a hosted session and money', () => {
 });
 
 describe('a hosted session that goes wrong', () => {
+  it('takes nothing more from whoever was following a session once that has ended', async () => {
+    let late: PlanJob['hooks'] | undefined;
+    let tries = 0;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async (job) => {
+        tries += 1;
+        if (tries === 1) {
+          late = job.hooks;
+          job.hooks.session({ id: 'sesn_first', consoleUrl: null, budgetUsd: job.budgetUsd });
+          return { status: 'lost', reason: 'the sandbox was shut down.' };
+        }
+        job.hooks.session({ id: 'sesn_second', consoleUrl: null, budgetUsd: job.budgetUsd });
+        while (job.hooks.halt() === null) await new Promise((resolve) => setTimeout(resolve, 2));
+        return { status: 'paused' };
+      }),
+    });
+    h.runner.start();
+    await waitFor(() => planOf(h!.org)?.managed?.sessionId === 'sesn_second', 'the session that takes over');
+
+    // A look at the first session that was still on its way when it was given up comes back now.
+    late!.session({ id: 'sesn_first', consoleUrl: null, budgetUsd: 9 });
+    late!.checkpoint('2026-11-05T10:00:00.000Z', '2026-11-05T10:00:00.000Z');
+    late!.note('Still here.');
+    expect(late!.halt()).toBe('pause');
+    expect(late!.moreBudget(1)).toBeNull();
+    expect(late!.phase({ phase: 'Spec', summary: 'Done.', decisions: [] } as never)).toMatchObject({ ok: false });
+    expect(await late!.output({ id: 'f1', name: 'engineering/late.md', bytes: new Uint8Array([1]) })).toBeNull();
+
+    // The plan is still in the session that took over, with the first one on record as given up.
+    const managed = planOf(h.org).managed!;
+    expect(managed).toMatchObject({ sessionId: 'sesn_second', cursor: null, note: null, files: [] });
+    expect(managed.past).toEqual([{ sessionId: 'sesn_first', archivedAt: null }]);
+    expect(planOf(h.org).phases.every((p) => p.status !== 'done')).toBe(true);
+    h.runner.pause();
+    await h.runner.idle();
+  });
+
   it('is replaced once by a new session that takes over from the phases already recorded', async () => {
     h = await harness({ settings: HOSTED, executives: ONE_LEAD, mock: { lostSessions: 1, runs: 'never' } });
     await runToRest(h.runner);
@@ -506,6 +735,34 @@ describe('a hosted session that goes wrong', () => {
     expect(fromRun).toMatchObject({ title: 'Sweep: Team agent 1', agent: null, status: 'failed' });
     expect(plan.managed!.runs[0]).toMatchObject({ status: 'stopped', agents: 1, steps: [{ id: 's1', name: 'Check', status: 'done' }] });
     expect(h.org.board.find((m) => m.title === 'CTO session ended early')?.body).toContain('the sandbox was shut down.');
+  });
+
+  it('keeps the report its lead had already made when the session ends before it could be wound up', async () => {
+    let sessions = 0;
+    h = await harness({
+      settings: HOSTED,
+      executives: ONE_LEAD,
+      provider: new Scripted(async ({ hooks, context }) => {
+        sessions += 1;
+        hooks.session({ id: `sesn_${sessions}`, consoleUrl: null, budgetUsd: 5 });
+        hooks.assigned({ threadId: 'sthr_a', agentName: 'Team agent', brief: 'Write the release notes.', runId: null });
+        for (const phase of context.phases as Array<{ name: string }>) hooks.phase({ phase: phase.name, summary: 'Done.', decisions: [] });
+        hooks.report({ headline: 'Shipped', summary: 'The plan is delivered.', outcomes: ['It works.'], asks: [] });
+        // The report is with the organisation. Then the session ends by itself, before its lead's turn was seen to end.
+        return { status: 'lost', reason: 'the session ended by itself.' };
+      }),
+    });
+    await runToRest(h.runner);
+    const plan = planOf(h.org);
+    expect(h.org.lastError).toBeNull();
+    expect(plan.status).toBe('done');
+    expect(h.org.reports.find((r) => r.id === plan.reportId)?.headline).toBe('Shipped');
+    // No second session is started only to have the report made again.
+    expect(sessions).toBe(1);
+    expect(plan.managed).toMatchObject({ sessionId: 'sesn_1', state: 'finished', pendingReport: null, attempts: 0 });
+    expect(plan.managed!.past ?? []).toEqual([]);
+    expect(h.org.board.some((m) => m.title === 'CTO session ended early')).toBe(false);
+    expect(plan.phases.flatMap((p) => p.tasks).some((t) => t.status === 'running')).toBe(false);
   });
 
   it('stops the organisation with the reason when a second session is lost too', async () => {

@@ -202,6 +202,49 @@ describe('a hosted session', () => {
     expect(provider.jobs[0]!.web).toBe(true);
     expect(h.org.business.memory.some((m) => m.title === 'Hosted lesson')).toBe(true);
   });
+
+  /** An organisation paused with its one lead's plan part-way through a session. */
+  async function midPlan(webResearch: boolean) {
+    const run = await harness({ settings: { execution: 'managed', webResearch }, executives: [{ profileId: 'engineering' }], mock: { delayMs: 2, runs: 'never' } });
+    h = run;
+    run.runner.start();
+    await waitFor(() => run.org.plans.find((p) => p.ownerId === 'cto')?.phases[0]?.status === 'done', 'the first phase');
+    run.runner.pause();
+    await run.runner.idle();
+    const plan = run.org.plans.find((p) => p.ownerId === 'cto')!;
+    expect(plan.status).toBe('executing');
+    return { run, plan, notes: () => run.org.board.filter((m) => /web access/.test(m.title)) };
+  }
+
+  it('keeps the web access it started with when that is taken away, and the board says so', async () => {
+    const { run, plan, notes } = await midPlan(true);
+    expect(plan.managed!.web).toBe(true);
+    // Taking away something that has nothing to do with the web says nothing of it.
+    await run.runner.setPrivilege('cto', 'ask_signatory', false);
+    expect(notes()).toHaveLength(0);
+
+    await run.runner.setPrivilege('cto', 'web_search', false);
+    expect(notes()).toHaveLength(1);
+    expect(notes()[0]).toMatchObject({ title: 'The CTO session keeps the web access it started with', body: expect.stringContaining('pause the organisation') });
+    // The session is as it was: nothing here can change what it was started with.
+    expect(plan.managed!.web).toBe(true);
+
+    // Given back, then taken away from the whole organisation: the same is said again. A change that takes nothing away says nothing.
+    await run.runner.setPrivilege('cto', 'web_search', true);
+    run.runner.updateSettings({ webResearch: false });
+    expect(notes()).toHaveLength(2);
+    run.runner.updateSettings({ budgetUsd: 2000 });
+    expect(notes()).toHaveLength(2);
+  });
+
+  it('is not said to keep web access it never had', async () => {
+    const { run, plan, notes } = await midPlan(false);
+    expect(plan.managed!.web).toBe(false);
+    run.runner.updateSettings({ webResearch: true });
+    await run.runner.setPrivilege('cto', 'web_search', false);
+    run.runner.updateSettings({ webResearch: false });
+    expect(notes()).toHaveLength(0);
+  });
 });
 
 describe('a local agent', () => {

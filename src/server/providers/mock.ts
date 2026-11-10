@@ -421,6 +421,18 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
     return 'archived';
   }
 
+  /** Session ids that were held without being followed, in order, for tests to look at. */
+  readonly held: string[] = [];
+
+  async holdSession(sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null> {
+    await this.options.onCall?.('hold_session', { sessionId });
+    const state = this.sessions.get(sessionId);
+    if (!state) return null;
+    this.held.push(sessionId);
+    // As when a simulated session is held while it is followed: its cap comes down to what it has spent.
+    return { budgetUsd: Math.round((state.spend.costUsd + 0.02) * 100) / 100, spentUsd: state.spend.costUsd };
+  }
+
   /**
    * What a simulated lead asks the signatory for at a phase gate: one thing per directed plan, at the gate of its
    * second phase. A payment for most functions, a signature for the ones that deal in agreements.

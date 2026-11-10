@@ -185,6 +185,26 @@ describe('asking Claude Code about itself', () => {
     // A command that is not Claude Code at all.
     expect((await failure(checkClaudeCode('node', fakeEnv()))).message).toMatch(/"node --version" did not answer as Claude Code does.*CLAUDE_CODE_PATH/);
   });
+
+  it('stops waiting for a command that does not answer, and ends whatever the command started', async () => {
+    // A script around a program that hangs. Ending the script alone would leave the program holding the output open.
+    const wrapper = path.join(dir, 'slow-claude.sh');
+    const started = path.join(dir, 'slow.pid');
+    writeFileSync(wrapper, `#!/bin/sh\nsleep 30 &\necho $! > "${started}"\nwait\n`, { mode: 0o755 });
+    const began = Date.now();
+    const error = await failure(checkClaudeCode(wrapper, fakeEnv(), 300));
+    expect(error.message).toMatch(/did not answer as Claude Code does/);
+    expect(Date.now() - began).toBeLessThan(5000);
+    const pid = Number(readFileSync(started, 'utf8'));
+    await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    }, 'the program behind the script to end');
+  });
 });
 
 describe('one call through Claude Code', () => {
@@ -272,6 +292,10 @@ describe('one call through Claude Code', () => {
     ['invalid', 'invalid_output', true, /did not match the expected structure \(proposal/],
     ['nostructured', 'invalid_output', true, /gave no structured reply: Here is my answer in prose instead\./],
     ['refusal', 'refusal', false, /declined this request/],
+    ['filtered', 'refusal', false, /declined this request: .*content filtering policy/],
+    ['blocked', 'refusal', false, /declined this request/],
+    ['toolong', 'too_long', false, /outgrew the model’s context window/],
+    ['toolong-words', 'too_long', false, /outgrew the model’s context window/],
   ] as const)('turns a run that ends in "%s" into an error the organisation can act on', async (mode, code, retryable, message) => {
     const error = await failure(provider({ FAKE_CLAUDE_MODE: mode }).structured(ask()));
     expect([error.code, error.retryable]).toEqual([code, retryable]);
@@ -346,6 +370,15 @@ describe('one call through Claude Code', () => {
     // So is one that never says anything at all.
     const silent = await failure(provider({ FAKE_CLAUDE_MODE: 'silent' }, { idleTimeoutMs: 150 }).structured(ask()));
     expect([silent.code, silent.retryable]).toEqual(['unavailable', true]);
+  });
+
+  it('keeps the answer of a run that gave it and then would not end', async () => {
+    const usage: CallUsage[] = [];
+    // Long enough for the command to have started and spoken on a busy machine before it is taken for silent.
+    const data = await provider({ FAKE_CLAUDE_MODE: 'lingers' }, { idleTimeoutMs: 1500 }).structured(ask({ onUsage: (u) => usage.push(u) }));
+    // The run had said everything it had to say. That it then had to be stopped does not make its answer worthless.
+    expect(data).toEqual({ proposal: 'Settled.', priority: 'high' });
+    expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.01, 9);
   });
 
   it('pauses rather than carry on into paid extra usage, unless told it may', async () => {
@@ -505,6 +538,18 @@ describe('an agent run through Claude Code', () => {
     expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(1005);
   });
 
+  it('counts a reply that a fallback model wrote at that model’s price, as it comes', async () => {
+    const usage: CallUsage[] = [];
+    // The run is cut off before it gives its own account, so the count made along the way is all there is.
+    const cut = await failure(provider({ FAKE_CLAUDE_MODE: 'fallback' }, { idleTimeoutMs: 1500 }).structured(ask({ onUsage: (u) => usage.push(u) })));
+    expect(cut.code).toBe('unavailable');
+    expect(usage.every((u) => u.model === 'claude-opus-4-8')).toBe(true);
+    expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2000);
+    expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(500);
+    // Not a model an organisation can be set to, but one with a price: $5 in and $25 out per million tokens.
+    expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo((2000 * 5 + 500 * 25) / 1e6, 10);
+  });
+
   it('settles a run to its own account when the model goes by another name there', async () => {
     const usage: CallUsage[] = [];
     await provider({ FAKE_CLAUDE_MODE: 'renamed' }).structured(ask({ onUsage: (u) => usage.push(u) }));
@@ -512,6 +557,15 @@ describe('an agent run through Claude Code', () => {
     expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2000);
     expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(500);
     expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.01, 9);
+  });
+
+  it('still counts that model once when the account lists a second model beside it', async () => {
+    const usage: CallUsage[] = [];
+    await provider({ FAKE_CLAUDE_MODE: 'renamed-two' }).structured(ask({ onUsage: (u) => usage.push(u) }));
+    // The run's one reply, under whichever name, and the hundred tokens the second model read on the side.
+    expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2100);
+    expect(usage.reduce((sum, u) => sum + u.outputTokens, 0)).toBe(510);
+    expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.012, 9);
   });
 
   it('ends a run that could not reach its tools, and the runs in flight when the connection is closed', async () => {
@@ -715,7 +769,7 @@ describe('the Claude Code connection', () => {
       executives: [{ profileId: 'engineering', agentCount: 2 }, { profileId: 'product', agentCount: 1 }],
       settings: { executiveModel: 'claude-code:claude-sonnet-5-5', workerModel: 'claude-code:claude-haiku-5-5', maxCycles: 1, budgetUsd: 50 },
     });
-    await runToRest(h.runner);
+    await runToRest(h.runner, 55_000);
     const { org } = h;
     expect(org.lastError).toBeNull();
     expect(org.pauseReason).toBe('cycle_limit');
@@ -745,7 +799,8 @@ describe('the Claude Code connection', () => {
     expect(org.usage.calls).toBe(all.length - tasks + 3 * tasks);
     // And spend comes to what the runs said they cost: a cent a reply, in the stand-in.
     expect(org.usage.costUsd).toBeCloseTo(0.01 * org.usage.calls, 6);
-  });
+    // Every call here starts a process of its own, which takes its time on a machine with much else to do.
+  }, 60_000);
 });
 
 describe('Claude Code over the API', () => {

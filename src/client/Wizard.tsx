@@ -164,7 +164,9 @@ export function Wizard({ meta }: { meta: Meta }) {
         settings: { ...settings, maxCycles: limitCycles ? (settings.maxCycles ?? 3) : null },
         steer: steer.trim(),
       });
-      if (startNow) await api.start(view.org.id);
+      // From here the organisation exists. If it cannot be started, its own page is still the place to go: it is there,
+      // not started, and Start there says why. To stay on this form would be to establish another at the next press.
+      if (startNow) await api.start(view.org.id).catch(() => {});
       navigate(`/org/${view.org.id}`);
     });
 

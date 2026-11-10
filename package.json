@@ -19,7 +19,7 @@
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/server/main.ts",
     "build": "vite build",
-    "start": "NODE_ENV=production tsx src/server/main.ts",
+    "start": "tsx src/server/main.ts --production",
     "establish": "tsx scripts/establish.ts",
     "example:paperclips": "tsx scripts/only-paperclips.ts",
     "managed:setup": "tsx scripts/managed-setup.ts",

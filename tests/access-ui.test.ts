@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
@@ -6,6 +5,7 @@ import os from 'node:os';
 import express from 'express';
 import { chromium } from 'playwright-core';
 import { expect, it, vi } from 'vitest';
+import type { AccountBrowser } from '../src/server/access-browser';
 import { GitHubHost } from '../src/server/access-github';
 import { createApp } from '../src/server/app';
 import type { Config } from '../src/server/config';
@@ -13,24 +13,31 @@ import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
 import { MockProvider } from '../src/server/providers/mock';
 import { FakeGitHub } from './fake-github-api';
-import { QUIET } from './helpers';
+import { CHROME, QUIET, withoutBrowser } from './helpers';
 
-const chrome = process.env.CHROME_PATH ?? '/opt/google/chrome/chrome';
-it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages business email, passwords and grants through the real dashboard', async () => {
+it.skipIf(withoutBrowser({ build: true }))('manages business email, passwords and grants through the real dashboard', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'access-ui-'));
   const store = new Store(dir); await store.init();
-  const mail = { check: vi.fn(async () => {}), list: vi.fn(async () => [{ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', date: '' }]), read: vi.fn(async () => ({ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', text: 'Your fixture verification code is 123456.', date: '', truncated: false })), send: vi.fn(async () => {}) };
+  const mail = { check: vi.fn(async () => {}), list: vi.fn(async () => [{ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', date: '' }]), read: vi.fn(async () => ({ id: '1:2', from: 'supplier@paperclips.example', subject: 'Verify Only Paperclips', text: 'Your fixture verification code is 123456.', date: '', truncated: false })), send: vi.fn(async (_box: unknown, _draft: { subject: string }) => {}) };
   const github = new FakeGitHub();
   await github.listen();
-  const registry = new Registry(store, new MockProvider(QUIET), { access: { mail, code: new GitHubHost(github.base) } });
+  // A stand-in for a service's site: two pages, each with its own elements, numbered from nothing as the real browser numbers them.
+  const sites = [
+    { url: 'https://supplier.paperclips.example/login', title: 'Sign in', text: 'Sign in to the supplier portal.', notice: '', elements: [{ id: 0, tag: 'input', type: 'email', label: 'Email' }, { id: 1, tag: 'input', type: 'password', label: 'Password' }, { id: 2, tag: 'button', type: 'submit', label: 'Sign in' }] },
+    { url: 'https://supplier.paperclips.example/home', title: 'Supplier home', text: 'Welcome back.', notice: '', elements: [{ id: 0, tag: 'a', type: '', label: 'Orders' }, { id: 1, tag: 'a', type: '', label: 'Invoices' }, { id: 2, tag: 'button', type: 'submit', label: 'Place order' }] },
+  ];
+  let site = 0;
+  const accountBrowser = { run: vi.fn<AccountBrowser['run']>(async (_account, _email, _key, action) => sites[action.action === 'click' ? (site = 1) : site]!), close: vi.fn(async () => {}) };
+  const registry = new Registry(store, new MockProvider(QUIET), { access: { mail, browser: accountBrowser, code: new GitHubHost(github.base) } });
   const config: Config = { port: 0, host: '127.0.0.1', dataDir: dir, provider: 'mock', providerReason: 'test', production: true, workspace: 'default', anthropicAmbient: false, claudeCode: { command: 'claude', extraUsage: false, blocked: null } };
   const app = createApp(registry, config); app.use(express.static(path.resolve('dist/client')));
   const server = app.listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve));
   const base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
-  const browser = await chromium.launch({ executablePath: chrome, headless: true, chromiumSandbox: true });
+  const browser = await chromium.launch({ executablePath: CHROME, headless: true, chromiumSandbox: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
-  page.setDefaultTimeout(10000);
+  // On a busy machine a page can take many times as long to draw as it usually does.
+  page.setDefaultTimeout(30_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const text = () => page.locator('body').innerText();
@@ -70,11 +77,36 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     expect(await text()).toContain('test-supplier-secret');
     await page.getByRole('button', { name: 'Hide password', exact: true }).click();
     expect(await text()).not.toContain('test-supplier-secret');
+    // In the account browser a choice of element is for one action. The page that comes back numbers its elements afresh, so nothing stays chosen and nothing can be pressed until something is.
+    await page.getByText('Account browser', { exact: true }).click();
+    await page.getByRole('button', { name: 'Open login', exact: true }).click();
+    const element = page.getByLabel('Page element', { exact: true });
+    await element.waitFor();
+    expect(await element.inputValue()).toBe('');
+    expect(await page.getByRole('button', { name: 'Click element', exact: true }).isDisabled()).toBe(true);
+    await element.selectOption({ label: '2: button submit — Sign in' });
+    await page.getByRole('button', { name: 'Click element', exact: true }).click();
+    await page.getByRole('heading', { name: 'Supplier home', exact: true }).waitFor();
+    expect(accountBrowser.run.mock.calls.at(-1)![3]).toMatchObject({ action: 'click', element: 2 });
+    expect(await element.inputValue()).toBe('');
+    expect(await page.getByRole('button', { name: 'Click element', exact: true }).isDisabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Fill element', exact: true }).isDisabled()).toBe(true);
+    await page.getByRole('button', { name: 'Inspect page', exact: true }).click();
+    await page.getByRole('button', { name: 'Close session', exact: true }).click();
+    await element.waitFor({ state: 'detached' });
+    expect(accountBrowser.run.mock.calls.slice(-2).map(call => call[3])).toEqual([expect.not.objectContaining({ element: expect.anything() }), expect.not.objectContaining({ element: expect.anything() })]);
+    await page.getByText('Account browser', { exact: true }).click();
     await page.getByText('Manage access', { exact: true }).click();
+    // A team ticked and not saved is not given access by disabling or enabling the connection: only "Save team access" assigns it.
+    await page.getByRole('checkbox', { name: /^CRO/ }).check();
     await page.getByRole('button', { name: 'Disable', exact: true }).click();
     await page.getByRole('button', { name: 'Enable', exact: true }).waitFor();
     await page.getByRole('button', { name: 'Enable', exact: true }).click();
     await page.getByRole('button', { name: 'Disable', exact: true }).waitFor();
+    expect(await text()).toContain('COO: signs in and reads only');
+    expect(await text()).not.toContain('CRO: signs in');
+    expect(await page.getByRole('checkbox', { name: /^CRO/ }).isChecked()).toBe(true);
+    await page.getByRole('checkbox', { name: /^CRO/ }).uncheck();
     await page.getByText('Manage access', { exact: true }).click();
     await page.evaluate(() => window.scrollTo(0, 0));
     if (process.env.UPDATE_SCREENSHOTS === '1') await page.screenshot({ path: 'docs/only-paperclips-access.png', fullPage: true });
@@ -85,9 +117,26 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     await page.getByRole('button', { name: 'Save draft', exact: true }).click();
     await page.getByRole('button', { name: 'Send this email', exact: true }).waitFor();
     expect(mail.send).not.toHaveBeenCalled();
+    // Sending takes two presses. The first sends nothing: it asks, naming who the message goes to and what it is called.
     await page.getByRole('button', { name: 'Send this email', exact: true }).click();
+    await page.getByText('Send “Paperclip order enquiry” to supplier@paperclips.example?').waitFor();
+    await page.getByRole('button', { name: 'Not yet', exact: true }).click();
+    await page.getByRole('button', { name: 'Yes, send it', exact: true }).waitFor({ state: 'detached' });
+    expect(mail.send).not.toHaveBeenCalled();
+    await page.getByRole('button', { name: 'Send this email', exact: true }).click();
+    // The question stays with its draft when the list moves: another draft arrives above it, and the second press still sends the first.
+    await page.getByLabel('To', { exact: true }).fill('someone-else@paperclips.example');
+    await page.getByLabel('Subject', { exact: true }).fill('A later draft');
+    await page.getByLabel('Message', { exact: true }).fill('Prepared while the first was waiting to be sent.');
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click();
+    await page.getByRole('heading', { name: 'A later draft', exact: true }).waitFor();
+    expect(await page.locator('.ops-card h3').first().innerText()).toBe('A later draft');
+    await page.getByText('Send “Paperclip order enquiry” to supplier@paperclips.example?').waitFor();
+    await page.getByRole('button', { name: 'Yes, send it', exact: true }).click();
     await page.locator('.ops-card .tag').filter({ hasText: /^sent$/ }).waitFor();
     expect(mail.send).toHaveBeenCalledTimes(1);
+    expect(mail.send.mock.calls[0]![1].subject).toBe('Paperclip order enquiry');
+    expect(await page.locator('.ops-card').filter({ hasText: 'A later draft' }).locator('.tag').innerText()).toBe('draft');
     await page.getByRole('button', { name: 'Lock vault', exact: true }).click();
     await page.getByRole('button', { name: 'Unlock vault', exact: true }).waitFor();
     expect(await text()).not.toContain('Paperclip order enquiry');
@@ -144,6 +193,19 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     await page.getByRole('tab', { name: 'Email & accounts', exact: true }).click();
     await page.getByRole('button', { name: 'Repositories', exact: true }).click();
     await page.getByText('COO: pushes branches').waitFor();
+    // Removing a connection takes two presses. The first removes nothing: it says what goes with the connection, for good.
+    const vault = registry.get(registry.list()[0]!.id)!.access;
+    const website = page.locator('.ops-card').filter({ hasText: 'acme/website' });
+    await website.getByText('Manage access', { exact: true }).click();
+    await website.getByRole('button', { name: 'Remove connection', exact: true }).click();
+    await website.getByText('Remove Website? Its saved token is deleted for good.').waitFor();
+    await website.getByRole('button', { name: 'Keep it', exact: true }).click();
+    await website.getByRole('button', { name: 'Remove connection', exact: true }).waitFor();
+    expect((await vault.view()).repositories).toHaveLength(1);
+    await website.getByRole('button', { name: 'Remove connection', exact: true }).click();
+    await website.getByRole('button', { name: 'Yes, remove it', exact: true }).click();
+    await page.getByRole('heading', { name: 'Website', exact: true }).waitFor({ state: 'detached' });
+    expect((await vault.view()).repositories).toHaveLength(0);
     // Which work approaches a role may use has a page of its own too.
     await page.getByRole('tab', { name: 'Approaches', exact: true }).click();
     await tick('Plan-Do-Check-Act').waitFor();
@@ -170,4 +232,4 @@ it.skipIf(!existsSync(chrome) || !existsSync('dist/client/index.html'))('manages
     server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   }
-}, 40_000);
+}, 90_000);

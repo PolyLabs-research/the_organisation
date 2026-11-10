@@ -39,6 +39,10 @@ export class FakeSession {
   openRun = false;
   /** An error thrown by the script, for the test to see. */
   failure: unknown = null;
+  /** Whether the session was given its first message when it was created, and so has a script to play. */
+  briefed = false;
+  /** Whether its script has been started. */
+  playing = false;
   readonly createdAt = new Date().toISOString();
   private consumed = 0;
   private waiters: Array<() => void> = [];
@@ -255,6 +259,7 @@ export class FakeManagedApi {
   /** A reply to give instead of the normal one, once, for the next request that matches. */
   private faults: Array<{ test: (r: Recorded) => boolean; status: number; message: string; times: number }> = [];
   private silences: Array<(r: Recorded) => boolean> = [];
+  private delays: Array<{ test: (r: Recorded) => boolean; ms: number }> = [];
   private server!: http.Server;
   private ids = 0;
   private clock = Date.parse('2026-11-05T10:00:00Z');
@@ -278,6 +283,11 @@ export class FakeManagedApi {
   /** For the next request that matches: carry it out, then drop the connection without replying. */
   dropReplyOnce(test: (r: Recorded) => boolean): void {
     this.silences.push(test);
+  }
+
+  /** For the next request that matches: carry it out at once, and reply only after this long. */
+  lateReplyOnce(test: (r: Recorded) => boolean, ms: number): void {
+    this.delays.push({ test, ms });
   }
 
   failOnce(test: (r: Recorded) => boolean, status: number, message: string): void {
@@ -337,6 +347,7 @@ export class FakeManagedApi {
     this.sessions.clear();
     this.faults = [];
     this.silences = [];
+    this.delays = [];
     this.script = async () => {};
     this.onStream = null;
     this.queueOnly = null;
@@ -355,9 +366,13 @@ export class FakeManagedApi {
     const silence = this.silences.findIndex((test) => test(recorded));
     const silent = silence >= 0;
     if (silent) this.silences.splice(silence, 1);
+    const delay = this.delays.findIndex((d) => d.test(recorded));
+    const late = delay >= 0 ? this.delays.splice(delay, 1)[0]!.ms : 0;
     const send = (status: number, payload: unknown): void => {
       if (silent) return void res.destroy();
-      res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(payload));
+      const reply = () => void res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(payload));
+      if (late) setTimeout(reply, late);
+      else reply();
     };
     const kinds: Record<number, string> = { 403: 'permission_error', 404: 'not_found_error', 409: 'conflict_error', 500: 'api_error' };
     const fail = (status: number, message: string) => send(status, { type: 'error', error: { type: kinds[status] ?? 'invalid_request_error', message } });
@@ -436,16 +451,18 @@ export class FakeManagedApi {
         session.received.push({ ...event });
         session.emit(event.type, { content: event.content });
       }
+      // The agent has its kickoff, and starts on it when a client first follows the session (see the stream below).
+      session.briefed = !!body.initial_events?.length;
       send(200, session.json());
-      // The agent starts on its kickoff once the session exists.
-      if (body.initial_events?.length) void this.play(session);
       return;
     }
     if (method === 'GET' && path === '/v1/sessions') {
       const agent = url.searchParams.get('agent_id');
       const since = url.searchParams.get('created_at[gte]');
       const found = [...this.sessions.values()].filter((s) => (!agent || s.created.agent?.id === agent) && (!since || s.createdAt >= since));
-      return send(200, { data: found.reverse().map((s) => s.json()), next_page: null, prev_page: null });
+      // Newest first unless asked otherwise, as the real listing is.
+      if (url.searchParams.get('order') !== 'asc') found.reverse();
+      return send(200, { data: found.map((s) => s.json()), next_page: null, prev_page: null });
     }
     match = /^\/v1\/sessions\/([^/]+)(\/.*)?$/.exec(path);
     const session = match ? this.sessions.get(match[1]!) : undefined;
@@ -492,6 +509,13 @@ export class FakeManagedApi {
       session.streams.add(res);
       res.on('close', () => session.streams.delete(res));
       this.onStream?.(session);
+      // A real session starts work by itself, some time after it is created. Here it starts at a fixed point, when
+      // a client first follows it, so that no test turns on whether the client or the session was the quicker:
+      // what the script says before it first waits is on this stream and in the history the client reads next.
+      if (session.briefed && !session.playing) {
+        session.playing = true;
+        void this.play(session);
+      }
       return;
     }
     const thread = /^\/threads\/([^/]+)\/events$/.exec(rest);
@@ -500,8 +524,6 @@ export class FakeManagedApi {
   }
 
   private async play(session: FakeSession): Promise<void> {
-    // Give the client a moment to attach, as a real session takes time to start work.
-    await new Promise((resolve) => setTimeout(resolve, 5));
     try {
       await this.script(session);
     } catch (err) {

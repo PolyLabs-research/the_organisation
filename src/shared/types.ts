@@ -270,8 +270,13 @@ export interface PhaseWait {
   phase: string;
   /** The plan waited on, once pinned. Null before the plan starts, or when the lead had no plan to wait on. */
   planId: string | null;
-  /** The phase of that plan waited on; null to wait for the whole plan. */
+  /** The phase of that plan waited on, by where it stood among the plan's phases when the wait was pinned; null to wait for the whole plan. */
   phaseIndex: number | null;
+  /**
+   * The same phase by its id in that plan's way of working, which is what the wait follows: a plan that is revised
+   * after this can drop a phase or bring one back, and the places shift. Absent on a wait pinned before this was kept.
+   */
+  phaseId?: string | null;
   /** Why the wait was let go before it was met, if it was. */
   released: string | null;
 }
@@ -358,6 +363,18 @@ export interface ManagedSession {
   archivedAt?: string | null;
   /** Sessions this plan used before the current one: ones that were lost and replaced. */
   past?: Array<{ sessionId: string; archivedAt: string | null }>;
+  /**
+   * Whether the session started with web search and an open network. A session is given its tools and its network
+   * when it starts and keeps them, whatever is changed in settings or privileges afterwards. Not known for a
+   * session from before this was recorded.
+   */
+  web?: boolean;
+  /**
+   * True when the session was being followed as the server stopped without warning. Nobody brought its cap down
+   * then, so it can go on spending up to that cap by itself. It is held as soon as the provider can be reached, and
+   * the mark comes off once it has been, or once the session is followed again.
+   */
+  adrift?: boolean;
 }
 
 export interface Plan {
@@ -545,6 +562,8 @@ export type OrgStatus = 'idle' | 'running' | 'paused';
 export type PauseReason = 'user' | 'budget' | 'error' | 'restart' | 'cycle_limit';
 
 export interface Organisation {
+  /** Which version of the saved format this is. Absent on an organisation saved before formats were numbered. */
+  schemaVersion?: number;
   business: BusinessState;
   /** What each role and its agents may do, as far as the shareholders have said. */
   privileges: OrgPrivileges;

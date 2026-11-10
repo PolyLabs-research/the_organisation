@@ -67,10 +67,17 @@ export interface AgentResult {
   stopped: 'done' | 'cut_short' | 'interrupted';
 }
 
+/**
+ * What went wrong with a call, as far as the engine needs to tell them apart. `refusal`, `truncated`, `too_long`
+ * and `invalid_output` say something about the one piece of work that was asked for, not about the provider or
+ * the key: an agent's task that ends in one of them is failed and left to its lead, and the organisation carries on.
+ * `too_long` is a prompt, or a conversation grown by what an agent has read, that is more than the model takes.
+ */
 export type ProviderErrorCode =
   | 'auth'
   | 'refusal'
   | 'truncated'
+  | 'too_long'
   | 'rate_limit'
   | 'bad_request'
   | 'invalid_output'
@@ -138,6 +145,12 @@ export interface SessionSpend {
 export interface HookReply {
   ok: boolean;
   message: string;
+  /**
+   * Set when the message brings the lead up to date with the board's binding instructions: up to this one,
+   * counting from the first. They count as told once the answer has been sent, which the session then says
+   * with `instructed`. An answer that could not be sent is asked for again, and states them again.
+   */
+  instructions?: number;
 }
 
 /** A message for the lead, and how far it brings the lead up to date with the board's binding instructions. */
@@ -268,4 +281,11 @@ export interface Provider {
    * archived: done (or it already was). busy: it is still working and was left alone. gone: it no longer exists.
    */
   archiveSession?(sessionId: string): Promise<'archived' | 'busy' | 'gone'>;
+  /**
+   * Hold a hosted session that is not being followed: bring its spend cap down to what it has spent, so that
+   * it cannot go on spending. Carrying a plan out holds its session by itself whenever it lets go of it; this is
+   * for a session that was let go of without that (the server stopped without warning). Returns the cap now
+   * set and what the session has spent, in dollars, or null if the session no longer exists or has ended.
+   */
+  holdSession?(sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null>;
 }

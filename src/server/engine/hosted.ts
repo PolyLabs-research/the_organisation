@@ -7,7 +7,7 @@ import { WorkspaceError } from '../workspace';
 import type { Commit, EngineContext } from './handlers';
 import * as prompts from './prompts';
 import { MAX_RESULT_CHARS, clean, fileReport, logRemitDecisions, newTask, now } from './records';
-import { MAX_REQUESTS_PER_GATE, raiseRequests } from './signatory';
+import { MAX_REQUESTS_PER_GATE, alreadyRaised, raiseRequests } from './signatory';
 import { execById, isPlanActive, postToBoard, sessionAllowance, teamDir } from './state';
 
 // A plan carried out in a hosted session: the lead and its agents work in a
@@ -117,7 +117,7 @@ function workingPhase(plan: Plan): PlanPhase | undefined {
 }
 
 /** Close whatever a session left open when it is no longer being followed. */
-function closeOpenWork(plan: Plan, managed: ManagedSession, as: 'done' | 'failed', error: string | null): void {
+export function closeOpenWork(plan: Plan, managed: ManagedSession, as: 'done' | 'failed', error: string | null): void {
   const at = now();
   for (const phase of plan.phases) {
     for (const task of phase.tasks) {
@@ -160,11 +160,15 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
   }
   const capBefore = managed.sessionId ? managed.budgetUsd : 0;
   let capConfirmed = false;
+  // The budget the cap was worked out from. See `halt`.
+  let budgetThen = org.settings.budgetUsd;
   managed.budgetUsd = cap;
   managed.state = 'starting';
   ctx.touch();
 
   const models = org.settings.executiveModel === org.settings.workerModel ? org.settings.executiveModel : `${org.settings.executiveModel} + ${org.settings.workerModel}`;
+  // Whether a session that starts now is given web search and an open network. One that exists keeps what it started with.
+  const web = org.settings.webResearch && allows(org, lead.id, 'web_search');
   const pendingInstructions = () => plan.amendments.slice(managed.instructionsSent);
   const changed = () => {
     plan.updatedAt = now();
@@ -182,11 +186,14 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         managed.agents = [];
         managed.cursor = null;
         managed.handledTo = null;
+        managed.web = web;
       }
       managed.consoleUrl = info.consoleUrl;
       managed.budgetUsd = info.budgetUsd;
       if (managed.state === 'starting' || managed.state === 'paused' || managed.state === 'at_budget') managed.state = 'running';
       capConfirmed = true;
+      // It is being followed again, and whoever follows a session holds it on letting go.
+      managed.adrift = false;
       changed();
     },
 
@@ -201,8 +208,18 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       }
       if (named < index) {
         // A record that is sent twice is the same record. What it asks of the signatory is not filed a second time.
-        const unfiled = record.requests?.length ? ' Nothing it asks of the signatory was filed: ask when you record a phase for the first time.' : '';
-        return { ok: true, message: `${plan.phases[named]!.name} was already recorded.${unfiled} ${current.name} is next.` };
+        // The answer to the first may never have reached the lead (it is written again when it could not be sent),
+        // so this one says what became of what the record asks for, and carries what the board has since ruled.
+        const asked = record.requests?.length ?? 0;
+        const filed = asked ? alreadyRaised(org, plan, plan.phases[named]!.name, record.requests ?? []) : 0;
+        const unfiled = !asked
+          ? ''
+          : !filed
+            ? ' Nothing it asks of the signatory was filed: ask when you record a phase for the first time.'
+            : ` ${filed} request${filed === 1 ? '' : 's'} it asks for went to the signatory when the phase was first recorded.${asked > filed ? ` ${asked - filed} ${asked - filed === 1 ? 'was' : 'were'} not filed.` : ''}`;
+        const pending = pendingInstructions();
+        const binding = pending.length ? `\n\n${prompts.sessionInstructions(pending)}` : '';
+        return { ok: true, message: `${plan.phases[named]!.name} was already recorded.${unfiled} ${current.name} is next.${binding}`, instructions: plan.amendments.length };
       }
       if (named > index) {
         return { ok: false, message: `${plan.phases[named]!.name} cannot be recorded yet: ${current.name} comes before it and has not been recorded.` };
@@ -224,8 +241,8 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       );
       const next = plan.phases[index + 1];
       // The record's reply is a sure way to reach the lead, so anything the board has since ruled goes with it.
+      // It counts as told when the reply has been sent (`instructed`), not here: a reply can fail on the way.
       const pending = pendingInstructions();
-      managed.instructionsSent = plan.amendments.length;
       changed();
       const binding = pending.length ? `\n\n${prompts.sessionInstructions(pending)}` : '';
       const left = wanted.length - asked.length;
@@ -238,6 +255,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       return {
         ok: true,
         message: `Recorded.${put} ${next ? `${next.name} is next.` : `Every phase is now recorded: report to the board with ${PLAN_TOOLS.reportToBoard}.`}${binding}${desk}`,
+        instructions: plan.amendments.length,
       };
     },
 
@@ -431,6 +449,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       let rel: string;
       try {
         rel = workspace.normalise(outputPath(file.name, team));
+        // A name can climb out of the team's directory and still be inside the workspace ("../marketing/plan.md"),
+        // where it would replace another team's file.
+        if (!rel.startsWith(`${team}/`)) throw new WorkspaceError(`path leaves ${team}/`);
         const written = await workspace.writeBytes(rel, file.bytes);
         rel = written.path;
       } catch (err) {
@@ -471,10 +492,15 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     halt() {
       if (!isPlanActive(plan) || plan.status !== 'executing' || plan.execution !== 'managed' || !execById(org, lead.id)) return 'cancel';
       if (ctx.halting() || org.status !== 'running' || ctx.overBudget()) return 'pause';
+      // The budget has been lowered since the session's cap was worked out. The platform still holds the session
+      // to the old cap, which may be more than the budget now has left for it. The session is held, and is picked
+      // up again with a cap worked out from the budget as it stands.
+      if (org.settings.budgetUsd < budgetThen) return 'pause';
       return null;
     },
 
     moreBudget(spentUsd) {
+      budgetThen = org.settings.budgetUsd;
       const more = sessionAllowance(org, plan, spentUsd);
       if (more !== null) {
         managed.budgetUsd = more;
@@ -489,10 +515,37 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     },
   };
 
+  // Once following has ended, nothing more is taken from whoever was following. A look at the session that was
+  // still on its way when the session was let go of can come back afterwards, and what it says then is about a
+  // session that is no longer this plan's to follow: taken as it stands, it could put a session that has just been
+  // given up back as the plan's own.
+  let over = false;
+  const tooLate: { [K in keyof PlanHooks]: ReturnType<PlanHooks[K]> } = {
+    session: undefined,
+    phase: { ok: false, message: 'This session is no longer being followed.' },
+    report: { ok: false, message: 'This session is no longer being followed.' },
+    assigned: undefined,
+    reported: undefined,
+    agentEnded: undefined,
+    run: undefined,
+    spend: undefined,
+    note: undefined,
+    declined: undefined,
+    output: Promise.resolve(null),
+    hasOutput: true,
+    instructions: null,
+    instructed: undefined,
+    halt: 'pause',
+    moreBudget: null,
+    checkpoint: undefined,
+  };
+  const whileFollowed = new Proxy(hooks, {
+    get: (target, key) => (...args: unknown[]) => (over ? tooLate[key as keyof PlanHooks] : (target[key as keyof PlanHooks] as (...given: unknown[]) => unknown)(...args)),
+  });
+
   let outcome: PlanOutcome;
   try {
     const files = mountable(await workspace.list());
-    const web = org.settings.webResearch && allows(org, lead.id, 'web_search');
     const job: PlanJob = {
       planId: plan.id,
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),
@@ -507,7 +560,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       worker: { name: prompts.TEAM_AGENT_NAME, system: prompts.teamAgentSystem(web) },
       web,
       workflows: org.settings.workflowRuns,
-      budgetUsd: cap,
+      // A session that takes over from one that was lost starts from nothing. What the lost one spent is in the
+      // organisation's totals, and is not the new one's to spend again: its cap is the plan's share and no more.
+      budgetUsd: managed.sessionId ? cap : Math.round((cap - managed.spentUsd) * 100) / 100,
       session: managed.sessionId
         ? {
             id: managed.sessionId,
@@ -521,7 +576,7 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       files: files.map((f) => ({ ...f, absolutePath: path.join(workspace.root, f.path) })),
       stateDir: ctx.stateDir,
       signal: ctx.signal,
-      hooks,
+      hooks: whileFollowed,
       context: {
         seat: {
           id: lead.id,
@@ -542,7 +597,9 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
       },
     };
     outcome = await provider.executePlan(job);
+    over = true;
   } catch (err) {
+    over = true;
     // The session, if there is one, is still there and can be picked up again.
     if (managed.state === 'starting' || managed.state === 'running') managed.state = 'paused';
     if (!capConfirmed) managed.budgetUsd = capBefore;
@@ -606,8 +663,17 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
         closeOpenWork(plan, managed, 'failed', 'The plan was cancelled.');
         managed.state = 'finished';
         return;
-      case 'lost':
-        return lose(outcome.reason);
+      case 'lost': {
+        // A report the lead has already made, with every phase recorded, stands whatever became of the session
+        // afterwards. Its files came home as each phase was recorded; only a last look for more was missed.
+        const report = managed.pendingReport;
+        if (plan.status !== 'executing' || !report || plan.phases.some((p) => p.status !== 'done')) return lose(outcome.reason);
+        closeOpenWork(plan, managed, 'done', null);
+        managed.state = 'finished';
+        managed.pendingReport = null;
+        fileReport(org, plan, lead, report, managed.files);
+        return;
+      }
     }
   };
 }

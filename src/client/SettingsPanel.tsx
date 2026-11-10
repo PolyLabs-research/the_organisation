@@ -17,6 +17,8 @@ const EFFORTS: Array<{ id: Effort; label: string }> = [
 export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisation; meta: Meta; onClose: () => void; onView: (view: OrgView) => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<OrgSettings>(org.settings);
+  // The settings as they stood when this dialog opened, to tell what has been changed in it.
+  const [opened] = useState<OrgSettings>(org.settings);
   const [limitCycles, setLimitCycles] = useState(org.settings.maxCycles !== null);
   const [fellBack, setFellBack] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -39,7 +41,11 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
 
   const submit = () =>
     save.run(async () => {
-      onView(await api.settings(org.id, { ...draft, maxCycles: limitCycles ? (draft.maxCycles ?? org.cycle.number) : null }));
+      // Only what was changed here is sent. Every setting sent, as the dialog found them, put back whatever had been set
+      // somewhere else while it was open: the pace chosen in another window, say.
+      const next: OrgSettings = { ...draft, maxCycles: limitCycles ? (draft.maxCycles ?? org.cycle.number) : null };
+      const changed = Object.fromEntries(Object.entries(next).filter(([key, value]) => value !== opened[key as keyof OrgSettings])) as Partial<OrgSettings>;
+      if (Object.keys(changed).length) onView(await api.settings(org.id, changed));
       onClose();
     });
 

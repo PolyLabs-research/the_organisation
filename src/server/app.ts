@@ -3,12 +3,13 @@ import { accessRoutes } from './access-routes';
 import { AccessError } from './access-vault';
 import { googleRoutes } from './access-google';
 import { operatingDigest } from '../shared/business';
+import { isIP } from 'node:net';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_AGENTS_PER_LEAD, MAX_LEADS, PROFILES } from '../shared/profiles';
-import type { CreateOrgRequest } from '../shared/types';
+import type { CreateOrgRequest, ExecutiveDraft, OrgView, SopPhase } from '../shared/types';
 import type { Config } from './config';
 import type { OrgRunner } from './engine/runner';
-import { DEFAULT_SETTINGS, ValidationError } from './engine/state';
+import { DEFAULT_SETTINGS, StorageError, ValidationError } from './engine/state';
 import { PRICES_CHECKED } from './providers/catalogue';
 import { ProviderError } from './providers/types';
 import { recommendTeam } from './recommend';
@@ -21,6 +22,43 @@ class NotFound extends Error {}
 /** Loopback as it appears in a Host header, and as HOST may be configured. */
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 const LOOPBACK_BINDINGS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * The executive team as a founder, a script or a recommendation gives it. What is not a list of seats is refused
+ * here, where it can be said plainly, before anything further in takes a number for a title.
+ */
+function readTeam(value: unknown): ExecutiveDraft[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new ValidationError('Give the executive team as a list of seats.');
+  return value.map((given: unknown, index) => {
+    const bad = (what: string) => new ValidationError(`Seat ${index + 1} of the executive team cannot be read: ${what}.`);
+    if (typeof given !== 'object' || given === null || Array.isArray(given)) throw bad('it is not a seat');
+    const seat = given as Record<string, unknown>;
+    if (typeof seat.profileId !== 'string') throw bad('it does not name a profile');
+    const words = (key: string): string | undefined => {
+      const said = seat[key];
+      if (said === undefined || said === null) return undefined;
+      if (typeof said !== 'string') throw bad(`its ${key} is not text`);
+      return said;
+    };
+    const named = (phase: unknown) => {
+      if (typeof phase !== 'object' || phase === null) return false;
+      const { name, purpose, deliverable } = phase as Record<string, unknown>;
+      return typeof name === 'string' && (purpose === undefined || purpose === null || typeof purpose === 'string') && (deliverable === undefined || deliverable === null || typeof deliverable === 'string');
+    };
+    if (seat.phases !== undefined && seat.phases !== null && !(Array.isArray(seat.phases) && seat.phases.every(named))) throw bad('its phases are not a list of named phases');
+    if (seat.agentCount !== undefined && seat.agentCount !== null && typeof seat.agentCount !== 'number') throw bad('its number of agents is not a number');
+    return {
+      profileId: seat.profileId,
+      short: words('short'),
+      title: words('title'),
+      function: words('function'),
+      remit: words('remit'),
+      phases: (seat.phases as SopPhase[] | null | undefined) ?? undefined,
+      agentCount: (seat.agentCount as number | null | undefined) ?? undefined,
+    };
+  });
+}
 
 function hostname(hostHeader: string | undefined): string {
   if (!hostHeader) return '';
@@ -41,12 +79,28 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
 
   // The API has no login: it trusts whoever can reach it. These two checks
   // keep web pages out. A page on another site cannot drive the API by making
-  // the browser post to it, and (when bound to loopback) cannot read it by
-  // pointing a hostname of its own at 127.0.0.1.
+  // the browser post to it, and cannot read it by pointing a hostname of its
+  // own at this machine, whichever address the server listens on.
+  const loopbackOnly = LOOPBACK_BINDINGS.has(config.host);
+  const named = new Set([config.host, ...(config.allowedHosts ?? [])].map((name) => name.toLowerCase()));
+  /** Whether a request addressed to `host` is one this server answers. */
+  const answersTo = (host: string): boolean => {
+    if (LOOPBACK.has(host)) return true;
+    // Listening on loopback only, nothing else is an honest address for it.
+    if (loopbackOnly) return false;
+    // Listening beyond loopback, it is reached by address, or by a name it has been told is its own. An address
+    // cannot be pointed anywhere else. A name can: that is how a page reaches a server it has no business with.
+    return isIP(host.replace(/^\[|\]$/g, '')) !== 0 || named.has(host);
+  };
+
   app.use('/api', (req, res, next) => {
     const host = hostname(req.headers.host);
-    if (LOOPBACK_BINDINGS.has(config.host) && !LOOPBACK.has(host)) {
-      res.status(403).json({ error: 'This server only answers requests addressed to localhost.' });
+    if (!answersTo(host)) {
+      res.status(403).json({
+        error: loopbackOnly
+          ? 'This server only answers requests addressed to localhost.'
+          : `This server does not answer to the name "${host.slice(0, 100)}". If that name is this machine's, add it to ORG_ALLOWED_HOSTS.`,
+      });
       return;
     }
     const origin = req.headers.origin;
@@ -84,6 +138,8 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
       profiles: PROFILES,
       defaults: { ...DEFAULT_SETTINGS, executiveModel: model, workerModel: model },
       limits: { maxAgentsPerLead: MAX_AGENTS_PER_LEAD, maxLeads: MAX_LEADS },
+      // Organisations on disk that could not be loaded, so that one missing from the list is not a mystery.
+      unreadable: registry.unreadable,
       // Whether keys can be added from the interface: not when the server was told to simulate regardless.
       keys: router ? { presets: router.presets(), forcedSimulation: config.provider === 'mock', pricesChecked: PRICES_CHECKED } : null,
     });
@@ -165,7 +221,7 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
       name: text(body.name),
       idea: text(body.idea),
       mission: text(body.mission),
-      executives: Array.isArray(body.executives) ? body.executives : [],
+      executives: readTeam(body.executives),
       settings: body.settings && typeof body.settings === 'object' ? body.settings : undefined,
       steer: text(body.steer),
     });
@@ -205,55 +261,64 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     res.json(runner.view());
   });
 
-  app.post('/api/orgs/:id/steer', (req, res) => {
+  /**
+   * What a person has decided is on disk before they are told it was done: a steer, a privilege taken away, a
+   * payment marked as made. Left to the next routine save, a crash in the moment between would undo it unseen.
+   */
+  const settled = async (runner: OrgRunner): Promise<OrgView> => {
+    await runner.flush();
+    return runner.view();
+  };
+
+  app.post('/api/orgs/:id/steer', async (req, res) => {
     const runner = runnerOf(req);
     runner.steer(text(req.body?.text));
-    res.json(runner.view());
+    res.json(await settled(runner));
   });
 
-  app.patch('/api/orgs/:id/settings', (req, res) => {
+  app.patch('/api/orgs/:id/settings', async (req, res) => {
     const runner = runnerOf(req);
     if (!req.body || typeof req.body !== 'object') throw new ValidationError('Send the settings to change as a JSON object.');
     runner.updateSettings(req.body);
-    res.json(runner.view());
+    res.json(await settled(runner));
   });
 
-  app.patch('/api/orgs/:id/executives/:execId', (req, res) => {
+  app.patch('/api/orgs/:id/executives/:execId', async (req, res) => {
     const runner = runnerOf(req);
     runner.setAgentCount(String(req.params.execId), Number(req.body?.agentCount));
-    res.json(runner.view());
+    res.json(await settled(runner));
   });
 
   // What each role may do. Only this route changes it, and no seat or agent has a way to call it.
   app.patch('/api/orgs/:id/privileges', async (req, res) => {
     const runner = runnerOf(req);
     await runner.setPrivilege(req.body?.seatId, req.body?.privilege, req.body?.allowed);
-    res.json(runner.view());
+    res.json(await settled(runner));
   });
 
   // Which work approaches a role may use.
-  app.patch('/api/orgs/:id/work-approaches', (req, res) => {
+  app.patch('/api/orgs/:id/work-approaches', async (req, res) => {
     const runner = runnerOf(req);
     runner.setWorkApproach(req.body?.seatId, req.body?.approachId, req.body?.allowed);
-    res.json(runner.view());
+    res.json(await settled(runner));
   });
 
   // The signatory's desk: the person answers a request (it is done, or it is refused and why), takes an answer
   // back, or leaves the organisation a message.
-  app.post('/api/orgs/:id/requests/:requestId', (req, res) => {
+  app.post('/api/orgs/:id/requests/:requestId', async (req, res) => {
     const runner = runnerOf(req);
     const requestId = String(req.params.requestId);
     const action = text(req.body?.action);
     if (action === 'done' || action === 'rejected') runner.settleRequest(requestId, action, text(req.body?.note));
     else if (action === 'reopen') runner.reopenRequest(requestId);
     else throw new ValidationError('Say what became of the request: "done", "rejected" or "reopen".');
-    res.json(runner.view());
+    res.json(await settled(runner));
   });
 
-  app.post('/api/orgs/:id/signatory/notes', (req, res) => {
+  app.post('/api/orgs/:id/signatory/notes', async (req, res) => {
     const runner = runnerOf(req);
     runner.noteFromSignatory(text(req.body?.text));
-    res.json(runner.view());
+    res.json(await settled(runner));
   });
 
   app.post('/api/orgs/:id/business', async (req, res) => {
@@ -351,7 +416,9 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
     else if (err instanceof NotFound) res.status(404).json({ error: message });
     else if (err instanceof ValidationError || err instanceof WorkspaceError) res.status(400).json({ error: message });
     else if (err instanceof ProviderError) res.status(502).json({ error: message, code: err.code });
-    else if ((err as { type?: string }).type === 'entity.parse.failed') res.status(400).json({ error: 'The request body is not valid JSON.' });
+    else if (err instanceof StorageError) res.status(500).json({ error: message });
+    else if ((err as { type?: string } | null)?.type === 'entity.parse.failed') res.status(400).json({ error: 'The request body is not valid JSON.' });
+    else if ((err as { type?: string } | null)?.type === 'entity.too.large') res.status(413).json({ error: 'The request is larger than this server takes (1 MB).' });
     else {
       console.error(err);
       res.status(500).json({ error: 'Something went wrong on the server.' });

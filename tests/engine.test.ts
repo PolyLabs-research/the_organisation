@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CEO_QUESTION } from '../src/server/engine/state';
 import { MockProvider } from '../src/server/providers/mock';
 import { ProviderError, type AgentRequest, type AgentResult, type StructuredRequest } from '../src/server/providers/types';
@@ -209,6 +209,57 @@ describe('the loop', () => {
     expect(h.org.board.every((m) => m.cycle > 2)).toBe(true);
     expect(h.org.history.map((c) => c.number)).toEqual([1, 2, 3, 4]);
   });
+
+  it('says once that the log of calls cannot be written, and carries on with the work', async () => {
+    h = await harness();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failing = vi.spyOn(h.store, 'appendActivity').mockRejectedValue(new Error('EACCES: permission denied'));
+    try {
+      await runToRest(h.runner);
+      await waitFor(() => warn.mock.calls.length > 0, 'the warning');
+      expect(h.org.plans.every((p) => p.status === 'done')).toBe(true);
+      expect(failing.mock.calls.length).toBeGreaterThan(10);
+      const said = warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('activity log'));
+      expect(said).toHaveLength(1);
+      expect(said[0]).toMatch(/Could not write to the activity log of org_\w+: EACCES/);
+    } finally {
+      failing.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps a cycle in live state while it cannot be archived, and archives it once it can', async () => {
+    h = await harness({ settings: { maxCycles: 3 } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failing = vi.spyOn(h.store, 'archiveCycleNow').mockImplementation(() => {
+      throw new Error('ENOSPC: no space left on device');
+    });
+    try {
+      // The first cycle is due to leave when the third closes, and the archive cannot be written.
+      await runToRest(h.runner);
+      expect(h.org.cycle.number).toBe(4);
+      expect(failing).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.flat().join(' ')).toMatch(/Could not archive cycle 1 of .*: ENOSPC/);
+      // Nothing of it has been dropped: its plans, its reports, its board feed are all still here.
+      expect(plansOf(h.org, 1)).toHaveLength(3);
+      expect(h.org.reports.filter((r) => r.cycle === 1)).toHaveLength(3);
+      expect(h.org.board.some((m) => m.cycle === 1 && m.type === 'direction')).toBe(true);
+      expect(existsSync(path.join(h.store.orgDir(h.org.id), 'archive', 'cycle-1.json'))).toBe(false);
+    } finally {
+      failing.mockRestore();
+      warn.mockRestore();
+    }
+    // With storage back, the next close of a cycle archives what was left behind along with what is now due.
+    h.runner.updateSettings({ maxCycles: 4 });
+    await runToRest(h.runner);
+    expect(plansOf(h.org, 1)).toHaveLength(0);
+    expect(plansOf(h.org, 2)).toHaveLength(0);
+    for (const cycle of [1, 2]) {
+      const archived = JSON.parse(await readFile(path.join(h.store.orgDir(h.org.id), 'archive', `cycle-${cycle}.json`), 'utf8'));
+      expect(archived.plans).toHaveLength(3);
+      expect(archived.reports).toHaveLength(3);
+    }
+  });
 });
 
 describe('decisions', () => {
@@ -400,6 +451,26 @@ describe('phase gates', () => {
     expect(h.org.pauseReason).toBe('cycle_limit');
     expect(h.org.plans.every((p) => p.status === 'done')).toBe(true);
   });
+
+  it('treats a task that has outgrown what the model takes the same way: it is that task’s failure, not the organisation’s', async () => {
+    let failed = false;
+    h = await harness({
+      mock: {
+        onCall: (kind) => {
+          if (kind === 'task' && !failed) {
+            failed = true;
+            throw new ProviderError('The prompt is longer than the model takes: 412,031 tokens against a limit of 400,000.', 'too_long', false);
+          }
+        },
+      },
+    });
+    await runToRest(h.runner);
+    const lost = h.org.plans.flatMap((p) => p.phases.flatMap((ph) => ph.tasks)).filter((t) => t.status === 'failed');
+    expect(lost).toHaveLength(1);
+    expect(lost[0]!.error).toContain('longer than the model takes');
+    expect(h.org.pauseReason).toBe('cycle_limit');
+    expect(h.org.plans.every((p) => p.status === 'done')).toBe(true);
+  });
 });
 
 describe('shareholder steer', () => {
@@ -473,6 +544,41 @@ describe('shareholder steer', () => {
 });
 
 describe('limits and controls', () => {
+  it('stops, with its totals intact, when a call reports a cost that is not a number', async () => {
+    // A price that is not a number, or token counts that are not, would make the total not a number, and such a
+    // total is never "at least the budget": the organisation would never again pause on what it had spent.
+    let broken = 0;
+    class Unpriced extends MockProvider {
+      override async agent(req: AgentRequest): Promise<AgentResult> {
+        const result = await super.agent(req);
+        if (!broken++) req.onUsage?.({ model: req.model, inputTokens: 1200, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: Number.NaN });
+        return result;
+      }
+    }
+    h = await harness({ provider: new Unpriced(QUIET), executives: [{ profileId: 'engineering', agentCount: 1 }] });
+    await runToRest(h.runner);
+    expect(broken).toBeGreaterThan(0);
+    expect(h.org.status).toBe('paused');
+    expect(h.org.pauseReason).toBe('error');
+    expect(h.org.lastError).toMatch(/cost that is not a number.*Models and keys/);
+    expect(Number.isFinite(h.org.usage.costUsd)).toBe(true);
+    expect(Number.isFinite(h.org.usageByExec.cto!.costUsd)).toBe(true);
+    expect(h.org.usage.costUsd).toBeGreaterThan(0);
+    // Started again, it carries on counting from where it was.
+    const before = h.org.usage.costUsd;
+    await runToRest(h.runner);
+    expect(h.org.pauseReason).toBe('cycle_limit');
+    expect(h.org.usage.costUsd).toBeGreaterThan(before);
+  });
+
+  it('holds a hosted session’s spend to the same rule', async () => {
+    const { countable } = await import('../src/server/engine/state');
+    expect(countable({ inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: 0.5 })).toBe(true);
+    expect(countable({ inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: Number.POSITIVE_INFINITY })).toBe(false);
+    expect(countable({ inputTokens: '12' as unknown as number, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: 0.5 })).toBe(false);
+    expect(countable({ inputTokens: 1, outputTokens: undefined as unknown as number, cacheReadTokens: 0, cacheWriteTokens: 0, webSearches: 0, costUsd: 0.5 })).toBe(false);
+  });
+
   it('pauses itself when the budget is spent and carries on once it is raised', async () => {
     h = await harness({ settings: { budgetUsd: 0.1 } });
     await runToRest(h.runner);
@@ -578,6 +684,31 @@ describe('limits and controls', () => {
     expect(failures).toBe(2);
     expect(h.org.pauseReason).toBe('cycle_limit');
     expect(h.runner.activity.filter((a) => a.kind === 'direct' && !a.ok)).toHaveLength(2);
+  });
+
+  it('gives up on a call that keeps failing in a way that may pass, after three tries', async () => {
+    let tries = 0;
+    h = await harness({
+      mock: {
+        onCall: (kind) => {
+          if (kind !== 'direct') return;
+          tries += 1;
+          throw new ProviderError('The provider is overloaded', 'unavailable', true);
+        },
+      },
+    });
+    h.runner.start();
+    // Until it pauses, or has plainly gone past where it should have: a fourth try is the failure, not a wait that runs out.
+    await waitFor(() => h!.org.status !== 'running' || tries > 3, 'the organisation to give up, or to try a fourth time');
+    expect(tries).toBe(3);
+    await h.runner.idle();
+    expect(h.org.pauseReason).toBe('error');
+    expect(h.org.lastError).toContain('overloaded');
+    // Nothing was lost: direction is still to be set, and starting again gives the call three more tries.
+    expect(h.org.cycle.stage).toBe('direct');
+    h.runner.start();
+    await waitFor(() => h!.org.status !== 'running' || tries > 6, 'the organisation to give up a second time');
+    expect(tries).toBe(6);
   });
 
   it('pauses with the error when a call fails for good', async () => {

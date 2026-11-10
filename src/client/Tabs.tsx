@@ -123,16 +123,21 @@ function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task;
   const [fetched, setFetched] = useState<Task | null>(null);
   const [loading, setLoading] = useState(false);
   const [nothing, setNothing] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const shown = fetched ?? task;
   const load = () => {
     setLoading(true);
+    setFailed(null);
     api.task(orgId, task.id).then(
       (r) => {
         setFetched(r.task);
         setNothing(!r.task.result);
         setLoading(false);
       },
-      () => setLoading(false),
+      (err: Error) => {
+        setFailed(err.message);
+        setLoading(false);
+      },
     );
   };
   // An agent in a workflow run is given its work by the run, so what it was asked and what it returned are read on request.
@@ -169,6 +174,7 @@ function TaskRow({ orgId, task, held, onOpenFile }: { orgId: string; task: Task;
               </button>
             )
           ) : null}
+          {failed ? <p className="note note-bad">The report could not be read. {failed}</p> : null}
           {task.files.length ? (
             <ul className="file-links">
               {task.files.map((path) => (
@@ -332,6 +338,15 @@ function Outward({ url, children }: { url: string; children: ReactNode }) {
   return /^https:\/\//.test(url) ? <a href={url} target="_blank" rel="noreferrer">{children}</a> : <>{children}</>;
 }
 
+/** The site an address is on, or nothing if it is not an address. */
+function siteOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
+  }
+}
+
 /** What the system found at a gate, which is not what anyone reported. */
 function GateResult({ evidence }: { evidence: GateEvidence }) {
   return (
@@ -340,12 +355,20 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
       <p>{evidence.summary}</p>
       {evidence.checks.length ? (
         <ul className="gate-checks">
-          {evidence.checks.map((check) => (
-            <li key={check.name + check.url}>
-              <Outward url={check.url}>{check.name}</Outward>
-              <span className="muted">{check.state}</span>
-            </li>
-          ))}
+          {evidence.checks.map((check) => {
+            // Whoever posts a check names it and says where its details are, and a name can read like a control
+            // of this page. So the name is text, and what can be clicked is the site it leads to.
+            const site = siteOf(check.url);
+            return (
+              <li key={check.name + check.url}>
+                <span>
+                  {check.name}
+                  {site ? <> (<Outward url={check.url}>{site}</Outward>)</> : null}
+                </span>
+                <span className="muted">{check.state}</span>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>
@@ -667,7 +690,13 @@ export function Files({ org, selected, onSelect }: { org: Organisation; selected
     let live = true;
     setError(null);
     api.file(org.id, selected).then(
-      (f) => live && setContent({ path: f.path, text: f.content, truncated: f.truncated }),
+      (f) => {
+        if (!live) return;
+        setContent({ path: f.path, text: f.content, truncated: f.truncated });
+        // The server answers with the path as it keeps it. A lead may have written it another way, "/sales/quote.md" or
+        // "./sales/quote.md", and that spelling is swapped for the server's, so that the file is shown and marked in the list.
+        if (f.path !== selected) onSelect(f.path);
+      },
       (err: Error) => live && setError(err.message),
     );
     return () => {

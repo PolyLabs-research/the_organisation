@@ -14,7 +14,7 @@ import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from 
 import { Workspace, workspaceTools } from '../workspace';
 import { AGENT_BRANCHES } from '../access';
 import { gateEvidence, type CheckTimes } from './evidence';
-import { executeInSession } from './hosted';
+import { closeOpenWork, executeInSession } from './hosted';
 import * as prompts from './prompts';
 import { MAX_RESULT_CHARS, bullets, clean, fileReport, logRemitDecisions, newTask, now } from './records';
 import * as schemas from './schemas';
@@ -144,6 +144,12 @@ export function cancelPlan(org: Organisation, plan: Plan, reason: string, byId: 
   plan.updatedAt = now();
   // What the plan asked the signatory for is no longer wanted. Nobody should pay for work that has been stopped.
   withdrawRequests(org, plan, plan.cancelReason);
+  // A hosted session that is being followed is wound up by whoever follows it, who is told the plan is off.
+  // One that is held, or waiting at its cap, has nobody to do that: what it left open is closed here.
+  if (plan.managed && plan.managed.state !== 'running' && plan.managed.state !== 'starting') {
+    closeOpenWork(plan, plan.managed, 'failed', 'The plan was cancelled.');
+    plan.managed.state = 'finished';
+  }
   // A decision still open on a cancelled plan has nothing left to decide.
   const decision = org.decisions.find((d) => d.id === plan.decisionId && d.status !== 'resolved');
   if (decision) {
@@ -577,7 +583,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
           task.startedAt = null;
           return;
         }
-        const note = result.stopped === 'cut_short' ? '\n\n[The agent was stopped before it had finished: it reached its turn limit or the budget was spent.]' : '';
+        const note = result.stopped === 'cut_short' ? '\n\n[The agent was stopped before it had finished: it reached its turn limit, ran out of room for its reply, or the budget was spent.]' : '';
         task.status = 'done';
         task.result = (result.text.trim() || '(The agent gave no closing report.)').slice(0, MAX_RESULT_CHARS) + note;
         task.files = written;

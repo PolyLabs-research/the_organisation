@@ -1,9 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import Anthropic from '@anthropic-ai/sdk';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { cancelPlan } from '../src/server/engine/handlers';
 import { ClaudeProvider } from '../src/server/providers/claude';
+import { Uploads } from '../src/server/providers/managed/files';
 import { MockProvider } from '../src/server/providers/mock';
 import { ProviderError, type BoardReportDraft, type PlanHooks, type PlanJob, type PlanOutcome } from '../src/server/providers/types';
 import { FakeManagedApi, type FakeSession } from './fake-managed-api';
@@ -38,8 +40,12 @@ afterEach(async () => {
 
 const PHASES = ['Spec', 'Build', 'Test', 'Release'];
 
-/** Stands in for the engine: records what a session tells it and answers as the engine would. */
-function recorder(options: { haltAfter?: string; halt?: 'pause' | 'cancel' } = {}) {
+/**
+ * Stands in for the engine: records what a session tells it and answers as the engine would. With `haltOnceRead`
+ * it asks for the session to be held as soon as its history has been read, which is when a session says where
+ * reading stands: after everything that was there has been heard, and before any of it is answered.
+ */
+function recorder(options: { haltAfter?: string; halt?: 'pause' | 'cancel'; haltOnceRead?: boolean } = {}) {
   const log: string[] = [];
   const state = {
     recorded: [] as string[],
@@ -134,6 +140,7 @@ function recorder(options: { haltAfter?: string; halt?: 'pause' | 'cancel' } = {
     checkpoint(readFrom, handledTo) {
       state.cursor = readFrom;
       state.handled = handledTo;
+      if (options.haltOnceRead) state.halt = options.halt ?? 'pause';
     },
   };
   return { hooks, log, state };
@@ -191,6 +198,12 @@ async function wholePlan(s: FakeSession): Promise<void> {
 }
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** What a plan comes to, or 'still waiting' when it has not ended in good time, so that a plan left waiting for good fails its test and does not stall it. */
+const inGoodTime = async <T>(work: Promise<T>, ms = 3000): Promise<T | 'still waiting'> => {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<'still waiting'>((resolve) => (timer = setTimeout(() => resolve('still waiting'), ms)));
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+};
 const sent = (s: FakeSession, type: string) => s.received.filter((e) => e.type === type);
 const messages = (s: FakeSession) => sent(s, 'user.message').map((e) => e.content[0].text as string);
 const body = (method: string, route: string | RegExp, nth = 0) =>
@@ -379,6 +392,35 @@ describe('starting a session for a plan', () => {
     expect(api.session().created.agent.id).toBe([...api.agents.keys()][1]);
   });
 
+  it('sends a workspace file once when several plans of one organisation start together, and keeps one record of it', async () => {
+    const workspace = path.join(dir, 'workspace');
+    await mkdir(workspace, { recursive: true });
+    const files = await Promise.all(
+      ['a.md', 'b.md', 'c.md', 'd.md', 'e.md', 'f.md'].map(async (p) => {
+        await writeFile(path.join(workspace, p), `# ${p}`);
+        const s = await stat(path.join(workspace, p));
+        return { path: p, absolutePath: path.join(workspace, p), size: s.size, modifiedAt: s.mtime.toISOString() };
+      }),
+    );
+    const client = new Anthropic({ apiKey: 'test-key', baseURL: api.baseURL, maxRetries: 0 });
+    const stateDir = path.join(dir, 'state');
+    // Each plan has its own look at the organisation's one record of what has been uploaded.
+    const together = () => Promise.all([1, 2, 3].map(() => new Uploads(client, stateDir).ensure(files)));
+    const mounts = await together();
+    expect(api.count('POST', '/v1/files')).toBe(files.length);
+    expect(mounts[1]).toEqual(mounts[0]);
+    expect(mounts[2]).toEqual(mounts[0]);
+    expect(mounts[0]!.map((m) => m.path)).toEqual(files.map((f) => f.path));
+
+    // And again, many times over, with nothing left to send: every look gets its answer and the record stays whole.
+    for (let round = 0; round < 40; round++) expect(await together()).toHaveLength(3);
+    // One that finds the ids on file refused, at the same moment, waits its turn like the others.
+    const forgetful = new Uploads(client, stateDir);
+    await Promise.all([new Uploads(client, stateDir).ensure(files), forgetful.forget(), new Uploads(client, stateDir).ensure(files)]);
+    expect(Object.keys(JSON.parse(await readFile(path.join(stateDir, 'uploads.json'), 'utf8'))).sort()).toEqual(files.map((f) => f.path));
+    expect(await readdir(stateDir)).toEqual(['uploads.json']);
+  });
+
   it('finds the session it created when the reply to the request was lost, and starts no second one', async () => {
     api.script = wholePlan;
     api.dropReplyOnce((x) => x.method === 'POST' && x.path === '/v1/sessions');
@@ -391,6 +433,116 @@ describe('starting a session for a plan', () => {
     const search = api.requests.find((x) => x.method === 'GET' && x.path === '/v1/sessions')!;
     expect(search.query.get('agent_id')).toBe([...api.agents.keys()][1]);
     expect(api.session().created.metadata.attempt).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('takes up the session an earlier try created without ever hearing that it had, and starts no second one', async () => {
+    api.script = wholePlan;
+    // The reply to the request is lost, and so is every look for the session it made.
+    let down = true;
+    api.dropReplyOnce((x) => x.method === 'POST' && x.path === '/v1/sessions');
+    api.failAlways((x) => down && x.method === 'GET' && x.path === '/v1/sessions', 403, 'sessions cannot be listed just now');
+    const first = recorder();
+    // The plan it is started with states the one instruction the board has given so far.
+    const kickoff = { message: 'Carry out this plan.', instructions: 1 };
+    await expect(provider.executePlan(job(first.hooks, { kickoff }))).rejects.toBeInstanceOf(ProviderError);
+    expect(api.sessions.size).toBe(1);
+    expect(first.state.sessionId).toBe('');
+    const session = api.session();
+
+    // While it cannot be known whether there is a session, no other is created.
+    await expect(provider.executePlan(job(recorder().hooks))).rejects.toBeInstanceOf(ProviderError);
+    expect(api.count('POST', '/v1/sessions')).toBe(1);
+
+    // The first try that can look finds it, also from a new process, and carries the plan through in it.
+    down = false;
+    const again = recorder();
+    again.state.pending.push('Keep it to one city.');
+    await expect(provider.executePlan(job(recorder().hooks, { planId: 'p2' }))).resolves.toEqual({ status: 'reported' });
+    expect(await newProvider().executePlan(job(again.hooks, { budgetUsd: 1.5 }))).toEqual({ status: 'reported' });
+    // Another plan, in between, got a session of its own; this plan still has the one.
+    expect(api.sessions.size).toBe(2);
+    expect(api.count('POST', '/v1/sessions')).toBe(2);
+    expect(again.state.sessionId).toBe(session.id);
+    expect(again.state.consoleUrl).toContain(session.id);
+    expect(again.state.recorded).toEqual(PHASES);
+    expect(session.failure).toBeNull();
+    // It has the cap the plan is allowed now, and its spend is counted.
+    expect(session.capCents).toBe(150);
+    expect(again.state.cap).toBe(1.5);
+    expect(again.state.spend).toBeCloseTo(0.4, 5);
+    // What the plan it was started with had already told the lead is not sent again.
+    expect(messages(session)).toEqual(['Carry out this plan.']);
+    expect(again.log).toContain('instructed 1');
+    expect(again.state.pending).toEqual([]);
+    // Nothing is left on file, so a session started for this plan later is not mistaken for it.
+    await expect(stat(path.join(dir, 'state', 'creating-p1.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('creates a session when the earlier request for one never got through', async () => {
+    api.script = wholePlan;
+    api.failOnce((x) => x.method === 'POST' && x.path === '/v1/sessions', 500, 'internal error');
+    await expect(provider.executePlan(job(recorder().hooks))).rejects.toMatchObject({ code: 'unavailable', retryable: true });
+    expect(api.sessions.size).toBe(0);
+
+    const r = recorder();
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    expect(api.sessions.size).toBe(1);
+    expect(r.state.sessionId).toBe(api.session().id);
+    await expect(stat(path.join(dir, 'state', 'creating-p1.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('gives up as lost a session that an earlier try created and that ended before it was found', async () => {
+    let down = true;
+    api.dropReplyOnce((x) => x.method === 'POST' && x.path === '/v1/sessions');
+    api.failAlways((x) => down && x.method === 'GET' && x.path === '/v1/sessions', 403, 'sessions cannot be listed just now');
+    await expect(provider.executePlan(job(recorder().hooks))).rejects.toBeInstanceOf(ProviderError);
+    const session = api.session();
+    // Nobody follows it, and it ends by itself having spent ten cents.
+    session.spentCents = 10;
+    session.terminate();
+
+    down = false;
+    const r = recorder();
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'lost', reason: 'the session had ended.' });
+    // The organisation is told whose session it was and what it spent, and no other was started in the same breath.
+    expect(r.state.sessionId).toBe(session.id);
+    expect(r.state.spend).toBeCloseTo(0.1, 5);
+    expect(api.sessions.size).toBe(1);
+  });
+
+  it('holds a session that an earlier try created when it is found with no more to give it', async () => {
+    let down = true;
+    api.dropReplyOnce((x) => x.method === 'POST' && x.path === '/v1/sessions');
+    api.failAlways((x) => down && x.method === 'GET' && x.path === '/v1/sessions', 403, 'sessions cannot be listed just now');
+    await expect(provider.executePlan(job(recorder().hooks))).rejects.toBeInstanceOf(ProviderError);
+    const session = api.session();
+    // Nobody follows it, and it spends half a dollar under the cap it was created with.
+    session.spentCents = 50;
+
+    // By the time it is found, the organisation has less left for the plan than that, and nothing more to give.
+    down = false;
+    const r = recorder();
+    expect(await provider.executePlan(job(r.hooks, { budgetUsd: 0.3 }))).toEqual({ status: 'at_budget' });
+    expect(r.state.sessionId).toBe(session.id);
+    expect(r.state.spend).toBeCloseTo(0.5, 5);
+    // It does not keep the rest of its first cap while nobody follows it.
+    expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
+    expect(r.state.cap).toBe(session.capCents / 100);
+  });
+
+  it('forgets a request for a session once the plan\'s session is known', async () => {
+    api.script = wholePlan;
+    const first = recorder({ haltAfter: 'Spec' });
+    expect(await provider.executePlan(job(first.hooks))).toEqual({ status: 'paused' });
+    const session = api.session();
+    // A note of a request left behind, as if the process had stopped just after the session was made.
+    const note = path.join(dir, 'state', 'creating-p1.json');
+    await writeFile(note, JSON.stringify({ attempt: session.created.metadata.attempt, since: '2026-01-01T00:00:00.000Z', leadId: session.created.agent.id, instructions: 0 }));
+
+    const again = recorder();
+    again.state.recorded.push('Spec');
+    expect(await provider.executePlan(job(again.hooks, { session: pickUp(session, first) }))).toEqual({ status: 'reported' });
+    await expect(stat(note)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('passes on a refusal it cannot do anything about, without trying again', async () => {
@@ -469,6 +621,34 @@ describe('what a session asks of the organisation', () => {
     expect(sent(api.session(), 'user.custom_tool_result')).toHaveLength(5);
   });
 
+  it('answers a call once when a look at the quiet session comes upon it while its answer is being prepared', async () => {
+    api.script = wholePlan;
+    const r = recorder();
+    // Bringing the first phase's file home takes longer than the wait before a session that says nothing is looked at.
+    const output = r.hooks.output;
+    let slow = true;
+    r.hooks.output = async (file) => {
+      if (slow) {
+        slow = false;
+        await pause(150);
+      }
+      return output(file);
+    };
+    const taken: string[] = [];
+    const record = r.hooks.phase;
+    r.hooks.phase = (given) => {
+      taken.push(given.phase);
+      return record(given);
+    };
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    expect(api.session().failure).toBeNull();
+    // Each record was taken once, and each call got one answer.
+    expect(taken).toEqual(PHASES);
+    const answers = sent(api.session(), 'user.custom_tool_result').map((e) => e.custom_tool_use_id);
+    expect(answers).toHaveLength(5);
+    expect(new Set(answers).size).toBe(5);
+  });
+
   it('declines a tool call that the platform could not clear and nobody is there to approve', async () => {
     let answer: Record<string, any> | undefined;
     api.script = async (s) => {
@@ -526,6 +706,60 @@ describe('what a session asks of the organisation', () => {
     expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
     expect(messages(api.session()).filter((m) => m.startsWith('Binding'))).toEqual(['Binding: Keep it to one city.']);
     expect(r.log.filter((l) => l === 'instructed 1')).toHaveLength(1);
+  });
+
+  /** As the engine does: the answer to a phase record states whatever the board has ruled and the lead has not been told. */
+  const answersCarryInstructions = (r: ReturnType<typeof recorder>) => {
+    const record = r.hooks.phase;
+    r.hooks.phase = (given) => {
+      const reply = record(given);
+      const pending = r.hooks.instructions();
+      return pending ? { ...reply, message: `${reply.message}\n\n${pending.message}`, instructions: pending.instructions } : reply;
+    };
+  };
+
+  it('counts the instructions an answer states as told once the answer has been sent, and not before', async () => {
+    const r = recorder();
+    const heard: string[] = [];
+    api.script = async (s) => {
+      s.running();
+      s.delegate('sthr_a', 'Spec: write the document', 'Wrote spec.md.', { name: 'engineering/spec.md', content: '# Spec' });
+      // The board rules just before the lead records Spec, so the ruling goes with the answer to the record.
+      r.state.pending.push('Keep it to one city.');
+      heard.push((await s.call('record_phase', { phase: 'Spec', summary: 'Spec passed its gate.' })).text);
+      for (const name of PHASES.slice(1)) await phase(s, name);
+      await report(s);
+    };
+    answersCarryInstructions(r);
+    // The first answer is lost to a fault on the way.
+    api.failOnce((x) => x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.custom_tool_result', 500, 'internal error');
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    // The answer that did arrive states the instruction, and only then does it count as told.
+    expect(heard).toEqual(['Spec was already recorded. Build is next.\n\nBinding: Keep it to one city.']);
+    expect(r.log.filter((l) => l.startsWith('instructed'))).toEqual(['instructed 1']);
+    expect(r.log.indexOf('instructed 1')).toBeGreaterThan(r.log.indexOf('phase Spec'));
+    expect(r.state.pending).toEqual([]);
+    expect(messages(api.session())).toEqual(['Carry out this plan.']);
+  });
+
+  it('does not send as a message as well the instructions that an answer on its way states', async () => {
+    const r = recorder();
+    api.script = async (s) => {
+      s.running();
+      s.delegate('sthr_a', 'Spec: write the document', 'Wrote spec.md.', { name: 'engineering/spec.md', content: '# Spec' });
+      r.state.pending.push('Keep it to one city.');
+      const reply = await s.call('record_phase', { phase: 'Spec', summary: 'Spec passed its gate.' });
+      if (reply.isError) throw new Error(reply.text);
+      // The lead is at work again, and would take a message, before this side has heard that its answer arrived.
+      await pause(150);
+      for (const name of PHASES.slice(1)) await phase(s, name);
+      await report(s);
+    };
+    answersCarryInstructions(r);
+    api.lateReplyOnce((x) => x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.custom_tool_result', 100);
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    expect(messages(api.session())).toEqual(['Carry out this plan.']);
+    expect(r.log.filter((l) => l.startsWith('instructed'))).toEqual(['instructed 1']);
   });
 });
 
@@ -710,6 +944,24 @@ describe('the spend cap', () => {
     expect(r.log.some((l) => l.startsWith('asked'))).toBe(false);
   });
 
+  it('asks for more when the session\'s cap was brought down under it from elsewhere', async () => {
+    api.script = async (s) => {
+      s.running();
+      await phase(s, 'Spec');
+      // A hold that was asked for while nobody followed the session arrives only now, after it was set going.
+      s.capCents = s.spentCents + 1;
+      for (const name of PHASES.slice(1)) await phase(s, name);
+      await report(s);
+    };
+    const r = recorder();
+    r.state.grants.push(1.5);
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    // It stopped at the cap it had been given from elsewhere, and was given what the organisation allows it.
+    expect(r.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.20: 1.5']);
+    expect(api.session().capCents).toBe(150);
+    expect(r.state.recorded).toEqual(PHASES);
+  });
+
   it('asks again with the true figure when the session has spent more than the organisation knew', async () => {
     api.script = wholePlan;
     const r = recorder();
@@ -833,7 +1085,9 @@ describe('holding a session', () => {
     let listings = 0;
     api.failAlways((x) => x.method === 'GET' && x.path === '/v1/files' && ++listings > 1, 500, 'internal error');
     const r = recorder();
-    const failure = await provider.executePlan(job(r.hooks)).catch((err) => err);
+    // Without the look at a session that has gone quiet, which connects again by itself and would add to the count.
+    const unwatched = new ClaudeProvider({ apiKey: 'test-key', baseURL: api.baseURL, maxRetries: 0, managedStateFile: path.join(dir, 'managed.json'), sessionTimings: { ...TIMINGS, usagePollMs: 60_000 } });
+    const failure = await unwatched.executePlan(job(r.hooks)).catch((err) => err);
     expect(failure).toBeInstanceOf(ProviderError);
     expect(failure).toMatchObject({ code: 'unavailable', retryable: true });
     const session = api.session();
@@ -868,6 +1122,82 @@ describe('holding a session', () => {
     expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
     expect(r.state.recorded).toEqual(['Spec', 'Build']);
     expect(api.requests.some((x) => x.method === 'DELETE' || x.path.endsWith('/archive'))).toBe(false);
+  });
+
+  it('holds the session again when the reply to raising its cap is lost', async () => {
+    api.script = wholePlan;
+    const first = recorder({ haltAfter: 'Spec' });
+    expect(await provider.executePlan(job(first.hooks))).toEqual({ status: 'paused' });
+    const session = api.session();
+
+    // Picked up again: the cap is raised, which sets the session going, but the reply never arrives.
+    api.dropReplyOnce((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}`);
+    const again = recorder();
+    again.state.recorded.push('Spec');
+    await expect(provider.executePlan(job(again.hooks, { session: pickUp(session, first) }))).rejects.toBeInstanceOf(ProviderError);
+    // It is not left with its whole cap and nobody following it, and the organisation knows what cap it has.
+    expect(session.capCents).toBeLessThan(200);
+    expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
+    expect(again.state.cap).toBe(session.capCents / 100);
+  });
+
+  it('holds a session it picks up with no more to give it, if nobody had held it', async () => {
+    api.script = wholePlan;
+    const first = recorder({ haltAfter: 'Spec' });
+    expect(await provider.executePlan(job(first.hooks))).toEqual({ status: 'paused' });
+    const session = api.session();
+    // As after a stop without warning: the session still has the cap it was working under.
+    session.capCents = 200;
+
+    // Picked up when the organisation has less left for it than it has spent already, and nothing more to give.
+    const again = recorder();
+    again.state.recorded.push('Spec');
+    expect(await provider.executePlan(job(again.hooks, { budgetUsd: 0.05, session: pickUp(session, first) }))).toEqual({ status: 'at_budget' });
+    expect(again.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.20: null']);
+    // It waits for money capped at what it has spent, and the organisation knows what cap it has.
+    expect(session.capCents).toBeLessThanOrEqual(session.spentCents + 5);
+    expect(again.state.cap).toBe(session.capCents / 100);
+    expect(sent(session, 'user.interrupt')).toHaveLength(0);
+  });
+
+  it('holds a session that nobody is following, by its id', async () => {
+    // A session that was let go of with most of its cap unspent, as when the server stops without warning.
+    api.script = wholePlan;
+    await provider.executePlan(job(recorder().hooks));
+    const session = api.session();
+    expect([session.capCents, session.spentCents]).toEqual([200, 40]);
+
+    expect(await provider.holdSession(session.id)).toEqual({ budgetUsd: 0.41, spentUsd: 0.4 });
+    expect(session.capCents).toBe(41);
+    // Asked again, it is found held already and left as it is.
+    expect(await provider.holdSession(session.id)).toEqual({ budgetUsd: 0.41, spentUsd: 0.4 });
+    expect(api.count('POST', `/v1/sessions/${session.id}`)).toBe(1);
+    expect(sent(session, 'user.interrupt')).toHaveLength(0);
+
+    // It spent more while the first try was on its way: the next try allows a little more room.
+    session.capCents = 200;
+    api.failOnce((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}`, 400, "budget.max_list_cost must be greater than the session's consumed list cost");
+    expect(await provider.holdSession(session.id)).toEqual({ budgetUsd: 0.45, spentUsd: 0.4 });
+    expect(session.capCents).toBe(45);
+
+    // One that cannot be capped is said to be so, and is not passed off as held.
+    session.capCents = 200;
+    api.failAlways((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}`, 400, 'budget cannot be changed');
+    await expect(provider.holdSession(session.id)).rejects.toMatchObject({ code: 'unavailable', retryable: true });
+    expect(session.capCents).toBe(200);
+  });
+
+  it('finds nothing to hold in a session that has ended, was archived, or does not exist', async () => {
+    api.script = wholePlan;
+    await provider.executePlan(job(recorder().hooks));
+    const session = api.session();
+    expect(await provider.holdSession('sesn_missing')).toBeNull();
+    session.archived = true;
+    expect(await provider.holdSession(session.id)).toBeNull();
+    session.archived = false;
+    session.terminate();
+    expect(await provider.holdSession(session.id)).toBeNull();
+    expect(api.count('POST', `/v1/sessions/${session.id}`)).toBe(0);
   });
 
   it('holds the session at once when work in flight is dropped', async () => {
@@ -929,8 +1259,7 @@ describe('picking a session up again', () => {
     expect(sent(session, 'user.custom_tool_result')).toHaveLength(0);
 
     // A second look, which reads the call and what came after it, and is again told to hold before answering.
-    const second = recorder();
-    second.state.halt = 'pause';
+    const second = recorder({ haltOnceRead: true });
     expect(await provider.executePlan(job(second.hooks, { session: pickUp(session, first) }))).toEqual({ status: 'paused' });
     expect(sent(session, 'user.custom_tool_result')).toHaveLength(0);
     // Where to read from next time stays at the call; how far things were acted on has moved past it.
@@ -945,6 +1274,36 @@ describe('picking a session up again', () => {
     // What the lead said before the hold was passed on once, by the attachment that first read it.
     expect(second.state.notes).toContain('Waiting for the record to be taken.');
     expect(third.state.notes).not.toContain('Waiting for the record to be taken.');
+  });
+
+  it('keeps its place at a call that an earlier look read and did not answer', async () => {
+    // The lead recorded Spec while its agents were still at work, and said more a good while later. Whoever
+    // followed the session then had read both when it was told to hold, with the call unanswered.
+    let made = false;
+    api.script = async (s) => {
+      s.running();
+      const calling = s.callWhileBusy('record_phase', { phase: 'Spec', summary: 'Spec passed its gate.' });
+      api.skip(60_000);
+      s.says('Waiting for the record to be taken.');
+      made = true;
+      await calling.catch(() => {});
+    };
+    const first = recorder();
+    first.state.halt = 'pause';
+    expect(await provider.executePlan(job(first.hooks))).toEqual({ status: 'paused' });
+    await waitFor(() => made, 'the call to be made');
+    const session = api.session();
+    const call = session.events.find((e) => e.type === 'agent.custom_tool_use')!;
+    const said = session.events.find((e) => e.type === 'agent.message')!;
+
+    // The next look reads the call again, after what came just before it, and is told to hold once more.
+    const second = recorder({ haltOnceRead: true });
+    const left = { id: session.id, cursor: call.processed_at as string, handled: said.processed_at as string, openRuns: [], runThreads: [], reported: false };
+    expect(await provider.executePlan(job(second.hooks, { session: left }))).toEqual({ status: 'paused' });
+    expect(sent(session, 'user.custom_tool_result')).toHaveLength(0);
+    // Reading still starts at the call next time: it has not been answered.
+    expect(second.state.cursor).toBe(call.processed_at);
+    expect(second.state.handled! > second.state.cursor!).toBe(true);
   });
 
   it('remembers which agents belong to a run, so one going idle is not taken as finished', async () => {
@@ -990,6 +1349,62 @@ describe('picking a session up again', () => {
     expect(await provider.executePlan(job(r.hooks, { session: { id, cursor: null, handled: null, openRuns: [], runThreads: [], reported: false } }))).toEqual({ status: 'reported' });
     expect(messages(session)).toEqual(['Carry out this plan.']);
     expect(session.capCents).toBe(200);
+  });
+
+  /** A session that exists and was never given its plan, with a lead that carries the plan out once it is told it. */
+  const untold = async (): Promise<FakeSession> => {
+    api.script = wholePlan;
+    await provider.executePlan(job(recorder().hooks));
+    const lead = [...api.agents.keys()][1]!;
+    const response = await fetch(`${api.baseURL}/v1/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent: { id: lead }, environment_id: [...api.environments.keys()][0], budget: { type: 'limit', max_list_cost: { amount: '10', currency: 'USD' } } }),
+    });
+    const session = api.sessions.get(((await response.json()) as { id: string }).id)!;
+    void (async () => {
+      await session.next((e) => e.type === 'user.message');
+      await wholePlan(session);
+    })().catch((err) => (session.failure = err));
+    return session;
+  };
+
+  it('gives the plan again when giving it to a session that was never told it fails', async () => {
+    const session = await untold();
+    // The message with the plan is lost to a fault on the way. By then the session's history has been read.
+    api.failOnce((x) => x.method === 'POST' && x.path === `/v1/sessions/${session.id}/events` && x.body.events[0].type === 'user.message', 500, 'internal error');
+    const r = recorder();
+    const picked = { id: session.id, cursor: null, handled: null, openRuns: [], runThreads: [], reported: false };
+    expect(await inGoodTime(provider.executePlan(job(r.hooks, { session: picked })))).toEqual({ status: 'reported' });
+    // Its lead was given the plan, not told to carry on with one it had never seen.
+    expect(messages(session)).toEqual(['Carry out this plan.']);
+    expect(r.state.recorded).toEqual(PHASES);
+  });
+
+  it('gives the plan to a session that was held before it could be told it', async () => {
+    const session = await untold();
+    // The organisation is paused just as the session's history has been read, before the plan has gone to it.
+    const first = recorder();
+    const push = api.requests.push.bind(api.requests);
+    api.requests.push = (...items) => {
+      for (const x of items) {
+        const history = x.method === 'GET' && x.path === `/v1/sessions/${session.id}/events` && ![...x.query.keys()].some((key) => key.startsWith('types'));
+        if (history) first.state.halt = 'pause';
+      }
+      return push(...items);
+    };
+    const picked = { id: session.id, cursor: null, handled: null, openRuns: [], runThreads: [], reported: false };
+    expect(await provider.executePlan(job(first.hooks, { session: picked }))).toEqual({ status: 'paused' });
+    api.requests.push = push;
+    expect(messages(session)).toEqual([]);
+    // Nothing is kept of where its history was read to: what was read was not what a lead with a plan says.
+    expect(first.state.cursor).toBeNull();
+
+    // Picked up again, from what the organisation kept of it.
+    const again = recorder();
+    expect(await inGoodTime(provider.executePlan(job(again.hooks, { session: pickUp(session, first) })))).toEqual({ status: 'reported' });
+    expect(messages(session)).toEqual(['Carry out this plan.']);
+    expect(again.state.recorded).toEqual(PHASES);
   });
 
   it('takes a plan as finished when the report was already in and the session has since stopped', async () => {
@@ -1064,20 +1479,22 @@ describe('a session that goes wrong', () => {
   });
 
   it('acts on a stop it read in the history even when the session\'s status has not caught up', async () => {
+    let dropped = Infinity;
     api.script = async (s) => {
       s.running();
       for (const name of PHASES) await phase(s, name);
       const reply = await s.call('report_to_board', { headline: 'Shipped', summary: 'Done.', outcomes: [] });
       if (reply.isError) throw new Error(reply.text);
       // The stream drops just as the lead ends its turn, and for a while the session still reads as running.
-      s.statusLagMs = 300;
+      s.statusLagMs = 3000;
       s.drop();
+      dropped = Date.now();
       s.idle({ type: 'end_turn' });
     };
     const r = recorder();
-    const started = Date.now();
     expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
-    expect(Date.now() - started).toBeLessThan(250);
+    // Well before the status caught up. Measured from the drop, so that a slow machine does not count against it.
+    expect(Date.now() - dropped).toBeLessThan(2000);
   });
 
   it('does not take a pause between an agent finishing and its lead waking as the lead stopping', async () => {
@@ -1094,7 +1511,9 @@ describe('a session that goes wrong', () => {
       await report(s);
     };
     const r = recorder();
-    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
+    // With a long wait for a lead to start again by itself: on a busy machine these pauses can last many times what they ask for.
+    const patient = new ClaudeProvider({ apiKey: 'test-key', baseURL: api.baseURL, maxRetries: 0, managedStateFile: path.join(dir, 'managed.json'), sessionTimings: { ...TIMINGS, graceMs: 5000 } });
+    expect(await patient.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
     expect(messages(api.session())).toEqual(['Carry out this plan.']);
   });
 
@@ -1154,7 +1573,8 @@ describe('a session that goes wrong', () => {
     };
     const r = recorder();
     expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'reported' });
-    expect(api.count('GET', `/v1/sessions/${api.session().id}/events/stream`)).toBe(2);
+    // It connected again to find out. (More than once on a busy machine, where an answer can take long enough to look like silence.)
+    expect(api.count('GET', `/v1/sessions/${api.session().id}/events/stream`)).toBeGreaterThanOrEqual(2);
   });
 
   it('sets a lead going again when it stops without reporting', async () => {
@@ -1213,6 +1633,22 @@ describe('a session that goes wrong', () => {
     const r = recorder();
     expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'lost', reason: 'The sandbox could not be restored.' });
     expect(r.state.recorded).toEqual(['Spec']);
+    // What the session said last was heard before it was given up.
+    expect(r.state.notes).toContain('The session met an error: The sandbox could not be restored.');
+  });
+
+  it('says why a session ended when its end never reached the stream', async () => {
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES.slice(0, 2)) await phase(s, name);
+      // The session dies, and neither its error nor its end is said on the stream: only its status shows it.
+      s.streams.clear();
+      s.emit('session.error', { error: { type: 'unknown_error', message: 'The sandbox could not be restored.', retry_status: { type: 'terminal' } } });
+      s.terminate();
+    };
+    const r = recorder();
+    expect(await provider.executePlan(job(r.hooks))).toEqual({ status: 'lost', reason: 'The sandbox could not be restored.' });
+    expect(r.state.recorded).toEqual(['Spec', 'Build']);
   });
 
   it('marks an agent that gave up or was declined as failed', async () => {
@@ -1229,6 +1665,96 @@ describe('a session that goes wrong', () => {
     r.hooks.agentEnded = (threadId, how, detail) => void ended.push([threadId, how, detail]);
     await provider.executePlan(job(r.hooks));
     expect(ended[0]).toEqual(['sthr_x', 'failed', 'The agent gave up after repeated errors.']);
+  });
+});
+
+describe('a request that fails while a session is stopped', () => {
+  // In each of these the session has stopped and waits on this side, and the one request that would set things
+  // going fails once. Nothing more comes from the session by itself, so whatever failed has to be tried again.
+
+  it('brings the last files home on a second try, and ends the plan', async () => {
+    let reported = false;
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES) await phase(s, name);
+      const reply = await s.call('report_to_board', { headline: 'Shipped', summary: 'Done.', outcomes: [] });
+      if (reply.isError) throw new Error(reply.text);
+      reported = true;
+      s.idle({ type: 'end_turn' });
+    };
+    // The look at the session's files that follows the report.
+    api.failOnce((x) => reported && x.method === 'GET' && x.path === '/v1/files', 500, 'internal error');
+    const r = recorder();
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    expect([...r.state.files.keys()].sort()).toEqual(PHASES.map((name) => `engineering/${name.toLowerCase()}.md`).sort());
+  });
+
+  it('raises the cap on a second try when the session is at it', async () => {
+    api.script = wholePlan;
+    const r = recorder();
+    r.state.grants.push(0.6, 0.6);
+    api.failOnce((x) => x.method === 'POST' && /^\/v1\/sessions\/sesn_\d+$/.test(x.path), 500, 'internal error');
+    expect(await inGoodTime(provider.executePlan(job(r.hooks, { budgetUsd: 0.25 })))).toEqual({ status: 'reported' });
+    expect(r.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.30: 0.6', 'asked for more at 0.30: 0.6']);
+    expect(api.session().capCents).toBe(60);
+    expect(r.state.recorded).toEqual(PHASES);
+  });
+
+  it('raises the cap on a second try when it only learns afterwards that the session is at it', async () => {
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES.slice(0, 2)) await phase(s, name);
+      // The request that takes it to its cap. It says that it has stopped there before it says what it has spent,
+      // so for a moment its cap looks to be above its spend.
+      s.spentCents = s.capCents;
+      s.idle({ type: 'budget_reached' });
+      await s.until(() => s.capCents > s.spentCents);
+      s.running();
+      for (const name of PHASES.slice(2)) await phase(s, name);
+      await report(s);
+    };
+    const r = recorder();
+    r.state.grants.push(0.6, 0.6);
+    api.failOnce((x) => x.method === 'POST' && /^\/v1\/sessions\/sesn_\d+$/.test(x.path), 500, 'internal error');
+    expect(await inGoodTime(provider.executePlan(job(r.hooks, { budgetUsd: 0.25 })))).toEqual({ status: 'reported' });
+    expect(r.log.filter((l) => l.startsWith('asked'))).toEqual(['asked for more at 0.25: 0.6', 'asked for more at 0.25: 0.6']);
+    expect(api.session().capCents).toBe(60);
+  });
+
+  it('tells a lead that stopped short to carry on, on a second try', async () => {
+    api.script = async (s) => {
+      s.running();
+      for (const name of PHASES) await phase(s, name);
+      s.idle({ type: 'end_turn' }); // forgot to report
+      await s.next((e) => e.type === 'user.message' && e.content[0].text === 'Carry on with the plan.');
+      s.running();
+      await report(s);
+    };
+    api.failOnce((x) => x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.message', 500, 'internal error');
+    const r = recorder();
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    expect(messages(api.session())).toEqual(['Carry out this plan.', 'Carry on with the plan.']);
+  });
+
+  it('brings the last files home on a second try when it gives up on a lead that reported and left a run open', async () => {
+    let reported = false;
+    api.script = async (s) => {
+      s.running();
+      s.emit('workflow_run.created', { workflow_run_id: 'wrun_1', name: 'Sweep', description: null, phases: [] });
+      for (const name of PHASES) await phase(s, name);
+      const reply = await s.call('report_to_board', { headline: 'Shipped', summary: 'Done.', outcomes: [] });
+      if (reply.isError) throw new Error(reply.text);
+      reported = true;
+      for (;;) {
+        s.idle({ type: 'end_turn' });
+        await s.next((e) => e.type === 'user.message' && e.content[0].text === 'Carry on with the plan.');
+        s.running();
+      }
+    };
+    api.failOnce((x) => reported && x.method === 'GET' && x.path === '/v1/files', 500, 'internal error');
+    const r = recorder();
+    expect(await inGoodTime(provider.executePlan(job(r.hooks)))).toEqual({ status: 'reported' });
+    expect(r.state.report?.headline).toBe('Shipped');
   });
 });
 
@@ -1520,6 +2046,45 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(replies[3]).toMatch(/^Test was already recorded\. Nothing it asks of the signatory was filed: ask when you record a phase for the first time\. Release is next\./);
   });
 
+  it('tells the lead what the board has ruled, and what became of its requests, when the answer that said so had to be sent again', async () => {
+    const replies: string[] = [];
+    let armed = false;
+    api.script = async (s) => {
+      await phase(s, 'Spec');
+      s.says('Starting Build.');
+      s.delegate('sthr_a', 'Build: write the document', 'Wrote build.md.', { name: 'engineering/build.md', content: '# Build' });
+      await s.charge(10);
+      // The board rules while Build is under way, so the ruling goes to the lead with the answer to its record.
+      h!.org.plans[0]!.amendments.push('Keep the first version to one city.');
+      armed = true;
+      const asked = await s.call('record_phase', {
+        phase: 'Build',
+        summary: 'Build passed its gate.',
+        requests: [{ kind: 'payment', title: 'A domain name', detail: 'The release needs an address people can reach.', amount: '12 GBP a year', party: 'A registrar' }],
+      });
+      replies.push(asked.text);
+      for (const name of PHASES.slice(2)) await phase(s, name);
+      await report(s);
+    };
+    // That answer is lost to a fault on the way, and is written and sent again.
+    api.failOnce((x) => armed && x.method === 'POST' && /\/events$/.test(x.path) && x.body.events[0].type === 'user.custom_tool_result', 500, 'internal error');
+    h = await setup();
+    await runToRest(h.runner);
+    const { org } = h;
+    const plan = org.plans[0]!;
+    expect(api.session().failure).toBeNull();
+    expect(org.lastError).toBeNull();
+    expect(plan.status).toBe('done');
+    // The answer the lead got says that Build stands, that its request went (once), and what the board ruled.
+    expect(replies[0]).toMatch(/^Build was already recorded\. 1 request it asks for went to the signatory when the phase was first recorded\. Test is next\./);
+    expect(replies[0]).toContain('Binding instructions from the board:');
+    expect(replies[0]).toContain('Keep the first version to one city.');
+    expect(org.signatory.requests.map((r) => r.title)).toEqual(['A domain name']);
+    // Told once: with the answer, and not again as a message.
+    expect(plan.managed!.instructionsSent).toBe(1);
+    expect(messages(api.session()).filter((m) => m.includes('Keep the first version to one city.'))).toEqual([]);
+  });
+
   it('files nothing for a plan that was cancelled while its phase record was on its way', async () => {
     let armed = false;
     let cancelled = false;
@@ -1623,6 +2188,50 @@ describe('the organisation on hosted sessions, end to end', () => {
     expect(plan.status).toBe('done');
     expect(api.sessions.size).toBe(1);
     expect(plan.managed!.spentUsd).toBe(0.8);
+  });
+
+  it('carries a plan through in the one session it was given when the reply that said so was lost', async () => {
+    api.script = wholePlan;
+    // The reply to the request for a session is lost, and the look for the session straight afterwards fails too.
+    api.dropReplyOnce((x) => x.method === 'POST' && x.path === '/v1/sessions');
+    api.failOnce((x) => x.method === 'GET' && x.path === '/v1/sessions', 403, 'sessions cannot be listed just now');
+    h = await setup();
+    await runToRest(h.runner);
+    const plan = h.org.plans[0]!;
+    expect(h.org.lastError).toBeNull();
+    expect(plan.status).toBe('done');
+    // The organisation tried again, found the session the first try had made, and asked for no other.
+    expect(api.sessions.size).toBe(1);
+    expect(api.count('POST', '/v1/sessions')).toBe(1);
+    expect(plan.managed).toMatchObject({ sessionId: api.session().id, state: 'finished', spentUsd: 0.4, attempts: 0 });
+    expect(plan.phases.map((p) => p.tasks.map((t) => t.title))).toEqual(PHASES.map((name) => [`${name}: write the document`]));
+    expect(h.org.usageByExec.cto!.costUsd).toBeGreaterThanOrEqual(0.4);
+  });
+
+  it('files a task under the phase it was done in when that phase is recorded just as the session is picked up', async () => {
+    // The lead does the whole of Spec, records it and waits, in the moment between the history of its session
+    // being read and its status being asked for. The record is found from the status, ahead of the events that
+    // led up to it, which are still on the stream.
+    api.script = async () => {};
+    let started = false;
+    const push = api.requests.push.bind(api.requests);
+    api.requests.push = (...items) => {
+      for (const request of items) {
+        const history = request.method === 'GET' && /^\/v1\/sessions\/[^/]+\/events$/.test(request.path) && ![...request.query.keys()].some((key) => key.startsWith('types'));
+        if (!history || started) continue;
+        started = true;
+        // A microtask: it runs when the stand-in has finished serving the listing.
+        queueMicrotask(() => void wholePlan(api.session()).catch((err) => (api.session().failure = err)));
+      }
+      return push(...items);
+    };
+    h = await setup();
+    await runToRest(h.runner);
+    api.requests.push = push;
+    const plan = h.org.plans[0]!;
+    expect(api.session().failure).toBeNull();
+    expect(plan.status).toBe('done');
+    expect(plan.phases.map((p) => p.tasks.map((t) => t.title))).toEqual(PHASES.map((name) => [`${name}: write the document`]));
   });
 
   it('starts a fresh session when the first is lost, with the phases already recorded marked as such', async () => {

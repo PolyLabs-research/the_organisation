@@ -4,6 +4,7 @@ import type { Dialect, Price } from '../src/server/providers/catalogue';
 import { OpenAICompatibleProvider, UNKNOWN_PRICE } from '../src/server/providers/openai-compatible';
 import { ProviderError, type AgentTool, type CallUsage } from '../src/server/providers/types';
 import { FakeOpenAI } from './fake-openai-api';
+import { waitFor } from './helpers';
 
 // The provider for OpenAI-compatible endpoints, run against a local stand-in
 // (fake-openai-api.ts). These check what is sent and how replies and refusals
@@ -184,13 +185,25 @@ describe('fitting a request to the endpoint', () => {
     api.rules = [() => "This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens. Please reduce the length of the messages."];
     const p = provider();
     // A failure of the task, which the lead sees at its gate, where a fault of the provider's would pause everything.
-    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'invalid_output', retryable: false, message: expect.stringContaining('outgrew the model’s context window') });
+    expect(await ask(p).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false, message: expect.stringContaining('outgrew the model’s context window') });
     expect(api.chats.map((b) => b.max_completion_tokens)).toEqual([32000, 4096]);
     // Nothing was learned about the model from it.
     api.rules = [];
     api.replies = [{ content: GOOD }];
     await ask(p);
     expect(api.chats.at(-1).max_completion_tokens).toBe(32000);
+  });
+
+  it('knows a prompt that is too long by the code the endpoint gives it, whatever words come with it', async () => {
+    api.replies = [{ status: 400, error: 'Please shorten the request.', code: 'context_length_exceeded' }, { status: 400, error: 'Please shorten the request.', code: 'context_length_exceeded' }];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
+    // Sent once more with less room for the reply, and then given up: not tried in every other form.
+    expect(api.chats.map((b) => b.max_completion_tokens)).toEqual([32000, 4096]);
+    // A request too large for the endpoint to take in at all is the same failure.
+    api.seen.length = 0;
+    api.replies = [{ status: 413, error: 'Request Entity Too Large' }];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
+    expect(api.chats).toHaveLength(1);
   });
 
   it('reshapes a request refused with a 422 as it would one refused with a 400', async () => {
@@ -390,6 +403,24 @@ describe('fitting a request to the endpoint', () => {
     expect(usage[0]!.inputTokens).toBeGreaterThan(10);
     expect(usage[0]!.outputTokens).toBe(Math.ceil(GOOD.length / 4));
     expect(usage[0]!.costUsd).toBeGreaterThan(0);
+  });
+
+  it('counts tokens itself when what the endpoint reports for them is not a number', async () => {
+    api.replies = [{ content: GOOD, usage: { prompt_tokens: 'n/a', completion_tokens: {}, total_tokens: 'n/a' } }];
+    const usage: CallUsage[] = [];
+    await ask(provider(), (u) => usage.push(u));
+    // The same rough count as for an endpoint that reports nothing, and a cost that can be added up.
+    expect(usage[0]!.inputTokens).toBe(Math.ceil(JSON.stringify(api.chats[0].messages).length / 4));
+    expect(usage[0]!.outputTokens).toBe(Math.ceil(GOOD.length / 4));
+    expect(usage[0]!.costUsd).toBeCloseTo((usage[0]!.inputTokens * 2 + usage[0]!.outputTokens * 10) / 1e6, 10);
+    // A count below nothing is no count either, and what is said of the cache is taken only if it is a number.
+    api.replies = [{ content: GOOD, usage: { prompt_tokens: 1000, completion_tokens: -5, prompt_tokens_details: { cached_tokens: 'most of it' } } }];
+    await ask(provider(), (u) => usage.push(u));
+    expect(usage[1]).toMatchObject({ inputTokens: 1000, cacheReadTokens: 0, outputTokens: Math.ceil(GOOD.length / 4) });
+    // So is a gateway's own figure for what the call cost.
+    api.replies = [{ content: GOOD, usage: { prompt_tokens: 1000, completion_tokens: 100, cost: 'a lot' } }];
+    await ask(provider(), (u) => usage.push(u));
+    expect(usage[2]!.costUsd).toBeCloseTo((1000 * 2 + 100 * 10) / 1e6, 10);
   });
 
   it('asks for the whole reply at once from an endpoint that cannot stream', async () => {
@@ -714,7 +745,41 @@ describe('an agent run', () => {
     expect(api.chats).toHaveLength(4);
     expect(api.chats[2].messages).toEqual(api.chats[1].messages);
     expect(api.chats[3].messages).toEqual(api.chats[1].messages);
-    expect(usage).toHaveLength(2);
+    // The request that was refused cost nothing. The reply that was lost part-way did.
+    expect(usage).toHaveLength(3);
+  });
+
+  it('counts a reply that was lost part-way: as the endpoint reported it if it did, and by its length if not', async () => {
+    api.replies = [
+      // The connection drops with 4,000 characters written and nothing said of tokens.
+      { content: 'x'.repeat(4000), cut: true },
+      // The stream closes in good order, token counts and all, without the reply ever being finished.
+      { content: 'I have written half of the rep', unfinished: true },
+      { content: 'Done.' },
+    ];
+    const usage: CallUsage[] = [];
+    expect(await run(provider(), { onUsage: (u) => usage.push(u) })).toEqual({ text: 'Done.', turns: 1, stopped: 'done' });
+    // Each of the three replies is counted once.
+    expect(usage).toHaveLength(3);
+    // About four characters to a token, for what was written and for the prompt it answered.
+    expect(usage[0]!.outputTokens).toBe(1000);
+    expect(usage[0]!.inputTokens).toBe(Math.ceil(JSON.stringify(api.chats[0].messages).length / 4));
+    expect(usage[0]!.costUsd).toBeCloseTo((usage[0]!.inputTokens * 2 + 1000 * 10) / 1e6, 10);
+    expect(usage[1]).toMatchObject({ inputTokens: 1000, outputTokens: 200 });
+    expect(usage[2]).toMatchObject({ inputTokens: 1000, outputTokens: 200 });
+  });
+
+  it('counts nothing for a call that was stopped on purpose', async () => {
+    const stop = new AbortController();
+    api.replies = [{ content: 'x'.repeat(4000), hold: true }];
+    const usage: CallUsage[] = [];
+    const call = run(provider(), { signal: stop.signal, onUsage: (u) => usage.push(u) }).catch((e) => e);
+    // The endpoint is part-way through its reply when the call is cut off.
+    await waitFor(() => api.chats.length === 1, 'the request to arrive');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stop.abort();
+    expect(await call).toBeInstanceOf(ProviderError);
+    expect(usage).toHaveLength(0);
   });
 
   it('reads the endings some endpoints have names of their own for', async () => {
@@ -748,7 +813,7 @@ describe('an agent run', () => {
     expect(api.chats).toHaveLength(2);
 
     api.replies = [{ content: '', finish: 'model_context_window_exceeded' }];
-    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'bad_request', retryable: false });
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'too_long', retryable: false });
   });
 
   it('does not take a reply for finished when the stream closed without saying so', async () => {
@@ -757,7 +822,8 @@ describe('an agent run', () => {
     const usage: CallUsage[] = [];
     expect(await run(provider(), { onUsage: (u) => usage.push(u) })).toEqual({ text: 'I have written the report.', turns: 1, stopped: 'done' });
     expect(api.chats).toHaveLength(2);
-    expect(usage).toHaveLength(1);
+    // The half that arrived was paid for, and so was the whole that followed.
+    expect(usage).toHaveLength(2);
     // One that never finishes is given up on, as a fault that may pass.
     api.replies = Array.from({ length: 6 }, () => ({ content: 'half', unfinished: true }));
     expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'unavailable', retryable: true, message: expect.stringContaining('without saying it was finished') });
@@ -789,6 +855,26 @@ describe('an agent run', () => {
       ['tool', 'call_a'],
       ['tool', 'call_b'],
     ]);
+  });
+
+  it('takes a request the endpoint turned away for what it says as declined, and does not send it again in another form', async () => {
+    // Said by a code, as most endpoints say it.
+    api.replies = [{ status: 400, error: 'Input data may contain inappropriate content.', code: 'data_inspection_failed' }];
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false, message: expect.stringContaining('Testco declined this request') });
+    expect(api.chats).toHaveLength(1);
+    // Said in words alone, to a call that has three ways of asking for its answer: it is asked for once.
+    api.seen.length = 0;
+    api.rules = [() => "The response was filtered due to the prompt triggering Azure OpenAI's content management policy. Please modify your prompt and retry."];
+    expect(await ask(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false });
+    expect(api.chats).toHaveLength(1);
+    // A gateway that checks what is sent answers 403. That is not a key that was refused.
+    api.seen.length = 0;
+    api.rules = [];
+    api.replies = [{ status: 403, error: 'big-model requires moderation. Your input was flagged for "violence".' }];
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'refusal', retryable: false });
+    // Any other 403 is still the key.
+    api.replies = [{ status: 403, error: 'You do not have access to this model.' }];
+    expect(await run(provider()).catch((e) => e)).toMatchObject({ code: 'auth', retryable: false });
   });
 
   it('never runs a tool call that was cut off at the output limit', async () => {

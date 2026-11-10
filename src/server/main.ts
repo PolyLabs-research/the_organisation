@@ -1,18 +1,26 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import express from 'express';
 import { createApp } from './app';
+import { serveBuiltClient, serveClientFromSource } from './client';
 import { ROOT_DIR, loadConfig } from './config';
 import { ConnectionStore } from './connections';
+import { DataDirInUse, claimDataDir } from './lock';
 import { ProviderRouter } from './providers/router';
 import { Registry } from './registry';
 import { Store } from './store';
 
+/** How to give the data folder back, once this server has taken it. */
+let releaseData: (() => Promise<void>) | null = null;
+
 async function main(): Promise<void> {
+  // "npm start" says so with a flag, not by setting a variable in front of the command, which only some shells allow.
+  if (process.argv.includes('--production')) process.env.NODE_ENV = 'production';
   const envFile = path.join(ROOT_DIR, '.env');
   if (existsSync(envFile)) process.loadEnvFile(envFile);
   const config = loadConfig();
 
+  // One server to a data folder: a second would save over this one's state and could run the same organisations.
+  releaseData = await claimDataDir(config.dataDir, config.port);
   const store = new Store(config.dataDir);
   await store.init();
   // The keys this server can call models with: those in the environment, and those added through the interface.
@@ -41,13 +49,10 @@ async function main(): Promise<void> {
     if (!existsSync(path.join(clientDir, 'index.html'))) {
       throw new Error('The client has not been built. Run "npm run build" first, or use "npm run dev".');
     }
-    app.use(express.static(clientDir));
-    app.get('/{*path}', (_req, res) => res.sendFile(path.join(clientDir, 'index.html')));
+    serveBuiltClient(app, clientDir);
   } else {
     // In development Vite serves the client from source, with hot reload, on the same port as the API.
-    const { createServer } = await import('vite');
-    const vite = await createServer({ root: ROOT_DIR, server: { middlewareMode: true }, appType: 'spa' });
-    app.use(vite.middlewares);
+    await serveClientFromSource(app, { root: ROOT_DIR, dataDir: config.dataDir, allowedHosts: config.allowedHosts });
   }
 
   const server = app.listen(config.port, config.host, () => {
@@ -65,7 +70,7 @@ async function main(): Promise<void> {
   });
   server.on('error', (err: NodeJS.ErrnoException) => {
     console.error(err.code === 'EADDRINUSE' ? `Port ${config.port} is already in use. Set PORT to another one.` : err);
-    process.exit(1);
+    void (releaseData?.() ?? Promise.resolve()).catch(() => {}).then(() => process.exit(1));
   });
 
   let closing = false;
@@ -74,6 +79,7 @@ async function main(): Promise<void> {
     closing = true;
     console.log('\nPausing organisations and saving state…');
     await registry.shutdown();
+    await releaseData?.().catch(() => {});
     server.closeAllConnections();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
@@ -82,7 +88,8 @@ async function main(): Promise<void> {
   process.on('SIGTERM', shutdown);
 }
 
-main().catch((err) => {
-  console.error(err);
+main().catch(async (err) => {
+  console.error(err instanceof DataDirInUse ? err.message : err);
+  await releaseData?.().catch(() => {});
   process.exit(1);
 });

@@ -1,5 +1,5 @@
 import { CircleHelp, X } from 'lucide-react';
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import readme from '../../README.md?raw';
@@ -94,6 +94,39 @@ function GuideDialog({ target, onNavigate, onClose }: { target: Target; onNaviga
     function Heading({ children }: { children?: ReactNode }) {
       return <Tag id={slug(textOf(children))}>{children}</Tag>;
     };
+  // Drawn once for each guide. This dialog is drawn again at every change in the organisation behind it, and the components
+  // for headings, links and images, made afresh each time, were then new components to React: it parsed the whole guide
+  // again, took every heading, link and picture out of the page and built another.
+  const text = useMemo(
+    () => (
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: heading('h1'),
+          h2: heading('h2'),
+          h3: heading('h3'),
+          h4: heading('h4'),
+          a: ({ href = '', children }) =>
+            /^[a-z]+:/i.test(href) ? (
+              <a href={href} target="_blank" rel="noreferrer noopener">
+                {children}
+              </a>
+            ) : (
+              <a href={href} onClick={(event) => { event.preventDefault(); follow(href); }}>
+                {children}
+              </a>
+            ),
+          img: ({ alt, src = '' }) => {
+            const url = IMAGES[`../../docs/${src.split('/').pop()}`];
+            return url ? <img src={url} alt={alt ?? ''} loading="lazy" /> : <span className="muted">[image: {alt || src}]</span>;
+          },
+        }}
+      >
+        {GUIDES[target.guide].text.replaceAll(DEFAULT_ORIGIN, window.location.origin)}
+      </ReactMarkdown>
+    ),
+    [target.guide, onNavigate],
+  );
 
   return (
     <dialog ref={dialog} className="dialog guide" onClose={onClose} aria-labelledby="guide-title">
@@ -111,31 +144,7 @@ function GuideDialog({ target, onNavigate, onClose }: { target: Target; onNaviga
         ))}
       </div>
       <div className="dialog-body md guide-body" ref={body}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            h1: heading('h1'),
-            h2: heading('h2'),
-            h3: heading('h3'),
-            h4: heading('h4'),
-            a: ({ href = '', children }) =>
-              /^[a-z]+:/i.test(href) ? (
-                <a href={href} target="_blank" rel="noreferrer noopener">
-                  {children}
-                </a>
-              ) : (
-                <a href={href} onClick={(event) => { event.preventDefault(); follow(href); }}>
-                  {children}
-                </a>
-              ),
-            img: ({ alt, src = '' }) => {
-              const url = IMAGES[`../../docs/${src.split('/').pop()}`];
-              return url ? <img src={url} alt={alt ?? ''} loading="lazy" /> : <span className="muted">[image: {alt || src}]</span>;
-            },
-          }}
-        >
-          {GUIDES[target.guide].text.replaceAll(DEFAULT_ORIGIN, window.location.origin)}
-        </ReactMarkdown>
+        {text}
       </div>
     </dialog>
   );

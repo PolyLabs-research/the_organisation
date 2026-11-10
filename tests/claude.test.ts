@@ -1,9 +1,13 @@
+import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ClaudeProvider } from '../src/server/providers/claude';
 import { ProviderError, type AgentTool, type CallUsage } from '../src/server/providers/types';
+import { waitFor } from './helpers';
 
 // These tests run the Claude provider against a local stand-in for the
 // Messages API that speaks the same streaming protocol. They check what the
@@ -25,6 +29,12 @@ interface Reply {
   usage?: Record<string, unknown>;
   /** Drop the connection part-way through the reply. */
   cut?: boolean;
+  /** Start the reply and then say nothing more, with the connection left open. */
+  hold?: boolean;
+  /** Start the reply and then end the stream in good order, as something on the way that times out can. */
+  unfinished?: boolean;
+  /** Answer 200 with nothing in it at all. */
+  empty?: boolean;
 }
 interface Seen {
   path: string;
@@ -89,10 +99,12 @@ beforeAll(async () => {
         return;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      if (reply.cut) {
-        // The reply starts, then the connection goes away.
+      if (reply.empty) return void res.end();
+      if (reply.cut || reply.hold || reply.unfinished) {
+        // The reply starts, then the connection goes away, or goes quiet, or the stream just ends.
         res.write(sse(reply).split('\n\n').slice(0, 2).join('\n\n') + '\n\n');
-        setTimeout(() => res.destroy(), 5);
+        if (reply.cut) setTimeout(() => res.destroy(), 5);
+        if (reply.unfinished) res.end();
         return;
       }
       res.end(sse(reply));
@@ -198,6 +210,14 @@ describe('structured calls', () => {
     expect(err.retryable).toBe(false);
   });
 
+  it('takes a request the content filter turned away with an error for a refusal, and sends it once', async () => {
+    replies.push({ status: 400, error: { type: 'invalid_request_error', message: 'Output blocked by content filtering policy' } });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect([err.code, err.retryable]).toEqual(['refusal', false]);
+    // Not tried again with the other form of the schema: it was not the schema that was refused.
+    expect(seen).toHaveLength(1);
+  });
+
   it('treats a reply cut off at the token limit as retryable', async () => {
     replies.push({ content: [{ type: 'text', text: '{"verdict":"pa' }], stop_reason: 'max_tokens' });
     const err = await failure(provider().structured(structuredRequest()));
@@ -219,11 +239,57 @@ describe('structured calls', () => {
     expect(err.retryable).toBe(true);
   });
 
+  it('treats a reply that stops arriving, with the connection closed in good order, the same way', async () => {
+    replies.push({ content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }], unfinished: true });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect([err.code, err.retryable]).toEqual(['unavailable', true]);
+    expect(err.message).toContain('ended before it was complete');
+    // So too an answer with nothing in it, which is not a reply at all.
+    replies.push({ empty: true });
+    const none = await failure(provider().structured(structuredRequest()));
+    expect([none.code, none.retryable]).toEqual(['unavailable', true]);
+  });
+
+  it('counts what a reply had said it read by the time the connection was lost', async () => {
+    replies.push({ content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }], cut: true });
+    const usage: CallUsage[] = [];
+    await failure(provider().structured(structuredRequest((u) => usage.push(u))));
+    // The reply never finished, but it had started, and what it had read by then was paid for.
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ model: 'claude-opus-5-5', inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 50 });
+    expect(usage[0]!.costUsd).toBeCloseTo((100 * 4 + 900 * 0.2 + 50 * 5) / 1e6, 10);
+  });
+
+  it('counts nothing for a call that was stopped on purpose', async () => {
+    replies.push({ content: [{ type: 'text', text: 'never finished' }], hold: true });
+    const stop = new AbortController();
+    const usage: CallUsage[] = [];
+    const call = failure(provider().structured({ ...structuredRequest((u) => usage.push(u)), signal: stop.signal }));
+    await waitFor(() => seen.length === 1, 'the request to arrive');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stop.abort();
+    expect((await call).code).toBe('aborted');
+    expect(usage).toHaveLength(0);
+  });
+
   it('treats work that outgrew the context window as a failure of the work, not of the provider', async () => {
     replies.push({ content: [], stop_reason: 'model_context_window_exceeded' });
     const err = await failure(provider().structured(structuredRequest()));
-    expect(err.code).toBe('invalid_output');
+    expect(err.code).toBe('too_long');
     expect(err.retryable).toBe(false);
+  });
+
+  it.each([
+    [400, 'prompt is too long: 210432 tokens > 200000 maximum'],
+    [400, 'input length and `max_tokens` exceed context limit: 180000 + 32000 > 200000, decrease input length or `max_tokens` and try again'],
+    [413, 'Request exceeds the maximum allowed number of bytes.'],
+  ])('says the same when the API turns the request itself away as too long (%i: %s)', async (status, message) => {
+    replies.push({ status, error: { type: status === 413 ? 'request_too_large' : 'invalid_request_error', message } });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect([err.code, err.retryable]).toEqual(['too_long', false]);
+    expect(err.message).toContain(message);
+    // Not tried again with the other form of the schema: it would be as long.
+    expect(seen).toHaveLength(1);
   });
 
   it('prices every attempt at the rates of the model that made it', async () => {
@@ -244,6 +310,28 @@ describe('structured calls', () => {
     const declined = (1000 * 4 + 100 * 20) / 1e6;
     const fallback = (1000 * 5 + 500 * 25 + 2000 * 0.5) / 1e6;
     expect(usage[0]!.costUsd).toBeCloseTo(declined + fallback, 10);
+  });
+
+  it('reads the answer of a fallback model that took over after the first model had begun one', async () => {
+    const marker = { type: 'raw' as const, block: { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' }, trigger: { type: 'refusal' } } };
+    // The fallback wrote the answer afresh: what the first model had written of it is not part of it.
+    replies.push({ content: [{ type: 'text', text: '{"verdict":"rew' }, marker, { type: 'text', text: JSON.stringify({ verdict: 'pass', summary: 'Good.' }) }], model: 'claude-opus-4-8' });
+    expect(await provider().structured(structuredRequest())).toEqual({ verdict: 'pass', summary: 'Good.' });
+    // The fallback carried on from where the first model stopped: the answer is the two together.
+    replies.push({ content: [{ type: 'text', text: '{"verdict":"pa' }, marker, { type: 'text', text: 'ss","summary":"Good."}' }], model: 'claude-opus-4-8' });
+    expect(await provider().structured(structuredRequest())).toEqual({ verdict: 'pass', summary: 'Good.' });
+  });
+
+  it('takes the key out of a refusal that quotes it back, before the refusal is shown or kept', async () => {
+    replies.push({ status: 401, error: { type: 'authentication_error', message: 'invalid x-api-key: test-key has been revoked' } });
+    const err = await failure(provider().structured(structuredRequest()));
+    expect(err.code).toBe('auth');
+    expect(err.message).toContain('invalid x-api-key: [the key] has been revoked');
+    expect(err.message).not.toContain('test-key');
+    // An agent's call meets the same refusal the same way.
+    replies.push({ status: 401, error: { type: 'authentication_error', message: 'invalid x-api-key: test-key has been revoked' } });
+    const met = await failure(provider().agent({ kind: 'task', system, prompt: 'Write the spec.', model: 'claude-opus-5-5', effort: 'medium', tools: [], webSearch: null, maxTurns: 10, context: {} }));
+    expect(met.message).not.toContain('test-key');
   });
 
   it.each([
@@ -381,6 +469,15 @@ describe('agent runs', () => {
     expect(written).toEqual([]);
   });
 
+  it('says so when the closing report was cut off at the token limit, and takes nothing at all for no report', async () => {
+    replies.push({ content: [{ type: 'text', text: 'I produced engineering/spec.md and the remaining wo' }], stop_reason: 'max_tokens' });
+    expect(await provider().agent(agentRequest())).toEqual({ text: 'I produced engineering/spec.md and the remaining wo', turns: 1, stopped: 'cut_short' });
+    // All of the room went on thinking: there is no report to keep, and another try may do better.
+    replies.push({ content: [], stop_reason: 'max_tokens' });
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['truncated', true]);
+  });
+
   it('asks for a closing report at the turn limit and stops there', async () => {
     const call = (id: string): Reply => ({ content: [{ type: 'tool_use', id, name: 'write_file', input: { path: `${id}.md`, content: 'x' } }], stop_reason: 'tool_use' });
     replies.push(call('toolu_1'), call('toolu_2'), { content: [{ type: 'text', text: 'Out of turns; two files written.' }] });
@@ -410,6 +507,22 @@ describe('agent runs', () => {
     expect(messages.map((m: any) => m.role)).toEqual(['user', 'assistant']);
   });
 
+  it('gives up on a turn that keeps pausing, not on a run in which several turns each paused and went on', async () => {
+    const call = (id: string): Reply => ({ content: [{ type: 'tool_use', id, name: 'write_file', input: { path: `${id}.md`, content: 'x' } }], stop_reason: 'tool_use' });
+    const pause: Reply = { content: [{ type: 'text', text: 'Searching…' }], stop_reason: 'pause_turn' };
+    // Six turns, each paused once by the server and then finished.
+    for (let i = 1; i <= 6; i++) replies.push(pause, call(`toolu_${i}`));
+    replies.push({ content: [{ type: 'text', text: 'Six files written.' }] });
+    const result = await provider().agent(agentRequest({ maxTurns: 24 }));
+    expect(result).toMatchObject({ text: 'Six files written.', stopped: 'done' });
+    expect(written).toHaveLength(6);
+    // One turn that is paused six times running is not going to finish.
+    replies.push(pause, pause, pause, pause, pause, pause);
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['unavailable', true]);
+    expect(err.message).toContain('kept pausing');
+  });
+
   it('stops between turns when told to, before spending anything more', async () => {
     replies.push({ content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' });
     let turn = 0;
@@ -427,6 +540,75 @@ describe('agent runs', () => {
     expect(written).toHaveLength(1);
     expect(seen).toHaveLength(3);
     expect(seen[2]!.body.messages).toEqual(seen[1]!.body.messages);
+  });
+
+  it('sends the same turn again when a reply simply stops arriving, and does not take that for a tool call it could not read', async () => {
+    const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
+    replies.push(call, { content: [{ type: 'text', text: 'half a rep' }], unfinished: true }, { content: [{ type: 'text', text: 'Done after a retry.' }] });
+    const result = await provider().agent(agentRequest());
+    expect(result).toEqual({ text: 'Done after a retry.', turns: 2, stopped: 'done' });
+    expect(written).toHaveLength(1);
+    expect(seen).toHaveLength(3);
+    // One that keeps stopping is given up on as something that may pass: the first try and three more.
+    seen = [];
+    replies.push({ unfinished: true }, { unfinished: true }, { unfinished: true }, { unfinished: true });
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['unavailable', true]);
+    expect(err.message).not.toContain('tool call');
+    expect(seen).toHaveLength(4);
+  });
+
+  it('counts a reply that was lost part-way once, and the one sent for in its place once', async () => {
+    const call: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: { path: 'a.md', content: 'x' } }], stop_reason: 'tool_use' };
+    replies.push(call, { content: [{ type: 'text', text: 'half a rep' }], cut: true }, { content: [{ type: 'text', text: 'Done after a retry.' }] });
+    const usage: CallUsage[] = [];
+    await provider().agent(agentRequest({ onUsage: (u) => usage.push(u) }));
+    // Three replies were paid for: the tool call, the reply that was lost, and the one that took its place.
+    expect(usage).toHaveLength(3);
+    expect(usage.map((u) => u.inputTokens)).toEqual([100, 100, 100]);
+    // The lost reply never said how long it was; the other two did.
+    expect(usage.map((u) => u.outputTokens)).toEqual([40, 0, 40]);
+  });
+
+  it('counts a reply whose tool call could not be read, before asking for the turn again', async () => {
+    replies.push(
+      // A line break written raw inside a string: the reply arrives whole, and its tool input is not JSON.
+      { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {}, rawInput: '{"path": "a.md", "content": "one line\nand another"}' }], stop_reason: 'tool_use' },
+      { content: [{ type: 'text', text: 'Done.' }] },
+    );
+    const usage: CallUsage[] = [];
+    const result = await provider().agent(agentRequest({ onUsage: (u) => usage.push(u) }));
+    expect(result).toEqual({ text: 'Done.', turns: 1, stopped: 'done' });
+    expect(written).toEqual([]);
+    expect(seen).toHaveLength(2);
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).toMatchObject({ inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 50 });
+  });
+
+  it('counts what a lost reply had written by its length, since it never got to say', async () => {
+    const raw = `{"path": "a.md", "content": "${'A line of the file.\n'.repeat(40)}"}`;
+    replies.push({ content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {}, rawInput: raw }], stop_reason: 'tool_use' }, { content: [{ type: 'text', text: 'Done.' }] });
+    const usage: CallUsage[] = [];
+    await provider().agent(agentRequest({ onUsage: (u) => usage.push(u) }));
+    // About four characters to a token: the 800-odd characters that arrived are some 200 tokens of output, not none.
+    expect(usage[0]!.outputTokens).toBe(Math.ceil(raw.length / 4));
+    expect(usage[0]!.costUsd).toBeCloseTo((100 * 4 + Math.ceil(raw.length / 4) * 20 + 900 * 0.2 + 50 * 5) / 1e6, 10);
+    // A reply that did say how long it was is counted as it said.
+    expect(usage[1]!.outputTokens).toBe(40);
+  });
+
+  it('gives up on a tool call that keeps arriving unreadable, without quoting the call in what it says', async () => {
+    const raw = `{"path": "a.md", "content": "${'A line of the file.\n'.repeat(400)}"}`;
+    const unreadable: Reply = { content: [{ type: 'tool_use', id: 'toolu_1', name: 'write_file', input: {}, rawInput: raw }], stop_reason: 'tool_use' };
+    replies.push(unreadable, unreadable, unreadable);
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['invalid_output', false]);
+    expect(seen).toHaveLength(3);
+    expect(written).toEqual([]);
+    // The failure is shown to a person and kept with the task: it says what went wrong, not the file that was being written.
+    expect(err.message).toContain('could not be read');
+    expect(err.message).not.toContain('A line of the file.');
+    expect(err.message.length).toBeLessThan(400);
   });
 
   it('sends the same turn again when the API is overloaded', async () => {
@@ -514,5 +696,65 @@ describe('agent runs', () => {
     replies.push({ content: [], stop_reason: 'refusal' });
     const err = await failure(provider().agent(agentRequest()));
     expect(err.code).toBe('refusal');
+  });
+
+  it('declines to continue when the refusal comes as an error from the content filter', async () => {
+    replies.push({ status: 400, error: { type: 'invalid_request_error', message: 'Output blocked by content filtering policy' } });
+    const err = await failure(provider().agent(agentRequest()));
+    expect([err.code, err.retryable]).toEqual(['refusal', false]);
+    expect(seen).toHaveLength(1);
+  });
+});
+
+describe('with no credentials to send', () => {
+  // The provider is handed no key, as it is for a login the client finds by itself, and there is none to be found:
+  // nothing in the environment, and an empty directory where a login would be kept.
+  const NAMES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_PROFILE', 'ANTHROPIC_FEDERATION_RULE_ID', 'ANTHROPIC_ORGANIZATION_ID', 'ANTHROPIC_CONFIG_DIR'];
+  const saved = new Map<string, string | undefined>();
+  let empty: string;
+  beforeEach(async () => {
+    empty = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-no-login-'));
+    for (const name of NAMES) {
+      saved.set(name, process.env[name]);
+      delete process.env[name];
+    }
+    process.env.ANTHROPIC_CONFIG_DIR = empty;
+  });
+  afterEach(async () => {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    await rm(empty, { recursive: true, force: true });
+  });
+  const keyless = () => new ClaudeProvider({ baseURL, maxRetries: 0, turnRetryDelayMs: 0 });
+  const task = { kind: 'task' as const, system, prompt: 'Write the spec.', model: 'claude-opus-5-5', effort: 'medium' as const, tools: [], webSearch: null, maxTurns: 10, context: {} };
+
+  it('says that is what is wrong, and does not wait and try again as if a connection had dropped', async () => {
+    for (const call of [() => keyless().structured(structuredRequest()), () => keyless().agent(task)]) {
+      const err = await failure(call());
+      expect([err.code, err.retryable]).toEqual(['auth', false]);
+      expect(err.message).toContain('Could not resolve authentication method');
+      expect(err.message).not.toMatch(/connection|part-way|tool call/);
+    }
+    // Nothing was sent, since there was nothing to send it with.
+    expect(seen).toHaveLength(0);
+  });
+
+  it('says the same of a login that is named and cannot be found', async () => {
+    process.env.ANTHROPIC_PROFILE = 'no-such-login';
+    for (const call of [() => keyless().structured(structuredRequest()), () => keyless().agent(task)]) {
+      const err = await failure(call());
+      expect([err.code, err.retryable]).toEqual(['auth', false]);
+      expect(err.message).toContain('no-such-login');
+      expect(err.message).not.toMatch(/tool call/);
+    }
+    expect(seen).toHaveLength(0);
+  });
+
+  it('says so for a call that is not a reply to be read, such as asking after a hosted session', async () => {
+    const err = await failure(keyless().hasSession('sesn_1'));
+    expect([err.code, err.retryable]).toEqual(['auth', false]);
+    expect(seen).toHaveLength(0);
   });
 });

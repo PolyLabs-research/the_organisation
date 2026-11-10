@@ -24,6 +24,8 @@ export interface FakeCall {
 export interface FakeReply {
   status?: number;
   error?: string;
+  /** The code the refusal carries, where an endpoint gives one. */
+  code?: string;
   content?: string;
   /** Reasoning text, sent in the field named. */
   reasoning?: string;
@@ -38,6 +40,8 @@ export interface FakeReply {
   cut?: boolean;
   /** End the stream in good order without ever saying why the reply ended, as a proxy that times out can. */
   unfinished?: boolean;
+  /** Send the words and then say nothing more, with the connection left open. */
+  hold?: boolean;
 }
 
 /** A reply from the Responses API: what the model produced, and how the response ended. */
@@ -63,6 +67,8 @@ export interface FakeResponse {
   bareFinal?: boolean;
   /** Drop the connection before the response is finished. */
   cut?: boolean;
+  /** Send what the model produced and then say nothing more, with the connection left open. */
+  hold?: boolean;
 }
 
 export interface FakeRequest {
@@ -159,7 +165,7 @@ export class FakeOpenAI {
       if (reason) return void fail(400, reason);
     }
     const reply = this.replies.shift() ?? this.auto.chat?.(body) ?? { content: 'Done.' };
-    if (reply.status && reply.status >= 400) return void fail(reply.status, reply.error ?? 'failed', reply.status === 429 && /quota/.test(reply.error ?? '') ? 'insufficient_quota' : undefined);
+    if (reply.status && reply.status >= 400) return void fail(reply.status, reply.error ?? 'failed', reply.code ?? (reply.status === 429 && /quota/.test(reply.error ?? '') ? 'insufficient_quota' : undefined));
 
     const usage = reply.usage === null ? undefined : { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200, ...reply.usage };
     const finish = reply.finish ?? (reply.calls?.length ? 'tool_calls' : 'stop');
@@ -189,7 +195,9 @@ export class FakeOpenAI {
       else if (Array.isArray(value)) for (const item of value) send({ [field]: [item] });
       else send({ [field]: value });
     }
-    if (reply.cut) return void res.destroy();
+    // What was written is given time to arrive first: a reply cut off part-way is one that had started.
+    if (reply.cut) return void setTimeout(() => res.destroy(), 5);
+    if (reply.hold) return;
     (reply.calls ?? []).forEach((call, index) => {
       const args = typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments);
       const id = call.id ?? `call_${index}`;
@@ -262,7 +270,8 @@ export class FakeOpenAI {
       if (item.type === 'message' && reply.text) for (const delta of pieces(reply.text)) send('response.output_text.delta', { output_index, content_index: 0, item_id: item.id, delta });
       send('response.output_item.done', { output_index, item });
     });
-    if (reply.cut) return void res.destroy();
+    if (reply.cut) return void setTimeout(() => res.destroy(), 5);
+    if (reply.hold) return;
     if (reply.streamError) {
       send('error', { code: reply.streamError.code, message: reply.streamError.message, param: null });
       return void res.end();

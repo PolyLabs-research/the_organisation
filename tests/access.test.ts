@@ -60,6 +60,34 @@ describe('encrypted business vault', () => {
     await writeFile(access.vault.file, JSON.stringify(envelope));
     await expect(reopened.unlock(phrase)).rejects.toThrow(/damaged/);
   });
+  it('forgets what it decrypted, as well as the key, when it is locked', async () => {
+    await access.addAccount(account);
+    const inside = access.vault as unknown as { key: Buffer | null; salt: Buffer | null; data: unknown };
+    const key = inside.key!;
+    expect(inside.data).not.toBeNull();
+    access.vault.lock();
+    // Every saved password and token was in that record. With the key gone it is no use to the program any
+    // more, only to whoever can read the program's memory.
+    expect(inside.data).toBeNull();
+    expect(inside.key).toBeNull();
+    expect(inside.salt).toBeNull();
+    expect(key.every((byte) => byte === 0)).toBe(true);
+    expect(() => access.vault.read()).toThrow(/Unlock/);
+  });
+  it('still opens a vault made with the settings it has always had', async () => {
+    // Made once by this program, with the passphrase below, for an organisation called org_fixture. If the way
+    // the key is derived, the cipher, or what a vault is bound to ever changes, the vaults people already have
+    // stop opening, or are made cheaper to break into, and nothing else here would notice. This file would.
+    const made =
+      '{"version":1,"salt":"ba3ZaN1E0w/BPXRWSxQQ0A==","iv":"h0j8zzLX/2fwHV/8","tag":"LjWcimKudfl7TbNTN8j5Yg==","ciphertext":"lL/TsrRYyKr2k9FdPA3Ec379RhmS2qIdnb1cvBuiiWlRmB5AzptESzsJDpLjXmBvuZE6NEBqf0hEKmhoTCGeYzSP+ifiyZbn2ga1x34u3GQSz8SqB12AftZH6fAxVRwBAW31sVGr2VK64QQxqUvCphWun0O7I053NnvqtQu/RUQGX65yFH4bQGcFCYbc1q06DSwpFKNEhztyC4x8oMTw5XaOozGnP+n6mGmpA2I40lhPMLUgXUAM6FAl2GQB4wpp3UjYPf1qfykZvC2NNPD5QJzpQuKZkr0brS92hGCHR/WKImjkzGE0SlnF8P1BVbTus0yz4ogpBVzlsE2XXjCDCjOTuEY1Q+sOIBKBlKjxAyf4jMM3utz26E09xjF63i+G4J8wPqBiesrQ+sZBUpln8mFy1NOO4NvMqInMij7+IYh1Y5q3duqeagpyVbhkD/hEofBgYH3S299wx4PtuSAsPppRe5p929Jocd/Bw8coeoglOnzZR/5U3v74YDzv8hlpnlED0J0krV2fKODlw6ClevebDZG3X+oIfdILmzld"}';
+    const file = path.join(dir, 'made-earlier.json');
+    await writeFile(file, made);
+    const vault = new AccessVault(file, 'org_fixture');
+    await vault.unlock('correct horse battery staple');
+    expect(vault.read().accounts).toEqual([expect.objectContaining({ id: 'account_fixture', username: 'orders@example.org', password: 'a-saved-password' })]);
+    vault.lock();
+    await expect(new AccessVault(file, 'org_other').unlock('correct horse battery staple')).rejects.toThrow(/incorrect|damaged/);
+  });
   it('serialises concurrent writes and refuses to overwrite an existing vault', async () => {
     await Promise.all(Array.from({ length: 12 }, (_, i) => access.request('coo', { service: 'Service ' + i, reason: 'Needed for work' })));
     expect((await access.view()).requests).toHaveLength(12);

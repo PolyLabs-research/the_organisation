@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { Component, memo, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Executive, Organisation, PauseReason, SopPhase } from '../shared/types';
 
@@ -56,17 +56,22 @@ export function Sop({
   );
 }
 
-export function Markdown({ children }: { children: string }) {
+/**
+ * Text an agent wrote, laid out as Markdown. Kept as it was drawn for as long as the text is the same: the server sends
+ * the whole organisation again at every change, and without this every message on the board was parsed again each time.
+ */
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
     <div className="md">
       <ReactMarkdown
         components={{
-          // Agent-written content can contain any link; open it away from the dashboard.
-          a: ({ href, children: label }) => (
-            <a href={href} target="_blank" rel="noreferrer noopener">
-              {label}
-            </a>
-          ),
+          // Agent-written content can contain any link, under any label: one that reads like a control of this
+          // page, or like an address other than its own. So a link is not one here. It is written out as its
+          // label and its address, and nobody is one click from an address a model chose.
+          a: ({ href, children: label }) => {
+            if (!href || label === href) return <>{label}</>;
+            return label ? <>{label} ({href})</> : <>{href}</>;
+          },
           // An image would be fetched as soon as the text is shown, which tells whoever wrote
           // the text that it was read and can carry data out in the address. Show its label instead.
           img: ({ alt, src }) => <span className="muted">[image: {alt || src}]</span>,
@@ -76,7 +81,7 @@ export function Markdown({ children }: { children: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 export function money(usd: number): string {
   if (usd > 0 && usd < 0.01) return '<$0.01';
@@ -160,6 +165,34 @@ export function ErrorNote({ children, onDismiss }: { children: ReactNode; onDism
       ) : null}
     </div>
   );
+}
+
+/**
+ * Keeps an error thrown while something is being drawn to the part of the page it happened in, and says so there.
+ * Left to itself, React answers such an error by taking the whole page away, and every control with it.
+ */
+export class ErrorBoundary extends Component<{ what: string; page?: boolean; children: ReactNode }, { failed: string | null }> {
+  override state: { failed: string | null } = { failed: null };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { failed: error instanceof Error ? error.message : String(error) };
+  }
+
+  override render() {
+    if (this.state.failed === null) return this.props.children;
+    const note = (
+      <div className="note note-bad" role="alert">
+        <span>
+          <strong>{this.props.what} could not be shown.</strong> Drawing it failed with “{this.state.failed}”. That is a fault in this page, and stops nothing that was running.
+          Reload the page to try again.
+        </span>
+        <button type="button" className="button" onClick={() => window.location.reload()}>
+          Reload the page
+        </button>
+      </div>
+    );
+    return this.props.page ? <main className="page">{note}</main> : note;
+  }
 }
 
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {

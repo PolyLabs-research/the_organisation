@@ -1,11 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
+import type { BetaMessageStream } from '@anthropic-ai/sdk/lib/BetaMessageStream';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
 import { hasCause, translate } from './errors';
 import { strictSchema, type JsonSchema } from './schema';
 import { ManagedResources } from './managed/resources';
-import { DEFAULT_TIMINGS, PlanSession, archiveSession, threadDetail, type SessionTimings } from './managed/session';
+import { DEFAULT_TIMINGS, PlanSession, archiveSession, holdSession, threadDetail, type SessionTimings } from './managed/session';
+import { scrub } from './openai-compatible';
 import { DEFAULT_MODEL, MODELS, WEB_SEARCH_PRICE, costOfRequest, webFetchToolFor, webSearchToolFor } from './pricing';
 import {
   ProviderError,
@@ -35,6 +37,8 @@ const TURN_RETRIES = 3;
 export interface ClaudeProviderOptions {
   apiKey?: string;
   baseURL?: string;
+  /** Headers for every request, over the client's own. One set to null is left out. */
+  defaultHeaders?: Record<string, string | null>;
   maxRetries?: number;
   /** Delay before a failed agent turn is sent again; doubles each time. */
   turnRetryDelayMs?: number;
@@ -49,6 +53,7 @@ export interface ClaudeProviderOptions {
 /** Runs the organisation on Claude through the Anthropic API. */
 export class ClaudeProvider implements Provider {
   private readonly client: Anthropic;
+  private readonly apiKey: string;
   private readonly turnRetryDelayMs: number;
   private readonly resources: ManagedResources;
   private readonly workspace: string;
@@ -57,12 +62,23 @@ export class ClaudeProvider implements Provider {
   constructor(options: ClaudeProviderOptions = {}) {
     const { turnRetryDelayMs = 2000, managedStateFile = 'data/managed.json', workspace = 'default', sessionTimings, ...clientOptions } = options;
     this.turnRetryDelayMs = turnRetryDelayMs;
+    this.apiKey = options.apiKey ?? '';
     // With no key passed, the SDK resolves credentials from the environment
     // (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile).
     this.client = new Anthropic({ maxRetries: 4, ...clientOptions });
     this.resources = new ManagedResources(this.client, managedStateFile);
     this.workspace = workspace;
     this.sessionTimings = { ...DEFAULT_TIMINGS, ...sessionTimings };
+  }
+
+  /**
+   * What went wrong, as the engine needs to know it. What Anthropic, or an endpoint that stands in for it, said goes
+   * on to be shown and kept, so a key it quotes back is taken out first.
+   */
+  private translate(err: unknown): ProviderError {
+    const failure = translate(err);
+    const clean = scrub(failure.message, this.apiKey);
+    return clean === failure.message ? failure : new ProviderError(clean, failure.code, failure.retryable);
   }
 
   /**
@@ -73,7 +89,7 @@ export class ClaudeProvider implements Provider {
     try {
       return await new PlanSession({ client: this.client, resources: this.resources, workspace: this.workspace, timings: this.sessionTimings }, job).run();
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -81,7 +97,7 @@ export class ClaudeProvider implements Provider {
     try {
       return await threadDetail(this.client, sessionId, threadId);
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -92,7 +108,7 @@ export class ClaudeProvider implements Provider {
       return true;
     } catch (err) {
       if (err instanceof Anthropic.NotFoundError) return false;
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -100,7 +116,15 @@ export class ClaudeProvider implements Provider {
     try {
       return await archiveSession(this.client, sessionId, Math.min(300, this.sessionTimings.graceMs));
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
+    }
+  }
+
+  async holdSession(sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null> {
+    try {
+      return await holdSession(this.client, sessionId);
+    } catch (err) {
+      throw this.translate(err);
     }
   }
 
@@ -109,7 +133,7 @@ export class ClaudeProvider implements Provider {
     try {
       return await this.resources.ensure(spec);
     } catch (err) {
-      throw translate(err);
+      throw this.translate(err);
     }
   }
 
@@ -136,12 +160,13 @@ export class ClaudeProvider implements Provider {
       // as supported, so a reply can only name ids that exist. Should the API
       // refuse such a schema, repeat the call with the SDK's more conservative
       // form and keep to that form afterwards.
-      if (!(err instanceof Anthropic.BadRequestError) || this.plainSchemas) throw translate(err);
+      // A request turned away for what it says, or for its length, would be turned away in either form.
+      if (!(err instanceof Anthropic.BadRequestError) || this.plainSchemas || this.translate(err).code !== 'bad_request') throw this.translate(err);
       try {
         message = await this.requestStructured(req, true);
         this.plainSchemas = true;
       } catch {
-        throw translate(err);
+        throw this.translate(err);
       }
     }
     req.onUsage?.(usageOf(message, req.model));
@@ -149,16 +174,21 @@ export class ClaudeProvider implements Provider {
     if (message.stop_reason === 'max_tokens') {
       throw new ProviderError('The reply was cut off before it was complete.', 'truncated', true);
     }
-    const text = message.content
-      .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
-    let data: unknown;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new ProviderError('The reply was not valid JSON.', 'invalid_output', true);
-    }
+    const read = (blocks: Anthropic.Beta.BetaContentBlock[]): unknown => {
+      const text = blocks
+        .filter((block): block is Anthropic.Beta.BetaTextBlock => block.type === 'text')
+        .map((block) => block.text)
+        .join('');
+      try {
+        return JSON.parse(text);
+      } catch {
+        return undefined;
+      }
+    };
+    // A fallback model that took over part-way leaves a marker where it began. What follows the marker is the
+    // answer written afresh, or the rest of the one the first model had started: whichever reads as JSON.
+    const data = read(message.content.slice(message.content.findLastIndex((block) => block.type === 'fallback') + 1)) ?? read(message.content);
+    if (data === undefined) throw new ProviderError('The reply was not valid JSON.', 'invalid_output', true);
     // The API enforces the shape; this also enforces whatever the schema could not express to it.
     const parsed = req.schema.safeParse(data);
     if (!parsed.success) {
@@ -169,8 +199,8 @@ export class ClaudeProvider implements Provider {
   }
 
   private requestStructured<T>(req: StructuredRequest<T>, plain: boolean): Promise<Anthropic.Beta.BetaMessage> {
-    return this.client.beta.messages
-      .stream(
+    return replyOf(
+      this.client.beta.messages.stream(
         {
           model: req.model,
           max_tokens: STRUCTURED_MAX_TOKENS,
@@ -181,8 +211,9 @@ export class ClaudeProvider implements Provider {
           messages: [{ role: 'user', content: req.prompt }],
         },
         { signal: req.signal },
-      )
-      .finalMessage();
+      ),
+      req,
+    );
   }
 
   /**
@@ -228,8 +259,8 @@ export class ClaudeProvider implements Provider {
 
       let message: Anthropic.Beta.BetaMessage;
       try {
-        message = await this.client.beta.messages
-          .stream(
+        message = await replyOf(
+          this.client.beta.messages.stream(
             {
               model: req.model,
               max_tokens: AGENT_MAX_TOKENS,
@@ -243,23 +274,27 @@ export class ClaudeProvider implements Provider {
               messages,
             },
             { signal: req.signal },
-          )
-          .finalMessage();
+          ),
+          req,
+        );
         badJson = 0;
         retries = 0;
       } catch (err) {
-        if (req.signal?.aborted) throw translate(err);
-        const failure = translate(err);
+        if (req.signal?.aborted) throw this.translate(err);
+        const failure = this.translate(err);
         // The failed turn was never added to the history, so the same request can be sent
         // again. Giving up on the run instead would mean paying for every earlier turn twice.
         if (failure.retryable && retries < TURN_RETRIES) {
           await sleep(this.turnRetryDelayMs * 2 ** retries++, req.signal);
           continue;
         }
-        if (!(err instanceof Anthropic.APIError) && !hasCause(err)) {
+        if (!(err instanceof ProviderError) && !(err instanceof Anthropic.APIError) && !hasCause(err)) {
           // With eager input streaming, a tool input that is not parseable JSON rejects here.
           if (++badJson <= 2) continue;
-          throw new ProviderError(`The agent’s tool call could not be read: ${(err as Error).message}`, 'invalid_output', false);
+          // The SDK's message ends with the whole of the input it could not read, which may be a file as long as
+          // a megabyte. What went wrong is kept; the input is not, since this is shown to a person and stored.
+          const why = (err as Error).message.replace(/\s*JSON: [\s\S]*$/, '').slice(0, 300);
+          throw new ProviderError(`The agent’s tool call could not be read: ${why}`, 'invalid_output', false);
         }
         throw failure;
       }
@@ -275,6 +310,8 @@ export class ClaudeProvider implements Provider {
         messages.push({ role: 'assistant', content: message.content });
         continue;
       }
+      // The turn came to its end: the limit is on one turn being resumed again and again, not on the whole run.
+      pauses = 0;
 
       const { content, calls } = afterFallback(message.content);
       const text = content
@@ -282,7 +319,12 @@ export class ClaudeProvider implements Provider {
         .map((block) => block.text)
         .join('\n')
         .trim();
-      if (!calls.length) return { text, turns, stopped: wrapUpSent ? 'cut_short' : 'done' };
+      if (!calls.length) {
+        // Words cut off at the token limit are still a report, and are marked as one that was cut short. Nothing at
+        // all is not a report.
+        if (message.stop_reason === 'max_tokens' && !text) throw new ProviderError('The reply was cut off before it said anything.', 'truncated', true);
+        return { text, turns, stopped: wrapUpSent || message.stop_reason === 'max_tokens' ? 'cut_short' : 'done' };
+      }
 
       // A tool input cut off at the token limit can still parse as a smaller valid object, so never run it.
       if (message.stop_reason === 'max_tokens') {
@@ -331,6 +373,47 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     }
     signal?.addEventListener('abort', done, { once: true });
   });
+
+/**
+ * The finished reply of a stream. A reply that fails once it has started to arrive has been paid for as far as
+ * it got, so what the stream had said of its size by then is counted before the failure is passed on. A call
+ * that was stopped on purpose is not counted.
+ */
+async function replyOf(stream: BetaMessageStream, req: Pick<AgentRequest, 'model' | 'signal' | 'onUsage'>): Promise<Anthropic.Beta.BetaMessage> {
+  let started: Anthropic.Beta.BetaMessage | undefined;
+  let written = 0;
+  stream.on('streamEvent', (event, snapshot) => {
+    started = snapshot;
+    if (event.type === 'content_block_delta') written += sizeOf(event.delta);
+  });
+  try {
+    return await stream.finalMessage();
+  } catch (err) {
+    if (started && !req.signal?.aborted) {
+      // A reply says how much it wrote only as it ends. One that never got that far is counted by the length
+      // of what had arrived, at about four characters to a token.
+      const usage = started.stop_reason === null ? { ...started.usage, output_tokens: Math.max(started.usage.output_tokens, Math.ceil(written / 4)) } : started.usage;
+      req.onUsage?.(usageOf({ ...started, usage }, req.model));
+    }
+    // Nothing was sent at all, and it was not the connection that failed: the SDK stops there when it has no key,
+    // token or login to send the request with, or cannot use the one it has. That is what this nearly always is,
+    // but not what it must be, so the message says what is known and gives the SDK's own words for the rest.
+    if (!stream.response && !(err instanceof Anthropic.APIError) && !req.signal?.aborted) {
+      throw new ProviderError(`Nothing could be sent to Anthropic, which usually means no usable key, token or login was found: ${(err as Error).message}`, 'auth', false);
+    }
+    // A stream that just stops, with no error from the API or from the connection, leaves the SDK with no message
+    // to give: a reply that was never finished, or an answer with nothing in it. That is a reply lost on the way
+    // like any other, and asking again may well get it.
+    if (!(err instanceof Anthropic.APIError) && !hasCause(err) && (!stream.errored || (!started && stream.response))) {
+      throw new ProviderError('The reply from Anthropic ended before it was complete.', 'unavailable', true);
+    }
+    throw err;
+  }
+}
+
+/** How many characters of words, thinking or tool input one piece of a streamed reply carries. */
+const sizeOf = (delta: Anthropic.Beta.BetaRawContentBlockDelta): number =>
+  delta.type === 'text_delta' ? delta.text.length : delta.type === 'input_json_delta' ? delta.partial_json.length : delta.type === 'thinking_delta' ? delta.thinking.length : 0;
 
 /**
  * What of an assistant turn may be sent back, and which tool calls in it are
@@ -399,7 +482,7 @@ function checkStop(message: Anthropic.Beta.BetaMessage): void {
   }
   if (message.stop_reason === 'model_context_window_exceeded') {
     // Trying the same work again would end the same way, so this is a failure of the work, not of the provider.
-    throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+    throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Calibration, clampEffort, effortScaleText, forecast, phaseSamples, taskSamples, type Sample } from '../src/shared/effort';
+import { Calibration, clampEffort, effortScaleText, forecast, least, most, phaseSamples, taskSamples, type Sample } from '../src/shared/effort';
 import { createOrganisation } from '../src/server/engine/state';
 import type { ActivityEntry, Organisation, Plan, Task } from '../src/shared/types';
 import { harness, runToRest } from './helpers';
@@ -64,6 +64,17 @@ describe('learning what each level takes', () => {
       entry({ kind: 'kickoff', start: T0, minutes: 1, effort: 3 }),
     ]);
     expect(samples).toEqual([{ effort: 3, minutes: 3, costUsd: 0.1, model: 'claude-sonnet-5-5' }]);
+  });
+
+  it('learns from a log of any length', () => {
+    // More finished tasks at one level than a call can be handed as arguments, which is how the least and the most used to be found.
+    const cal = new Calibration(Array.from({ length: 150_000 }, (_, i) => sample(3, 1 + (i % 7))));
+    expect(cal.levels).toEqual([
+      expect.objectContaining({ model: '*', effort: 3, n: 150_000, minutes: { median: 4, min: 1, max: 7 } }),
+      expect.objectContaining({ model: 'm', effort: 3, n: 150_000, minutes: { median: 4, min: 1, max: 7 } }),
+    ]);
+    expect(least([])).toBe(Infinity);
+    expect(most([])).toBe(-Infinity);
   });
 });
 

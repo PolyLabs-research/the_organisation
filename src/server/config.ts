@@ -8,6 +8,11 @@ export const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export interface Config {
   port: number;
   host: string;
+  /**
+   * Names the server answers to when it listens beyond loopback, besides its own addresses. A request that
+   * arrives under any other name is a web page that has pointed a name of its own at this machine.
+   */
+  allowedHosts?: string[];
   dataDir: string;
   /**
    * mock: always simulate, whatever keys there are. auto: call real models once any key is connected, and
@@ -41,6 +46,14 @@ function claudeCredentialsPresent(env: NodeJS.ProcessEnv): boolean {
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 
+/** Host names from a comma-separated list, as they appear in a Host header: lower case, without a port. */
+export function hostNames(list: string | undefined): string[] {
+  return (list ?? '')
+    .split(',')
+    .map((name) => name.trim().toLowerCase().replace(/:\d+$/, ''))
+    .filter(Boolean);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const requested = (env.ORG_PROVIDER ?? 'auto').toLowerCase();
   let provider: Config['provider'];
@@ -59,6 +72,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     port: Number(env.PORT ?? 4780),
     host,
+    allowedHosts: hostNames(env.ORG_ALLOWED_HOSTS),
     dataDir: path.resolve(env.ORG_DATA_DIR ?? path.join(ROOT_DIR, 'data')),
     provider,
     providerReason,

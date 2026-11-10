@@ -20,7 +20,8 @@ export interface Meta {
   profiles: OperatingProfile[];
   defaults: OrgSettings;
   limits: { maxAgentsPerLead: number; maxLeads: number };
-  /** The providers a key can be added for. Null when this server does not manage keys. */
+  /** Organisations on disk that the server could not load when it started, and why: each is a folder under the data folder's orgs. */
+  unreadable?: Array<{ folder: string; reason: string }>;
   /** The providers a key can be added for, and the day their list prices were read. Null on a server that keeps no keys. */
   keys: { presets: PresetInfo[]; forcedSimulation: boolean; pricesChecked: string } | null;
 }
@@ -91,15 +92,24 @@ export const api = {
     request<{ path: string; content: string; truncated: boolean }>('GET', `/api/orgs/${id}/file?path=${encodeURIComponent(path)}`),
 };
 
+/** How long a dashboard may be out of view before it gives its stream up. Long enough that a glance at another tab costs nothing. */
+const REST_AFTER_MS = 2000;
+
 /**
  * Keeps a live view of one organisation. The server pushes a fresh view on
- * every change; the browser reconnects by itself if the stream drops.
+ * every change; the browser reconnects by itself if the stream drops, and a
+ * stream it has given up on is opened again from here.
+ *
+ * A dashboard that is out of view gives its stream up, and opens it again when
+ * it is looked at: `resumed` counts those returns, for whatever must then ask
+ * again for what it missed.
  */
 export function useOrgStream(id: string) {
   const [view, setView] = useState<OrgView | null>(null);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [missing, setMissing] = useState(false);
+  const [resumed, setResumed] = useState(0);
   const seen = useRef(new Set<string>());
 
   useEffect(() => {
@@ -109,45 +119,95 @@ export function useOrgStream(id: string) {
     seen.current = new Set();
     let closed = false;
 
-    api
-      .activity(id)
-      .then((entries) => {
-        if (closed) return;
-        for (const e of entries) seen.current.add(e.id + e.at);
-        setActivity(entries);
-      })
-      .catch(() => {});
+    // The most recent calls, asked for when the page opens and again after a spell out of view. What the stream has
+    // already brought is kept, and what it brought while the answer was on its way is not lost to it.
+    const recent = () =>
+      api
+        .activity(id)
+        .then((entries) => {
+          if (closed) return;
+          const fresh = entries.filter((e) => !seen.current.has(e.id + e.at));
+          for (const e of fresh) seen.current.add(e.id + e.at);
+          if (fresh.length) setActivity((list) => [...list, ...fresh].sort((a, b) => a.at.localeCompare(b.at)).slice(-300));
+        })
+        .catch(() => {});
+    void recent();
 
-    const source = new EventSource(`/api/orgs/${id}/events`);
-    source.addEventListener('open', () => setConnected(true));
-    source.addEventListener('view', (event) => setView(JSON.parse((event as MessageEvent).data) as OrgView));
-    source.addEventListener('activity', (event) => {
-      const entry = JSON.parse((event as MessageEvent).data) as ActivityEntry;
-      const key = entry.id + entry.at;
-      if (seen.current.has(key)) return;
-      seen.current.add(key);
-      setActivity((list) => [...list.slice(-299), entry]);
-    });
-    source.addEventListener('error', () => {
-      setConnected(false);
-      // A stream that never opened may mean the organisation is gone; ask once to tell the two apart.
-      api.orgs().then(
-        (orgs) => {
-          if (!closed && !orgs.some((o) => o.id === id)) {
-            setMissing(true);
-            source.close();
-          }
-        },
-        () => {},
-      );
-    });
+    let source: EventSource;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+    const open = () => {
+      const stream = (source = new EventSource(`/api/orgs/${id}/events`));
+      stream.addEventListener('open', () => {
+        failures = 0;
+        setConnected(true);
+      });
+      stream.addEventListener('view', (event) => setView(JSON.parse((event as MessageEvent).data) as OrgView));
+      stream.addEventListener('activity', (event) => {
+        const entry = JSON.parse((event as MessageEvent).data) as ActivityEntry;
+        const key = entry.id + entry.at;
+        if (seen.current.has(key)) return;
+        seen.current.add(key);
+        setActivity((list) => [...list.slice(-299), entry]);
+      });
+      stream.addEventListener('error', () => {
+        setConnected(false);
+        // A stream that drops, the browser opens again. One that is answered with an error (by a proxy in front of a
+        // server that is away, say) it closes for good, so that one is opened again from here: after a second, then
+        // two, then four, up to half a minute.
+        if (stream.readyState === EventSource.CLOSED && !closed) retry = setTimeout(open, Math.min(30_000, 1000 * 2 ** failures++));
+        // A stream that never opened may mean the organisation is gone; ask once to tell the two apart.
+        api.orgs().then(
+          (orgs) => {
+            if (!closed && !orgs.some((o) => o.id === id)) {
+              closed = true;
+              setMissing(true);
+              clearTimeout(retry);
+              source.close();
+            }
+          },
+          () => {},
+        );
+      });
+    };
+    open();
+
+    // A browser keeps at most six connections to one server, and a stream holds one for as long as it is open. With six
+    // dashboards open, nothing more could be asked of the server from any of them: every button waited, without a word.
+    // So a dashboard nobody is looking at lets its stream go, and one that is looked at again opens it and is sent the
+    // organisation as it then is.
+    let resting = false;
+    let rest: ReturnType<typeof setTimeout> | undefined;
+    const onVisibility = () => {
+      clearTimeout(rest);
+      if (closed) return;
+      if (document.visibilityState === 'hidden') {
+        rest = setTimeout(() => {
+          resting = true;
+          clearTimeout(retry);
+          source.close();
+        }, REST_AFTER_MS);
+      } else if (resting) {
+        resting = false;
+        failures = 0;
+        setResumed((n) => n + 1);
+        void recent();
+        open();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    onVisibility();
+
     return () => {
       closed = true;
+      clearTimeout(retry);
+      clearTimeout(rest);
+      document.removeEventListener('visibilitychange', onVisibility);
       source.close();
     };
   }, [id]);
 
-  return { view, setView, activity, connected, missing };
+  return { view, setView, activity, connected, missing, resumed };
 }
 
 /** Run an action, tracking whether it is in progress and what went wrong. */

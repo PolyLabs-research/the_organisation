@@ -134,7 +134,7 @@ This is early software, and the README says plainly what has been run for real a
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
 | Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
 | GitHub repositories | Reads checked against the real API on a public repository, without a token. Commits, pull requests and workflows tested against a local stand-in only. Nothing has been written to a real repository. |
-| Tests | 641, among them whole organisations run through the loop. The suite takes about twenty seconds. |
+| Tests | More than 850, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
@@ -203,7 +203,7 @@ The library lives in [`src/shared/profiles.ts`](src/shared/profiles.ts); add or 
 
 **Agents.** Each lead is allocated a number of agents (1 to 8, adjustable while the organisation runs). For each phase the lead hands out tasks; its agents work them in parallel, never more at once than the lead has agents, and report back to the lead. Agents put their work products in a shared workspace as files, which every seat and agent can read.
 
-**Ordering between plans.** Work here takes minutes, not days, so plans are not scheduled by calendar dates. Instead, when a lead drafts a plan it can say that one of its phases needs a phase of another lead's plan first (the CMO's Position phase waits for the CTO's Spec, say). The phase does not start until that phase has passed, and the lead is handed what it produced. If the plan waited on is cancelled or fails, the wait lets go. Plans that end up waiting on each other in a ring are freed automatically, with a note on the board. Board rulings that put one piece of work before another become waits in the same way. Dates are kept for what the outside world fixes, such as a filing deadline or a date the shareholders set.
+**Ordering between plans.** Work here takes minutes, not days, so plans are not scheduled by calendar dates. Instead, when a lead drafts a plan it can say that one of its phases needs a phase of another lead's plan first (the CMO's Position phase waits for the CTO's Spec, say). The phase does not start until that phase has passed, and the lead is handed what it produced. If the plan waited on is cancelled or fails, the wait lets go, and so it does if that plan is revised to leave the phase out. A wait follows the phase itself: when the other plan is revised and its phases move, it still waits for the one that was named. Plans that end up waiting on each other in a ring are freed automatically, with a note on the board. Board rulings that put one piece of work before another become waits in the same way. Dates are kept for what the outside world fixes, such as a filing deadline or a date the shareholders set.
 
 **Changing files.** Agents change an existing file with `edit_file`, replacing one exact passage at a time, instead of writing the whole file again. They are asked to keep each work product as short as its purpose allows, and not to write logs, trackers or notes about their own process beside it.
 
@@ -224,7 +224,7 @@ Agents can work in one of two ways, chosen per organisation: **on this machine**
 
 ## Shared calendar and business operations
 
-**Calendar** is a month view and agenda over persistent commitments. A deadline says when work is due; an earliest start prevents it starting too soon. Undated work remains in the agenda. Dependencies must be verified before the dependent job can start. Recurring jobs create one next occurrence after verification, retaining the old result. Repeated schedules use fixed 24-hour days in UTC; the interface displays dates in your browser's timezone.
+**Calendar** is a month view and agenda over persistent commitments. A deadline says when work is due; an earliest start prevents it starting too soon. Undated work remains in the agenda. Dependencies must be verified before the dependent job can start. Recurring jobs create one next occurrence after verification, retaining the old result. A repeat steps by calendar days in the timezone of the machine the server runs on, so it keeps its time of day when the clocks change there; the interface displays dates in your browser's timezone.
 
 Every execution plan gets a linked commitment. Plan completion moves that commitment to **awaiting verification**, with the report as evidence to inspect. It becomes complete only when its owner, assigned independent reviewer, or a person verifies it with a note. Agents can submit evidence but cannot verify their own work. A failed or cancelled execution leaves a blocked commitment to resolve. Commitments and their evidence stay available when old plans are archived.
 
@@ -256,7 +256,7 @@ The vault normally locks after 30 minutes without use. For scheduled unattended 
 
 | Privilege | At the start | What enforces it |
 | --- | --- | --- |
-| Search the web | On | The search tool is not given, locally or in a hosted session. Web search must also be on for the organisation. |
+| Search the web | On | The search tool is not given, locally or to a hosted session that starts without it. Web search must also be on for the organisation. |
 | Update business records | On | The tool is not given, and updates from structured calls and hosted sessions are refused. The CEO has this one too. |
 | Ask the signatory to pay or sign | On | The request is not filed, and the board is told what was refused. |
 | Read assigned mailboxes | On | The tool is not given, and the access service refuses the read, also when it comes back from the mail server. |
@@ -269,7 +269,7 @@ The vault normally locks after 30 minutes without use. For scheduled unattended 
 | Start build workflows | **Off** | The tool is not given, and the access service refuses anything not on the repository's list. |
 | Change build pipelines | **Off** | Anything under `.github` is refused in a commit. |
 
-Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account or a repository is stopped and its browser closed. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
+Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account or a repository is stopped and its browser closed. The one thing a change cannot reach is the web access of a hosted session that has already started: a session is given its tools and its network when it starts and keeps them until its plan is over. The board says so when that happens, and pausing the organisation holds the session. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
 
 **Without Act on accounts**, a session gets one sign-in, on the page it opened, and from then on the browser refuses any request but GET, HEAD and OPTIONS. That is a limit on the network, so it holds whichever element an agent presses and whatever a page's own scripts try to send. Nothing leaves. The agent is told, and can read on or ask a person for help.
 
@@ -328,6 +328,8 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
 
 Start, pause, stop and settings are at the top of the dashboard. Pause lets calls in flight finish; stop cuts them off and puts the interrupted work back in the queue. Either one holds hosted sessions where they are.
 
+The dashboard follows the organisation over one connection that stays open, and a browser keeps at most six to one server. A dashboard in a tab that is out of view lets its connection go after two seconds and opens it again when you come back to it, so any number can be open in tabs. More than five in windows that are all in view at once is too many: the sixth takes the last connection, and nothing more can be asked of the server from any of them until one is closed.
+
 ### Overseer
 
 Models cannot say how long work will take, but they can say how big it is. Every lead rates each plan, phase and task it sets on a 1 to 10 effort scale. The anchors are in [`src/shared/effort.ts`](src/shared/effort.ts):
@@ -345,9 +347,9 @@ Models cannot say how long work will take, but they can say how big it is. Every
 | 9 | A spec, a plan for many agents, and a campaign to carry it out across several leads. |
 | 10 | A full programme: several parts, each a 7 or 8 in its own right, built over many cycles. |
 
-The organisation learns what each level takes, in minutes and dollars, from the rated work it finishes, separately for each model. That turns ratings into a forecast.
+The organisation learns what each level takes, in minutes and dollars, from the rated work it finishes, separately for each model. That turns ratings into a forecast. These views read the organisation's log of model calls: the most recent 20,000 of them, once it has made more than that.
 
-- **Timeline**: a Gantt chart with a swim lane per seat, and a row for each of a lead's agents beneath it. Every call is a bar, coloured by kind of work: agent tasks, a lead's own planning and reviews, and board work. Unfinished rated work is drawn ahead as hatched forecast bars, respecting phases that wait on other leads. While the organisation is paused, the forecast runs from where the work stopped.
+- **Timeline**: a Gantt chart with a swim lane per seat, and a row for each of a lead's agents beneath it. Every call is a bar, coloured by kind of work: agent tasks, a lead's own planning and reviews, and board work. On a log of more than 3,000 calls the latest 3,000 are drawn, and the chart says so. Unfinished rated work is drawn ahead as hatched forecast bars, respecting phases that wait on other leads. While the organisation is paused, the forecast runs from where the work stopped.
 - **Effort**: how long and how much each effort level has actually taken, by model, for tasks and for phases. It shows whether the ratings mean anything, and how the models differ.
 - **Spend**: spend over time against the budget, by seat and by kind of work, and what the forecast says the unfinished rated work will cost.
 - **Bottlenecks**: what is holding work up now. That covers phases waiting on other leads, open board decisions, requests waiting for the signatory, rework, failed tasks, busy call slots, and a forecast that runs past the budget.
@@ -441,11 +443,11 @@ Two models with no entry here sit between the last two rows, Xiaomi's MiMo-V2.6-
 
 The [Arena text leaderboard](https://arena.ai/leaderboard/text) of 27 October 2026 orders the top differently (Gemini 4 Carbon, Gemini 4 Argon, Claude Opus 5.5, Muse Wonder, Claude Fable 5.1) and puts the Chinese models much closer to the rest. Neither board has scored ByteDance's newest models. These lists go out of date in weeks: the models a key can call are always read from the provider, so a newer model shows up without any change here, under "everything else", until someone adds it to the picks in [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts).
 
-**How a model is named.** An organisation's settings hold a model as `<key>:<model id>`, such as `openai:gpt-6.1-sol` or `openrouter:anthropic/claude-opus-5.5`. A second key for the same provider is `openai-2`, and so on. A bare id such as `claude-opus-5-5` is a Claude model on the Anthropic key called `anthropic` (the first one added, or the one from `ANTHROPIC_API_KEY`), which is how organisations were set up before there was a choice. With more than one Anthropic key, each is an account of its own: a hosted session belongs to the key that started it, and the saved agents it starts from are recorded per key. The command line takes the same names: `--model` for the executives (and the agents, unless `--agent-model` names another).
+**How a model is named.** An organisation's settings hold a model as `<key>:<model id>`, such as `openai:gpt-6.1-sol` or `openrouter:anthropic/claude-opus-5.5`. A second key for the same provider is `openai-2`, and so on. A key from the environment has the provider's plain name, or `openai-env` where a key added in the interface already had that name; whichever it is first given, it keeps, so removing the other key does not rename it. A bare id such as `claude-opus-5-5` is a Claude model on the Anthropic key called `anthropic` (the first one added, or the one from `ANTHROPIC_API_KEY` where that came first), which is how organisations were set up before there was a choice. With more than one Anthropic key, each is an account of its own: a hosted session belongs to the key that started it, and the saved agents it starts from are recorded per key. The command line takes the same names: `--model` for the executives (and the agents, unless `--agent-model` names another).
 
 **Prices.** Spend is estimated from the tokens each call reports and the model's list price, so a budget is only as good as the price behind it.
 
-- The picks carry list prices read from each provider's own pricing page on 5 November 2026. Price changes that providers had already announced (Google's, above) take effect on their date. Where a provider charges more for a long prompt, or less for input read from its cache, that is counted.
+- The picks carry list prices read from each provider's own pricing page on 5 November 2026; Claude's were read again on 10 November. Price changes that providers had already announced (Google's, above) take effect on their date. Where a provider charges more for a long prompt, or less for input read from its cache, that is counted.
 - A model that is not one of the picks has no known price unless its listing carries one (OpenRouter's does). It is counted at $5 in and $25 out per million tokens, enough that an unknown model is never the cheap choice by accident, and the interface says so wherever the model is chosen. Set its real price on the Models and keys page.
 - Any price can be corrected there, and a price set by hand stands over everything else.
 - DeepSeek charges half outside its peak hours; spend is counted at the peak price. On the mainland platforms prices are in yuan and mostly lower than the dollar prices used here. In both cases the estimate errs high, which pauses an organisation early instead of letting it overspend.
@@ -480,7 +482,7 @@ If [Claude Code](https://code.claude.com/docs/en/setup) is installed on the mach
 
 ## Spend and limits
 
-An organisation that never stops can spend without limit, so every organisation has a **budget** (default $5). Spend is estimated from token usage at list prices: Claude's are in [`src/server/providers/pricing.ts`](src/server/providers/pricing.ts) and the other providers' in [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts) (see [Prices](#models-and-keys) above). When the estimate reaches the budget the organisation pauses itself and waits for you to raise it. Agents that are mid-task at that moment are told to stop and report what they have, so their work is kept rather than paid for again; the spend can therefore pass the budget by about one more model turn for each agent at work. The estimate is not a bill: check the provider's own console for what was charged. Calls cut off by "Stop now" are not counted, and neither is a team recommendation in the wizard, which belongs to no organisation (the wizard shows what it cost).
+An organisation that never stops can spend without limit, so every organisation has a **budget** (default $5). Spend is estimated from token usage at list prices: Claude's are in [`src/server/providers/pricing.ts`](src/server/providers/pricing.ts) and the other providers' in [`src/server/providers/catalogue.ts`](src/server/providers/catalogue.ts) (see [Prices](#models-and-keys) above). When the estimate reaches the budget the organisation pauses itself and waits for you to raise it. Agents that are mid-task at that moment are told to stop and report what they have, so their work is kept rather than paid for again; the spend can therefore pass the budget by about one more model turn for each agent at work. The estimate is not a bill: check the provider's own console for what was charged. A reply that fails after it has begun to arrive is counted as far as it got, each time it is tried: what it read as the provider reported it, and what it wrote by its length where the provider had not yet said. Calls cut off by "Stop now" are not counted, and neither is a team recommendation in the wizard, which belongs to no organisation (the wizard shows what it cost).
 
 What drives spend, and where to change it (wizard or settings):
 
@@ -488,10 +490,10 @@ What drives spend, and where to change it (wizard or settings):
 - **Effort** for executives and agents (default medium).
 - **Agents per lead** and **tasks per phase** (default at most 4 tasks).
 - **Follow-up work per cycle** (default one round, and never more than two follow-up plans per lead).
-- **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; at most 8 searches per task). With it, agents can also read the pages a search finds (web fetch, up to 4 pages per model request, each cut to 20,000 tokens). Reading a page has no per-use fee; its text is billed as input tokens.
+- **Web search** for agents (off by default; Claude models only; billed per search by Anthropic; 8 searches per task). An agent that has used its 8 is told to finish with what it has found, and is cut short if it searches again. What the API itself enforces is 8 per model request, so an agent that ignores what it is told can reach 24 before it is stopped. With it, agents can also read the pages a search finds (web fetch, up to 4 pages per model request, each cut to 20,000 tokens). Reading a page has no per-use fee; its text is billed as input tokens.
 - **Model calls in flight at once** (default 4), which also keeps you inside rate limits.
 
-If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. By default, an organisation that was running comes back paused after a server restart. The optional resume-on-restart setting restores a previously running or waiting organisation automatically, while retaining manual pauses and limits.
+If a call fails in a way that may pass (rate limits, overload, a dropped connection), it is retried with backoff; an agent that is part-way through a task repeats only the turn that failed, not the task. If a call fails for good, the organisation pauses and shows the error; nothing is lost, and it resumes from where it stopped. A failure that belongs to one agent's task and not to the provider (the model declined it, its reply was cut off or made no sense, or what the agent had read grew past what the model takes) fails that task alone: the lead sees it at the phase gate and decides what to do, and the organisation carries on. Token counts an endpoint reports that are not numbers are set aside, and the call is counted by its length instead. Should a call's cost still come back as something that is not a number, it is not added to the spend: the organisation pauses and says so, since a total that is not a number could never reach the budget. By default, an organisation that was running comes back paused after a server restart. The optional resume-on-restart setting restores a previously running or waiting organisation automatically, while retaining manual pauses and limits.
 
 On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is what the API would charge for the same tokens. With a subscription login none of it is billed; the budget is then a limit on how much of your plan an organisation may use.
 
@@ -517,20 +519,20 @@ This way of working is built on [Claude Managed Agents](https://platform.claude.
 
 **Agents per lead.** The number of agents a lead is allocated is told to the lead, and it is told that a run must not have more working at once. On this machine that number is enforced; in a session it is an instruction. The spend cap is the hard limit, and the dashboard says so if a lead goes over its allocation. The platform itself allows a session 25 agents at most, outside workflow runs; leads are told to keep to their own and reuse them.
 
-**Spend.** Each session is created with a spend cap that the platform enforces: at the cap it starts no new model request, in the lead, its agents or a run. What is left of the organisation's budget is shared equally between the plans that want a session, so the caps never add up to more than the budget. A session that reaches its cap waits there, intact, and is given more when another plan finishes under its share or you raise the budget. Spend is what the platform reports for the session at list prices, which includes the sandbox's running time and web searches as well as tokens; the request that reaches a cap completes, so a session can end a little past it. Sessions cost more per plan than work on this machine, because agents work for longer on each task: allow several times the budget, and raise it once you have seen a cycle.
+**Spend.** Each session is created with a spend cap that the platform enforces: at the cap it starts no new model request, in the lead, its agents or a run. What is left of the organisation's budget is shared equally between the plans that want a session, so the caps never add up to more than the budget. A session that reaches its cap waits there, intact, and is given more when another plan finishes under its share or you raise the budget. Lower the budget while a session is at work and the session is held, then picked up again with a cap that the budget as it now stands covers. A session that takes over from one that was lost is capped at the plan's share alone: what the lost one spent is already counted. Spend is what the platform reports for the session at list prices, which includes the sandbox's running time and web searches as well as tokens; the request that reaches a cap completes, so a session can end a little past it. Sessions cost more per plan than work on this machine, because agents work for longer on each task: allow several times the budget, and raise it once you have seen a cycle.
 
-**Pause, stop and restart.** A session is held by bringing its cap down to what it has spent, so nothing in it can run until the organisation is resumed, when the cap is raised again and the work carries on in the same session. The same is done before the organisation gives up on a session after a failure, so a session nobody is following cannot go on spending. If the server stops without warning, a session carries on by itself as far as its next phase record (which waits for the organisation's answer) or its cap, whichever comes first, and is picked up from there on resume. A workflow run's time limit keeps running while its session is held: after a long pause the run may have timed out, and the lead is told to start it again for what is left.
+**Pause, stop and restart.** A session is held by bringing its cap down to what it has spent, so nothing in it can run until the organisation is resumed, when the cap is raised again and the work carries on in the same session. The same is done before the organisation gives up on a session after a failure, so a session nobody is following cannot go on spending. If the server stops without warning, nobody is there to hold the session: it carries on by itself as far as its next phase record (which waits for the organisation's answer) or its cap, whichever comes first. When the server starts again the session is held then. If the organisation is set to resume by itself, the session is picked up and followed again, and held only if that cannot be done. If it cannot be held (the provider is out of reach, say), the board says so, with what the session could still spend, and it is tried again until it has been. A workflow run's time limit keeps running while its session is held: after a long pause the run may have timed out, and the lead is told to start it again for what is left.
 
 **What a session may do.** Tool calls in the sandbox are judged by the platform one at a time (the `auto` permission policy): calls it judges safe run, calls it judges high-risk are refused, and calls it cannot judge wait for approval. Nobody is watching these sessions, so those are declined, and the agent is told to find another way. Each plan shows how many calls were declined and the most recent one.
 
-**Network.** With web search off, the sandbox can reach package registries and nothing else. With web search on, agents get web search and fetch, and the sandbox's network is open: code the agents run there can reach any site. That is the only way to give hosted agents general web access, so it is tied to the same switch, and the wizard and settings say so when you turn it on.
+**Network.** With web search off, the sandbox can reach package registries and nothing else. With web search on, agents get web search and fetch, and the sandbox's network is open: code the agents run there can reach any site. That is the only way to give hosted agents general web access, so it is tied to the same switch, and the wizard and settings say so when you turn it on. Both are settled when a session starts. Turning web search off, or taking the privilege from a role, reaches the sessions that start afterwards; one already under way keeps what it started with, and the board names it.
 
 **Files.** The most recent files in the workspace (up to 200, none over 5 MB) are mounted read-only in the sandbox under `/mnt/session/uploads/workspace/`. Whatever a session writes under `/mnt/session/outputs/` is brought back to the workspace when each phase is recorded and at the end, always inside the owning team's directory. Files over 25 MB stay in the session.
 
 **What it leaves on your Anthropic account.** Nothing here ever deletes anything there, and nothing is archived unless you ask.
 
 - Two saved agents (the lead and the team agent) for each combination of agent model, agent effort, web setting and workflow switch in use, and one environment for each network setting. They are created the first time they are needed, or by `npm run managed:setup`, and their ids are kept in `data/managed.json`. If their definition in this repository changes, they are saved as a new version, not a new agent.
-- One session per plan, which stays as the plan's record. Each plan links to its session in the Anthropic Console. Deleting an organisation here does not delete its sessions.
+- One session per plan, which stays as the plan's record. Each plan links to its session in the Anthropic Console. Deleting an organisation here does not delete its sessions; any that is not finished is held first, so that none is left able to spend.
 - Sessions can be **archived**, which keeps them readable in the Console but closed to change, and cannot be undone. Either switch on "Archive each plan's session once the plan is over" for an organisation (off by default), or archive by hand: a button on a finished plan's session, and one in settings for every plan that is over. A session that is still working is left alone. Deleting an organisation that is set to archive archives its sessions first.
 - Uploaded copies of workspace files, which expire after thirty days.
 
@@ -545,20 +547,29 @@ data/orgs/<id>/
   org.json         live state: seats, cycle, plans, decisions, board feed, the signatory's
                    requests and conversation, business registers and history, scheduling state, usage
   activity.jsonl   one line per unit of work
+  business-audit.jsonl  the edit history of the business records, once it is older than the
+                   most recent hundred or two changes, which stay in org.json
   archive/         cycles that have left live state (the three most recent stay live)
   workspace/       the files the agents produce
-  managed/         which workspace files have been uploaded for hosted sessions
+  managed/         which workspace files have been uploaded for hosted sessions, and a
+                   note of any request for a session whose reply has not come yet
 data/claude-code/      for the Claude Code connection: the standing instructions handed to its runs
 data/managed.json      ids of the agents and environments hosted sessions start from
 data/connections.json  the API keys added in the interface, and what each was last seen to offer
-                       (and whether Claude Code is connected, which has no key)
+                       (and whether Claude Code is connected, which has no key), and the name
+                       each key from the environment was first given
+data/server.lock       which server is using this folder, while one is
 ```
 
-`connections.json` holds keys in the clear, readable only by your user. Leave it out of anything you share or back up to somewhere others can read; the whole `data/` folder is already ignored by git.
+One server uses a data folder at a time. A second one started on the same folder would save over the first one's state and could run the same organisations, spending twice, so it waits a few seconds for the first to go (a server being restarted is on its way out) and otherwise does not start, and says which server holds the folder. A server that died without letting go is recognised: at once on the same machine, and after a few seconds of silence otherwise.
+
+`connections.json` holds keys in the clear, readable only by your user. Leave it out of anything you share or back up to somewhere others can read; the whole `data/` folder is already ignored by git. Nothing in the data folder is ever served to a browser: with `npm run dev` the client is served from the project folder, which the data folder is inside by default, and requests for anything in it are turned away.
 
 A request to the signatory is archived with the cycle in which it was settled, along with everything said about it. One that is still waiting stays in live state however old it is.
 
 A folder is loaded only if its name is the organisation's id, so a copy kept beside it as a backup is ignored rather than mistaken for the original.
+
+`org.json` carries the version of its format. An organisation saved by an earlier version of the program is brought up to date when it is loaded. One whose file is damaged, or was saved by a later version than the one running, is set aside: the server starts without it, says why in its log, above the list of organisations and in `GET /api/meta` (`unreadable`), and leaves the file exactly as it was. If what an organisation had spent was not saved as a number (an earlier version could do that), its budget is counted as spent until you raise it.
 
 ## Configuration
 
@@ -572,17 +583,18 @@ A folder is loaded only if its name is the organisation's id, so a copy kept bes
 | `ORG_PROVIDER` | `auto` | `auto` simulates until the server is first given a key, and calls real models from then on. `mock` simulates whatever keys there are. |
 | `PORT` | `4780` | Port to listen on. |
 | `HOST` | `127.0.0.1` | Address to listen on. |
+| `ORG_ALLOWED_HOSTS` | none | When `HOST` is not loopback: the names, separated by commas, that this machine is reached by (`office-box.lan`). Requests addressed to it by IP address need nothing here. |
 | `ORG_DATA_DIR` | `./data` | Where organisations are stored. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | OAuth Web application client for Gmail connections; see the [setup guide](docs/email-and-accounts.md). |
 | `ORG_BROWSER_PATH` | installed Google Chrome | Optional Chromium executable for the business account browser. |
 | `ANTHROPIC_WORKSPACE_ID` | Default workspace | The workspace your API key belongs to, for links from a plan to its hosted session in the Console. |
 
-The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection and business email/account controls are switched off in that case.
+The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection and business email/account controls are switched off in that case. The server then answers requests addressed to it by IP address, or by a name listed in `ORG_ALLOWED_HOSTS`, and by no other name: a web page can point a name of its own at your machine, and without this rule the browser would let that page use the API as if it were the server's own. This holds inside a container too, where the server has to listen on `0.0.0.0` even when the port is published to your machine alone.
 
 ## Development
 
 ```bash
-npm test            # engine, providers, keys, workspace, HTTP API
+npm test            # everything: engine, providers, keys, workspace, HTTP API, and the dashboard in a browser
 npm run typecheck
 npm run dev         # server with hot-reloading client on one port
 npm run build       # client production build
@@ -591,6 +603,10 @@ npm run docs:screenshots # refresh Only Paperclips screenshots after a build
 ```
 
 The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against local stand-ins for the Messages API and the Managed Agents API that speak their protocols, the providers for everyone else against a stand-in for Chat Completions and OpenAI's Responses API, and the Claude Code connection against a stand-in for the `claude` command; whole organisations are also run end to end on the last two. That checks what is sent and how replies are handled, not that the live APIs accept it or behave as the stand-ins do.
+
+Some tests drive the built dashboard, and the account browser, in a real Chrome. On your own machine they are left out when Chrome is not at `/opt/google/chrome/chrome` (set `CHROME_PATH` to where it is) or the client has not been built. With `REQUIRE_BROWSER=1` a missing browser or build stops the run and says what is missing, since a test that was skipped has checked nothing.
+
+**Checks on a pull request.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the type check, the build and the whole suite, with `REQUIRE_BROWSER=1`, on every pull request and on every push to `main`.
 
 ```
 src/shared/      types and the profile library, used by server and client

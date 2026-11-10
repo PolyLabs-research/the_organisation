@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
 import { chromium, type Browser, type LaunchOptions, type Route } from 'playwright-core';
 import { BusinessBrowser } from '../src/server/access-browser';
-import type { AccountSecret } from '../src/server/access-vault';
+import { AccessError, type AccountSecret } from '../src/server/access-vault';
 import type { AccountPage, BrowserAction } from '../src/shared/access';
+import { CHROME, withoutBrowser } from './helpers';
 
 const site: AccountSecret = { id: 'account_test', label: 'Supplier', origin: 'https://supplies.example', loginUrl: 'https://supplies.example/login', signupUrl: 'https://supplies.example/signup', resourceOrigins: [], username: 'office@paperclips.example', password: 'generated-test-password', mailboxId: 'mail_test', ownerIds: ['coo'], allowSignup: true, enabled: true, createdAt: '' };
 let browser: BusinessBrowser;
@@ -13,7 +13,7 @@ const users = new Map<string, string>();
 let launched: LaunchOptions = {};
 async function fixtureBrowser(options: LaunchOptions): Promise<Browser> {
   launched = options;
-  const actual = await chromium.launch({ ...options, executablePath: process.env.CHROME_PATH ?? '/opt/google/chrome/chrome', channel: undefined });
+  const actual = await chromium.launch({ ...options, executablePath: CHROME, channel: undefined });
   return new Proxy(actual, {
     get(target, key) {
       if (key === 'newContext') return async (settings: Parameters<Browser['newContext']>[0]) => {
@@ -36,6 +36,7 @@ async function fixtureBrowser(options: LaunchOptions): Promise<Browser> {
                         else if (url.pathname === '/change') html = '<h1>Password changed</h1>';
                         else html = users.get(username) === password ? '<h1>Signed in</h1><p>Echoed password: ' + password + '</p>' : '<h1>Login failed</h1>';
                       } else if (url.pathname === '/verify') html = '<h1>Email verified</h1>';
+                      else if (url.pathname === '/live') html = '<h1 id="socket">Socket: connecting</h1><script>const socket = new WebSocket("wss://supplies.example/feed"); const say = (what) => { document.getElementById("socket").textContent = "Socket: " + what; }; socket.onopen = () => { say("open"); socket.send("anything the page likes"); }; socket.onclose = (event) => say("closed " + (event.wasClean ? "by the browser" : "after trying to connect"));</script>';
                       else if (url.pathname === '/getform') html = '<form method="get" action="/result"><label>Password<input type="password" name="password"></label><button>Go</button></form>';
                       else if (url.pathname === '/result') html = '<h1>Result</h1>';
                       else if (url.pathname === '/away') html = '<a href="https://evil.example/elsewhere">Elsewhere</a>';
@@ -66,7 +67,9 @@ function setup() { requests.length = 0; users.clear(); browser = new BusinessBro
 const run = (action: Omit<BrowserAction, 'accountId'>, actor = 'task1', write = true) => browser.run(site, site.username, actor, { accountId: site.id, ...action }, new AbortController().signal, { write });
 const element = (page: AccountPage, label: string) => page.elements.find(item => item.label === label)!.id;
 afterEach(async () => { await browser?.close(); });
-describe.skipIf(!existsSync(process.env.CHROME_PATH ?? '/opt/google/chrome/chrome'))('account browser', () => {
+// Each test starts a real Chrome, and has the time the other browser-driven tests have: on a machine that is running
+// several of them at once, a browser's first start can take many times what it usually does.
+describe.skipIf(withoutBrowser())('account browser', { timeout: 40_000 }, () => {
   it('creates and verifies an account, then logs in with a saved password without returning it', async () => {
     setup();
     let page = await run({ action: 'signup' });
@@ -212,6 +215,17 @@ describe.skipIf(!existsSync(process.env.CHROME_PATH ?? '/opt/google/chrome/chrom
     await run({ action: 'login' });
     expect(launched).toMatchObject({ handleSIGINT: false, handleSIGTERM: false });
   });
+  it('closes a socket a page opens before it connects, so nothing leaves by a way the request rules cannot see', async () => {
+    setup();
+    await run({ action: 'login' });
+    let page = await run({ action: 'navigate', url: 'https://supplies.example/live' });
+    for (let tries = 0; tries < 100 && page.text.includes('connecting'); tries++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      page = await run({ action: 'inspect' });
+    }
+    // Closed in good order by the browser itself. Not opened, and not a connection that was tried and failed.
+    expect(page.text).toContain('Socket: closed by the browser');
+  });
   it('isolates task sessions, refuses unapproved sign-up and closes access on cancellation', async () => {
     setup();
     await expect(browser.run({ ...site, allowSignup: false }, site.username, 'task1', { accountId: site.id, action: 'signup' }, new AbortController().signal, { write: true })).rejects.toMatchObject({ status: 403 });
@@ -220,5 +234,36 @@ describe.skipIf(!existsSync(process.env.CHROME_PATH ?? '/opt/google/chrome/chrom
     const abort = new AbortController(); abort.abort();
     await expect(browser.run(site, site.username, 'task1', { accountId: site.id, action: 'inspect' }, abort.signal, { write: true })).rejects.toThrow(/cancelled/);
     await expect(run({ action: 'inspect' })).rejects.toThrow(/Open the login/);
+  });
+});
+
+// These need no browser: they are about how one is started, and whether one is started at all.
+describe('how the account browser is started', () => {
+  const login = (starting: BusinessBrowser, account: AccountSecret = site) => starting.run(account, site.username, 'task1', { accountId: site.id, action: 'login' }, new AbortController().signal, { write: true });
+
+  it('pins each host of the account to the address that was checked, and makes every other name unfindable', async () => {
+    let options: LaunchOptions | undefined;
+    const asked: string[] = [];
+    const starting = new BusinessBrowser(
+      async host => { asked.push(host); return host === 'supplies.example' ? '93.184.215.14' : '2606:2800:21f:cb07:6820:80da:af6b:8b2c'; },
+      async given => { options = given; throw new Error('no browser is started in this test'); },
+    );
+    await expect(login(starting, { ...site, resourceOrigins: ['https://cdn.supplies-static.example'] })).rejects.toMatchObject({ status: 503 });
+    // Each name is looked up once, by the check that refuses private addresses, and the browser is told the answer.
+    // It cannot look the name up again and get a different one, and it cannot find any other name at all.
+    expect(asked).toEqual(['supplies.example', 'cdn.supplies-static.example']);
+    expect(options!.args).toContain('--host-resolver-rules=MAP supplies.example 93.184.215.14,MAP cdn.supplies-static.example [2606:2800:21f:cb07:6820:80da:af6b:8b2c],MAP * ~NOTFOUND');
+    expect(options!.args).toEqual(expect.arrayContaining(['--no-proxy-server', '--disable-quic']));
+    expect(options).toMatchObject({ headless: true, chromiumSandbox: true, handleSIGINT: false, handleSIGTERM: false });
+  });
+
+  it('starts no browser for an account whose host is not at a public address', async () => {
+    let started = 0;
+    const refusing = new BusinessBrowser(
+      async () => { throw new AccessError('Business connections cannot reach private or reserved network addresses.', 403); },
+      async () => { started += 1; throw new Error('should not be reached'); },
+    );
+    await expect(login(refusing)).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/private or reserved/) });
+    expect(started).toBe(0);
   });
 });

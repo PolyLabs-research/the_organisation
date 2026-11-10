@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
 import { PLAN_TOOLS, ProviderError, type BoardReportDraft, type Briefing, type HookReply, type PhaseRecord, type PlanJob, type PlanOutcome, type SessionSpend } from '../types';
 import { Uploads, download, listOutputs, type SessionFile } from './files';
@@ -147,6 +149,21 @@ function describe(input: Record<string, unknown>): string {
 
 const timeOf = (event: SessionEvent | StreamEvent): string | null => ('processed_at' in event && typeof event.processed_at === 'string' ? event.processed_at : null);
 
+/**
+ * A request to create a plan's session, kept on disk from before it goes out until it is known what came of
+ * it. A request can get through although its reply never arrives, and the session it made is then working on the
+ * plan, under its cap, with nothing here that knows of it.
+ */
+interface Creating {
+  /** The mark put on the request. The session carries it if the request got through. */
+  attempt: string;
+  /** A little before the request went out: sessions older than this are not the one. */
+  since: string;
+  leadId: string;
+  /** How far the plan's first message brought the lead up to date with the board's instructions. */
+  instructions: number;
+}
+
 /** Something the session is waiting for this side to answer. */
 interface PendingCall {
   id: string;
@@ -182,20 +199,33 @@ export class PlanSession {
 
   private readonly seen = new Set<string>();
   private readonly answered = new Set<string>();
+  /** Calls whose answer is being prepared or is on its way. */
+  private readonly answering = new Set<string>();
   private readonly pending = new Map<string, PendingCall>();
   private readonly openRuns = new Set<string>();
   private readonly runThreads = new Set<string>();
   private readonly unfetchable = new Set<string>();
-  /** Messages sent to the lead, by event id, and the instructions each brings it up to date with once the session takes it up. */
+  /**
+   * Messages sent to the lead, by event id, and the instructions each brings it up to date with once the session
+   * takes it up. An answer that states instructions is here too while it is on its way, under its call's id.
+   */
   private readonly awaiting = new Map<string, number>();
   /** Messages the session has been seen to take up. One can be seen on the stream before the request that sent it has returned. */
   private readonly takenUp = new Set<string>();
-  /** True once this attachment has given the session room to spend (created it, or raised its cap). */
+  /** True once this attachment has given the session room to spend, or may have (created it, or asked for its cap to be raised). */
   private live = false;
   private reported = false;
   private replaying = false;
   /** The lead was interrupted the last time the session was held, so its work waits for a message. */
   private interrupted = false;
+  /** The session's status says that it has ended, and its history has still to be read to the end. */
+  private over = false;
+  /**
+   * Whether the session has been given its plan. One created here has: the plan goes in with it. One that is
+   * picked up with no place to read from may never have been (the server can stop between creating a session
+   * and telling it anything), and is given the plan if its history holds no message for its lead.
+   */
+  private briefed = false;
 
   /** Why the session is idle, as far as is known; null while it is working. */
   private idle: StopReason | null = null;
@@ -232,6 +262,10 @@ export class PlanSession {
     let timer: NodeJS.Timeout | null = null;
     try {
       await this.open();
+      // A session that is picked up with no more to give it is not followed. It may not have been held when it
+      // was last let go of (the server stopped without warning), so it is held now: with room left under an
+      // older cap it could go on spending while the organisation waits for money.
+      if (this.outcome?.status === 'at_budget') await this.hold();
       if (this.job.signal?.aborted) this.leave('pause');
       timer = setInterval(() => void this.tick(), this.timings.tickMs);
       let failures = 0;
@@ -294,9 +328,13 @@ export class PlanSession {
     };
 
     if (job.session) {
+      // The plan's session is known, so a request for one that is still on file is not waiting for an answer.
+      await this.creating(null);
       this.sessionId = job.session.id;
       this.consoleUrl = this.linkTo(this.sessionId);
       this.cursor = job.session.cursor;
+      // A place to read from is only ever kept for a session that has its plan (see `checkpoint`).
+      this.briefed = this.cursor !== null;
       this.latestAt = job.session.handled ?? job.session.cursor;
       this.floor = this.latestAt;
       this.reported = job.session.reported;
@@ -316,9 +354,14 @@ export class PlanSession {
       }
       this.read(session);
       // The cap was brought down to what the session had spent when it was held. Raising it sets its work going again.
+      // A raise can get through although its reply does not, so from here the session counts as having room to
+      // spend: if this try ends on a failure, the session is held again before it is let go of.
+      this.live = true;
       await this.raise(job.budgetUsd);
       return;
     }
+
+    if (await this.takeUp()) return;
 
     const uploads = new Uploads(this.client, job.stateDir);
     let resources = await this.deps.resources.ensure(team);
@@ -349,9 +392,14 @@ export class PlanSession {
         // Not sent again automatically: a second request could start a second session working on the same plan.
         { maxRetries: 0 },
       );
+    const request = async () => {
+      // On file before it goes out. If this try ends without learning what came of it, the next one looks first.
+      await this.creating({ attempt, since, leadId: resources.lead.id, instructions: job.kickoff.instructions });
+      return create();
+    };
     let session: Session;
     try {
-      session = await create();
+      session = await request();
     } catch (err) {
       if (err instanceof Anthropic.NotFoundError || (err instanceof Anthropic.BadRequestError && /file/i.test(err.message))) {
         // Ids kept from an earlier run can stop being valid: made with another key, or removed by hand.
@@ -360,27 +408,77 @@ export class PlanSession {
         else await this.deps.resources.forget();
         resources = await this.deps.resources.ensure(team);
         mounts = await uploads.ensure(job.files, job.signal);
-        session = await create();
+        session = await request();
       } else if (reached(err)) {
         // The request may have got through although no reply came back. If it did, that session is this plan's.
+        // If it cannot be found now, the request stays on file and the next try looks again (see `takeUp`).
         const made = await this.find(resources.lead.id, attempt, since).catch(() => null);
         if (!made) throw err;
         session = made;
       } else {
+        // Refused, so no session was made and there is nothing to look for.
+        await this.creating(null);
         throw err;
       }
     }
     this.sessionId = session.id;
     this.consoleUrl = this.linkTo(session.id);
+    this.briefed = true;
     this.capped(job.budgetUsd);
+    await this.creating(null);
     this.hooks.instructed(job.kickoff.instructions);
     this.read(session);
+  }
+
+  /** Keep on disk the request for this plan's session that is about to go out, or with null remove it. */
+  private async creating(request: Creating | null): Promise<void> {
+    const file = path.join(this.job.stateDir, `creating-${this.job.planId}.json`);
+    if (!request) return fs.rm(file, { force: true });
+    await fs.mkdir(this.job.stateDir, { recursive: true });
+    await fs.writeFile(file, JSON.stringify(request), 'utf8');
+  }
+
+  /**
+   * Take up the session that an earlier try at starting this plan asked for, if that try ended without learning
+   * what came of its request and the request did get through. True if it did: the session is this plan's, and
+   * no other is created beside it.
+   */
+  private async takeUp(): Promise<boolean> {
+    let asked: Creating;
+    try {
+      asked = JSON.parse(await fs.readFile(path.join(this.job.stateDir, `creating-${this.job.planId}.json`), 'utf8')) as Creating;
+    } catch (err) {
+      // Nothing is on file. (A request cut off while it was being written down never went out.)
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || err instanceof SyntaxError) return false;
+      throw err;
+    }
+    // If this look fails, so does the try. While it is not known whether a session exists, no second one is made.
+    const session = await this.find(asked.leadId, asked.attempt, asked.since);
+    if (!session) {
+      await this.creating(null);
+      return false;
+    }
+    this.sessionId = session.id;
+    this.consoleUrl = this.linkTo(session.id);
+    // The request that made it carried the plan.
+    this.briefed = true;
+    // It still has the cap it was created with. The engine is told of it before anything else can fail.
+    this.capped(session.budget ? usd(session.budget.max_list_cost) : this.job.budgetUsd);
+    await this.creating(null);
+    this.hooks.instructed(asked.instructions);
+    this.read(session);
+    // One that has ended since is this plan's all the same: what it spent is counted, and it is given up as lost.
+    if (session.status === 'terminated') this.outcome = { status: 'lost', reason: 'the session had ended.' };
+    // It has been working under its first cap. From here on it has what the plan is allowed now.
+    else await this.raise(this.job.budgetUsd);
+    return true;
   }
 
   /** The session an earlier request created, if it did create one. */
   private async find(leadId: string, attempt: string, since: string): Promise<Session | null> {
     let looked = 0;
-    for await (const session of this.sessions.list({ agent_id: leadId, 'created_at[gte]': since, order: 'desc' }, QUICK)) {
+    // Oldest first: the look can come long after the request, and the lead's later sessions are not the one.
+    for await (const session of this.sessions.list({ agent_id: leadId, 'created_at[gte]': since, order: 'asc' }, QUICK)) {
       if (session.metadata?.attempt === attempt) return session;
       if (++looked >= 50) break;
     }
@@ -414,6 +512,18 @@ export class PlanSession {
     if (session.archived_at) this.end({ status: 'lost', reason: 'the session was archived.' });
     else if (session.status === 'terminated') this.end({ status: 'lost', reason: this.lastError ?? 'the session ended by itself.' });
     else return false;
+    return true;
+  }
+
+  /**
+   * The same, asked beside the stream. A session that has ended is not given up from here: the stream may not
+   * have been read as far as its end, and what the session said last, and why it ended, is in its history.
+   * The stream is left, and the history is read to the end in its place (see `follow`).
+   */
+  private ended(session: Session): boolean {
+    if (session.archived_at || session.status !== 'terminated') return this.gone(session);
+    this.over = true;
+    this.leave('reconnect');
     return true;
   }
 
@@ -519,6 +629,11 @@ export class PlanSession {
     const controller = new AbortController();
     this.stream = controller;
     try {
+      // A session that has ended says nothing more on a stream. Its history is read to the end, and that is all.
+      if (this.over) {
+        this.over = false;
+        return await this.catchUp();
+      }
       // Opened before anything else, so that nothing said while the history is read is lost.
       const stream = await this.sessions.events.stream(this.sessionId, {}, { signal: controller.signal });
       await this.catchUp();
@@ -539,20 +654,23 @@ export class PlanSession {
     }
   }
 
-  /** Read the session's history from where it was last read, then settle where things stand. */
-  private async catchUp(): Promise<void> {
+  /**
+   * Read the session's history from where it was last read, then settle where things stand. The session's
+   * status is read after its history, and can show a stop or an end that came in between. The history is then
+   * read once more (`again`), so that nothing is acted on ahead of the events that led up to it.
+   */
+  private async catchUp(again = false): Promise<void> {
     this.replaying = true;
-    let briefed = this.cursor !== null;
     try {
       const since = this.cursor ? { 'created_at[gte]': new Date(Date.parse(this.cursor) - OVERLAP_MS).toISOString() } : {};
       for await (const event of this.sessions.events.list(this.sessionId, since)) {
-        if (event.type === 'user.message') briefed = true;
         await this.handle(event);
         if (this.outcome) return;
       }
     } finally {
       this.replaying = false;
     }
+    this.checkpoint();
     if (this.leaving || this.halted()) return;
 
     // What is still waiting on this side gets its answer now.
@@ -560,10 +678,14 @@ export class PlanSession {
     if (this.openRuns.size) await this.refreshRuns();
     const session = await this.retrieve();
     this.lastPollAt = Date.now();
+    // It has ended since its history was read: what it said last, and why it ended, is read before it is given up.
+    if (!again && session.status === 'terminated' && !session.archived_at) return this.catchUp(true);
     if (this.gone(session)) return;
-    if (!briefed) {
-      // The session exists but was never given its plan.
+    if (!this.briefed) {
+      // The session exists but was never given its plan. It has it once the message has gone: if this attachment
+      // ends before that, on a failure or because the session is to be held, the next one gives it.
       await this.send([message(this.job.kickoff.message)]);
+      this.briefed = true;
       return;
     }
     if (this.interrupted) {
@@ -575,16 +697,22 @@ export class PlanSession {
     // The history can end on a stop that the session's status does not show yet, so what the history says is
     // acted on whatever the status reads. A stop from before the history read here is looked up.
     if (!this.idle && session.status === 'idle') {
-      this.idle = await this.latestIdle();
+      const stop = await this.latestIdle();
+      // A stop that is not in the history just read came before it, or has come since. One that has come since
+      // has the events that led up to it still unread: a call it names would be answered before the work that
+      // went before the call had been heard of. The second reading meets it in its turn.
+      if (stop && !again && !this.seen.has(stop.id)) return this.catchUp(true);
+      this.idle = stop?.stop_reason ?? null;
       this.idleActed = false;
     }
     if (this.idle && !this.idleActed) await this.onIdle(this.idle);
     else if (!this.idle && session.status === 'idle') this.wake = { at: Date.now() + this.timings.graceMs, why: 'the session was idle and did not start again.' };
   }
 
-  private async latestIdle(): Promise<StopReason | null> {
+  /** The session's most recent stop. */
+  private async latestIdle(): Promise<Anthropic.Beta.Sessions.BetaManagedAgentsSessionStatusIdleEvent | null> {
     for await (const event of this.sessions.events.list(this.sessionId, { types: ['session.status_idle'], order: 'desc', limit: 1 })) {
-      if (event.type === 'session.status_idle') return event.stop_reason;
+      if (event.type === 'session.status_idle') return event;
     }
     return null;
   }
@@ -674,6 +802,8 @@ export class PlanSession {
   private async handle(event: SessionEvent | StreamEvent): Promise<void> {
     if (event.type === 'event_start' || event.type === 'event_delta') return; // previews of text; the finished event follows
     const at = timeOf(event);
+    // A session with a message for its lead in it has been told what to do.
+    if (event.type === 'user.message') this.briefed = true;
     // A message from this side shows up twice: when it is queued, and again when the session takes it up.
     if (event.type === 'user.message' && at && event.id) {
       this.takenUp.add(event.id);
@@ -824,15 +954,33 @@ export class PlanSession {
 
   /** Tell the engine where reading can start next time: the oldest call still unanswered, or else the latest event acted on. */
   private checkpoint(): void {
-    if (!this.latestAt) return;
+    // Not while the history is being read: a call that an earlier attachment read and left unanswered is only
+    // known to be unanswered once the reading has come to it again, and the place must not move past it before then.
+    // And not for a session that has not been given its plan: a place to read from is taken, here and by the
+    // engine, to mean that it has, and one that was left before the plan had gone would never be given it.
+    if (!this.latestAt || this.replaying || !this.briefed) return;
     let from = this.latestAt;
     for (const call of this.pending.values()) if (call.at && call.at < from) from = call.at;
     if (!this.cursor || from > this.cursor) this.cursor = from;
     this.hooks.checkpoint(this.cursor, this.latestAt);
   }
 
+  /**
+   * Answer a call, once. The stream, the history and the look at a session that has gone quiet can each come
+   * upon the same call, and preparing an answer takes time (the phase's files are brought home first): whoever
+   * comes second leaves it to the first. Two answers would record the phase with the organisation twice.
+   */
   private async answer(call: PendingCall): Promise<void> {
-    if (this.answered.has(call.id)) return;
+    if (this.answered.has(call.id) || this.answering.has(call.id)) return;
+    this.answering.add(call.id);
+    try {
+      await this.respond(call);
+    } finally {
+      this.answering.delete(call.id);
+    }
+  }
+
+  private async respond(call: PendingCall): Promise<void> {
     const { hooks } = this;
     if (call.kind === 'approval') {
       // The platform could not tell whether the call was safe, and nobody is here to say.
@@ -854,16 +1002,34 @@ export class PlanSession {
       } else {
         reply = { ok: false, message: `There is no tool named ${call.name}.` };
       }
-      await this.send([{ type: 'user.custom_tool_result', custom_tool_use_id: call.id, content: [{ type: 'text', text: reply.message }], is_error: !reply.ok }], true);
+      // An answer can bring the lead up to date with the board's instructions. They count as told once it has
+      // gone, not when it was written: one that fails to send is asked for again. While it is on its way they
+      // are not sent as a message as well (`tick` sends the next when nothing is waiting to be taken up).
+      if (reply.instructions !== undefined) this.awaiting.set(call.id, reply.instructions);
+      const sent = await this.send([{ type: 'user.custom_tool_result', custom_tool_use_id: call.id, content: [{ type: 'text', text: reply.message }], is_error: !reply.ok }], true).finally(() => this.awaiting.delete(call.id));
+      if (sent && reply.instructions !== undefined) hooks.instructed(reply.instructions);
     }
     this.answered.add(call.id);
     this.pending.delete(call.id);
     this.checkpoint();
   }
 
-  /** The session has stopped. Decide what that means: done, waiting on this side, out of money, or stuck. */
+  /** Act on a stop, once. If what it called for could not be done, it has not been acted on. */
   private async onIdle(reason: StopReason): Promise<void> {
     this.idleActed = true;
+    try {
+      await this.settle(reason);
+    } catch (err) {
+      // A request failed on the way. While the session still stands at this stop, the stop is still to be acted
+      // on: by the next attachment if this one fails with it, or when a session that has gone quiet is looked at.
+      // Left marked as acted on, nothing would come back to it, and the plan would wait on it for good.
+      if (this.idle === reason) this.idleActed = false;
+      throw err;
+    }
+  }
+
+  /** The session has stopped. Decide what that means: done, waiting on this side, out of money, or stuck. */
+  private async settle(reason: StopReason): Promise<void> {
     const soon = Date.now() + this.timings.graceMs;
     switch (reason.type) {
       case 'requires_action': {
@@ -918,7 +1084,9 @@ export class PlanSession {
 
   /** Set a lead that has stopped short going again. After a few times in a row the session is given up. */
   private async nudge(why: string): Promise<void> {
-    this.wake = null;
+    // Tried again shortly unless it gets done here. A request that fails on the way must not leave the lead
+    // stopped with nothing set to wake it.
+    const again = (this.wake = { at: Date.now() + this.timings.graceMs, why });
     if (this.nudges >= MAX_NUDGES) {
       // Whatever is left in the session must not be able to spend once nobody is following it.
       await this.hold();
@@ -926,9 +1094,11 @@ export class PlanSession {
       if (this.reported) return this.finish();
       return this.end({ status: 'lost', reason: why });
     }
-    if (await this.say(this.job.resume())) this.nudges += 1;
-    // It would not take a message just now (it is waiting on an answer, or at its cap). Try again shortly.
-    else this.wake = { at: Date.now() + this.timings.graceMs, why };
+    // It may not take a message just now (it is waiting on an answer, or at its cap). That, too, is tried again.
+    if (!(await this.say(this.job.resume()))) return;
+    this.nudges += 1;
+    // Unless the session has stopped anew while the message was on its way: that stop has its own time to be looked at.
+    if (this.wake === again) this.wake = null;
   }
 
   /** Housekeeping beside the stream: holds, new instructions, spend, and a session that has gone quiet. */
@@ -948,7 +1118,7 @@ export class PlanSession {
       if (now - this.lastPollAt >= this.timings.usagePollMs) {
         this.lastPollAt = now;
         const session = await this.retrieve();
-        if (this.gone(session)) return;
+        if (this.ended(session)) return;
         if (session.status === 'idle' && now - this.lastEventAt >= this.timings.usagePollMs) {
           // Stopped, but the stream never said so: it has gone quiet. Connect again and read what was missed.
           if (this.idle === null) return this.leave('reconnect');
@@ -959,17 +1129,25 @@ export class PlanSession {
 
       if (this.budgetCheckAt && Date.now() >= this.budgetCheckAt && this.idle?.type === 'budget_reached') {
         const session = await this.retrieve();
-        if (this.gone(session)) return;
+        if (this.ended(session)) return;
         // Not stopped as far as its status says: either its work is on its way again (the stream will say so, and
-        // that ends this watch) or the status is a moment behind. Look again shortly.
-        this.budgetCheckAt = session.status === 'idle' ? null : Date.now() + this.timings.graceMs;
+        // that ends this watch) or the status is a moment behind. Look again shortly. The same if the cap has to
+        // be raised and the request fails: the watch ends when the raise is done, not before.
+        this.budgetCheckAt = Date.now() + this.timings.graceMs;
         if (session.status !== 'idle') return;
-        if (this.capUsd - this.spentUsd < 0.01) return void (await this.raise(this.hooks.moreBudget(this.spentUsd)));
+        // The cap as the session has it, which need not be the one last set from here: a session can be held by
+        // its id while nobody follows it, and a hold asked for then can arrive after the session was picked up.
+        const cap = Math.min(this.capUsd, session.budget ? usd(session.budget.max_list_cost) : Infinity);
+        if (cap - this.spentUsd < 0.01) {
+          await this.raise(this.hooks.moreBudget(this.spentUsd));
+          this.budgetCheckAt = null;
+          return;
+        }
         // At its budget with money left under its cap: a higher cap will not help. (A session stops like this
         // when its usage includes a model the platform has no price for.) It needs someone to look.
         return this.fail(
           new ProviderError(
-            `The session says it is at its budget, but its cap ($${this.capUsd.toFixed(2)}) is above what it has spent ($${this.spentUsd.toFixed(2)}). Look at it in the Anthropic Console before resuming.`,
+            `The session says it is at its budget, but its cap ($${cap.toFixed(2)}) is above what it has spent ($${this.spentUsd.toFixed(2)}). Look at it in the Anthropic Console before resuming.`,
             'bad_request',
             false,
           ),
@@ -1079,6 +1257,39 @@ export async function archiveSession(client: Anthropic, sessionId: string, waitM
     if (err instanceof Anthropic.BadRequestError || err instanceof Anthropic.ConflictError) return 'busy';
     throw err;
   }
+}
+
+/**
+ * Hold a session that nobody is following: bring its spend cap down to what it has spent, so that nothing in it
+ * can go on spending. A session is normally held by whoever follows it (see `hold` above). This is for one that
+ * was left with room under its cap when the server stopped without warning, or that belongs to an organisation
+ * which is being removed. Returns the cap now set and what the session has spent, in dollars, or null if there is
+ * nothing to hold: the session no longer exists, has ended, or has been archived.
+ */
+export async function holdSession(client: Anthropic, sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null> {
+  const { sessions } = client.beta;
+  for (const margin of [0.01, 0.05, 0.25]) {
+    let session: Session;
+    try {
+      session = await sessions.retrieve(sessionId, {}, QUICK);
+    } catch (err) {
+      if (err instanceof Anthropic.NotFoundError) return null;
+      throw err;
+    }
+    if (session.status === 'terminated' || session.archived_at) return null;
+    const spentUsd = usd(session.usage.list_cost);
+    const cap = round2(spentUsd + margin);
+    const current = session.budget ? usd(session.budget.max_list_cost) : Infinity;
+    if (cap >= current) return { budgetUsd: current, spentUsd };
+    try {
+      await sessions.update(sessionId, { budget: limit(cap) }, QUICK);
+      return { budgetUsd: cap, spentUsd };
+    } catch (err) {
+      // The platform only accepts a cap above what was consumed: it has spent more since it was looked at. Look again.
+      if (!(err instanceof Anthropic.BadRequestError)) throw err;
+    }
+  }
+  throw new ProviderError("The session's spend cap could not be brought down: it keeps spending past the new cap.", 'unavailable', true);
 }
 
 /** What one agent in a session was asked and what it returned, read from its own thread. */

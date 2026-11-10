@@ -1,4 +1,5 @@
 import type { RunnerOptions } from '../src/server/engine/runner';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,10 +65,19 @@ export async function harness(
   };
 }
 
-/** Start the organisation and wait until it comes to rest (paused, with nothing in flight). */
-export async function runToRest(runner: OrgRunner): Promise<void> {
+/**
+ * Start the organisation and wait until it comes to rest (paused, with nothing in flight). The wait is a little shorter
+ * than the time a test is given, so that an organisation that never rests fails here, saying where it had got to, and not
+ * as a test that merely ran out of time. A test that is given longer says how long to wait.
+ */
+export async function runToRest(runner: OrgRunner, timeoutMs = 18_000): Promise<void> {
   runner.start();
-  await runner.idle();
+  await runner.idle(timeoutMs).catch((err: Error) => {
+    const org = runner.org;
+    throw new Error(
+      `${err.message}: it is ${org.status}${org.pauseReason ? ` (${org.pauseReason})` : ''} in cycle ${org.cycle.number}, at ${org.cycle.stage}, having spent $${org.usage.costUsd.toFixed(2)} of a budget of $${org.settings.budgetUsd.toFixed(2)}`,
+    );
+  });
 }
 
 export async function waitFor(condition: () => boolean, what: string, timeoutMs = 10_000): Promise<void> {
@@ -80,4 +90,22 @@ export async function waitFor(condition: () => boolean, what: string, timeoutMs 
 
 export function plansOf(org: Organisation, cycle: number): Plan[] {
   return org.plans.filter((p) => p.cycle === cycle);
+}
+
+/** Where the tests that drive a real browser look for Chrome. */
+export const CHROME = process.env.CHROME_PATH ?? '/opt/google/chrome/chrome';
+
+/**
+ * Whether the tests that drive a real browser have to be left out here. They need Chrome, and the ones that open
+ * the dashboard need a built client. On a person's own machine, without those, they are skipped. Where the suite
+ * decides whether a change may go in, set REQUIRE_BROWSER=1: a test that was skipped has checked nothing, so there
+ * a missing browser or a missing build stops the run and says what is missing.
+ */
+export function withoutBrowser(needs: { build?: boolean } = {}): boolean {
+  const missing = [
+    ...(existsSync(CHROME) ? [] : [`Chrome was not found at ${CHROME} (set CHROME_PATH to where it is)`]),
+    ...(needs.build && !existsSync('dist/client/index.html') ? ['the client has not been built (run "npm run build" first)'] : []),
+  ];
+  if (missing.length && process.env.REQUIRE_BROWSER === '1') throw new Error(`REQUIRE_BROWSER is set, but ${missing.join(', and ')}.`);
+  return missing.length > 0;
 }

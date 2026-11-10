@@ -73,6 +73,22 @@ export function Home({ meta }: { meta: Meta }) {
       ) : null}
       {meta.provider.simulated ? <div className="note note-info"><span><strong>Only Paperclips.</strong> Try a fictional paperclip business with a customer enquiry, delivery commitments, a weekly stock review and a scorecard.</span><button type="button" className="button" disabled={example.busy} onClick={() => void example.run(async () => { const view = await api.paperclips(); window.location.hash = '/org/' + view.org.id; })}>{example.busy ? 'Establishing…' : 'Try Only Paperclips'}</button></div> : null}
       <ErrorNote>{example.error ?? error}</ErrorNote>
+      {meta.unreadable?.length ? (
+        <div className="note note-bad" role="alert">
+          <div>
+            <strong>{meta.unreadable.length === 1 ? 'One organisation was not loaded.' : `${meta.unreadable.length} organisations were not loaded.`}</strong> The server
+            set {meta.unreadable.length === 1 ? 'it' : 'them'} aside when it started. Nothing on disk was changed: each is still in its folder under <code>orgs</code> in
+            the data folder, and the other organisations are not affected.
+            <ul>
+              {meta.unreadable.map((item) => (
+                <li key={item.folder}>
+                  <code>{item.folder || 'a folder with no readable id'}</code>: {item.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
 
       {orgs === null ? (
         error ? null : (

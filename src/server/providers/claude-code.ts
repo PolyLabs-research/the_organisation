@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { z } from 'zod';
 import type { ProviderInfo } from '../../shared/types';
-import { MODELS, costOfRequest, isKnownModel } from './pricing';
+import { MODELS, costOfRequest, hasRates, isKnownModel } from './pricing';
 import { ProviderError, type AgentRequest, type AgentResult, type AgentTool, type CallUsage, type Provider, type StructuredRequest, type SystemPrompt } from './types';
 
 // Runs the organisation on Claude through Claude Code, the program, instead
@@ -244,10 +244,17 @@ function notFound(command: string): ProviderError {
 /** Run the command for a short answer, with nothing on its input. */
 function ask(command: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 20_000): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    // In a process group of its own, as a run is, so that a script around the real program is ended with the program.
+    const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    track(child);
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    const timer = setTimeout(() => {
+      // Its time is up. The answer is taken as it stands, without waiting for the output to close: whatever
+      // the command started may be holding it open, and may never let go.
+      signalRun(child, 'SIGKILL');
+      resolve({ code: null, stdout, stderr });
+    }, timeoutMs);
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
     child.on('error', (err: NodeJS.ErrnoException) => {
@@ -265,9 +272,9 @@ function ask(command: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs 
  * Ask Claude Code which version it is and whether it is signed in. Neither question calls a model. Throws,
  * with words for the person, if the command is missing, too old or not signed in.
  */
-export async function checkClaudeCode(command = 'claude', env: NodeJS.ProcessEnv = process.env): Promise<ClaudeCodeStatus> {
+export async function checkClaudeCode(command = 'claude', env: NodeJS.ProcessEnv = process.env, timeoutMs?: number): Promise<ClaudeCodeStatus> {
   const clean = childEnv(env);
-  const said = await ask(command, ['--version'], clean);
+  const said = await ask(command, ['--version'], clean, timeoutMs);
   const version = /claude code/i.test(said.stdout) ? parseVersion(said.stdout)?.join('.') : undefined;
   if (!version) {
     throw new ProviderError(`"${command} --version" did not answer as Claude Code does${said.stderr.trim() ? ` (${brief(said.stderr.trim(), 200)})` : ''}. Set CLAUDE_CODE_PATH to the Claude Code command.`, 'auth', false);
@@ -275,7 +282,7 @@ export async function checkClaudeCode(command = 'claude', env: NodeJS.ProcessEnv
   if (olderThan(version, MIN_CLAUDE_CODE)) {
     throw new ProviderError(`Claude Code ${version} is too old for this: ${MIN_CLAUDE_CODE} or later is needed. Update it with "claude update".`, 'auth', false);
   }
-  const auth = await ask(command, ['auth', 'status', '--json'], clean);
+  const auth = await ask(command, ['auth', 'status', '--json'], clean, timeoutMs);
   let status: Json | null = null;
   try {
     const parsed: unknown = JSON.parse(auth.stdout);
@@ -466,6 +473,12 @@ const beyond = (a: Tokens, b: Tokens): Tokens => ({
   outputTokens: Math.max(0, a.outputTokens - b.outputTokens),
   cacheReadTokens: Math.max(0, a.cacheReadTokens - b.cacheReadTokens),
   cacheWriteTokens: Math.max(0, a.cacheWriteTokens - b.cacheWriteTokens),
+});
+const plus = (a: Tokens, b: Tokens): Tokens => ({
+  inputTokens: a.inputTokens + b.inputTokens,
+  outputTokens: a.outputTokens + b.outputTokens,
+  cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+  cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
 });
 const any = (tokens: Tokens) => tokens.inputTokens + tokens.outputTokens + tokens.cacheReadTokens + tokens.cacheWriteTokens > 0;
 
@@ -669,7 +682,8 @@ export class ClaudeCodeProvider implements Provider {
         const before = replies.get(id);
         const total = most(before ?? NO_TOKENS, known);
         const plain = canonical(model);
-        const costUsd = Math.max(before?.costUsd ?? 0, isKnownModel(plain) ? costOfRequest(plain, total) : 0);
+        // A reply the model's fallback wrote, after a refusal, is counted at the fallback's rates as it comes.
+        const costUsd = Math.max(before?.costUsd ?? 0, hasRates(plain) ? costOfRequest(plain, total) : 0);
         replies.set(id, { ...total, model: plain, costUsd });
         const more = beyond(total, before ?? NO_TOKENS);
         const moreCost = costUsd - (before?.costUsd ?? 0);
@@ -771,13 +785,21 @@ export class ClaudeCodeProvider implements Provider {
               costUsd: (sum?.costUsd ?? 0) + reply.costUsd,
             });
           }
+          // What was counted under a name the run's account does not use. An entry of the account that matches no
+          // counted name is those same replies under another name, whatever each is called: it is set against this,
+          // and takes from it what it accounts for, so that nothing is counted twice however many models are listed.
+          const named = new Set(exact.map((entry) => canonical(entry.model)));
+          let spare: Tokens & { costUsd: number } = { ...NO_TOKENS, costUsd: 0 };
+          for (const [name, sum] of counted) {
+            if (!named.has(name)) spare = { ...plus(spare, sum), costUsd: spare.costUsd + sum.costUsd };
+          }
           for (const entry of exact) {
-            // One model in the run and one in its account are the same model, whatever each is called.
-            const before = exact.length === 1 && counted.size === 1 ? [...counted.values()][0] : counted.get(canonical(entry.model));
             const plain = canonical(entry.model);
+            const before = counted.get(plain) ?? spare;
             const costUsd = entry.costUsd ?? (isKnownModel(plain) ? costOfRequest(plain, entry.tokens) : 0);
-            const more = beyond(entry.tokens, before ?? NO_TOKENS);
-            const moreCost = Math.max(0, costUsd - (before?.costUsd ?? 0));
+            const more = beyond(entry.tokens, before);
+            const moreCost = Math.max(0, costUsd - before.costUsd);
+            if (!counted.has(plain)) spare = { ...beyond(spare, entry.tokens), costUsd: Math.max(0, spare.costUsd - costUsd) };
             if (moreCost > 0 || entry.webSearches > 0 || any(more)) report(entry.model, more, moreCost, { webSearches: entry.webSearches });
           }
           // A run that gives only a total is settled to that total, under the model that was asked for.
@@ -835,7 +857,9 @@ export class ClaudeCodeProvider implements Provider {
   private settle(outcome: Outcome, model: string, options: { turnLimitIsAnEnd?: boolean } = {}): Json {
     if (outcome.killed === 'abort') throw new ProviderError('The call was stopped.', 'aborted', false);
     if (outcome.killed === 'closed') throw new ProviderError('Claude Code was disconnected while this call was running.', 'auth', false);
-    if (outcome.killed === 'idle') {
+    // A run that had already given its result, and was stopped only because it then would not end, has said all
+    // it had to say: its result stands.
+    if (outcome.killed === 'idle' && !outcome.result) {
       throw new ProviderError(`Claude Code said nothing for ${Math.round(this.idleTimeoutMs / 60_000)} minutes and was stopped.`, 'unavailable', true);
     }
     if (outcome.killed === 'no_tools') throw new ProviderError('The run could not reach the organisation’s tools, so it was stopped before it did anything.', 'unavailable', true);
@@ -852,6 +876,11 @@ export class ClaudeCodeProvider implements Provider {
       const how = outcome.code !== null ? ` (exit ${outcome.code})` : outcome.signal ? ` (${outcome.signal})` : '';
       throw new ProviderError(`Claude Code ended without an answer${how}${said ? `: ${said}` : '.'}`, 'unavailable', true);
     }
+    // What was sent, or what the agent had read since, is more than the model takes. Claude Code names this ending
+    // in its result, and says "Prompt is too long" in place of a reply.
+    if (result.terminal_reason === 'prompt_too_long' || (result.is_error === true && /^Prompt is too long/i.test(text(result.result)))) {
+      throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
+    }
     if (result.is_error !== true) {
       if (result.stop_reason === 'refusal') throw new ProviderError('The model declined this request.', 'refusal', false);
       return result;
@@ -864,6 +893,11 @@ export class ClaudeCodeProvider implements Provider {
     const status = num(result.api_error_status);
     // The kinds of refusal Claude Code names for itself, wherever in the result it names them.
     const whole = JSON.stringify(result);
+    // Turned away for what the request says: by the API's content filter, a safety monitor, or the organisation's own
+    // rules on what may be sent. The same request would be turned away again.
+    if (/safety_monitor_blocked|dlp_request_denied/.test(whole) || /Output blocked by content filtering policy/i.test(said)) {
+      throw new ProviderError(`The model declined this request: ${said}`, 'refusal', false);
+    }
     if (/model_requires_usage_credits|long_context_credits_required/.test(whole)) {
       throw new ProviderError(`Claude Code would have to bill this call to paid usage, which your plan does not cover: ${said} The organisation is paused. Move it to another model, or allow the usage in Claude Code yourself and resume.`, 'rate_limit', false);
     }

@@ -29,6 +29,7 @@ import {
   addSpend,
   addSteer,
   addUsage,
+  countable,
   assertModelRefs,
   CEO_QUESTION,
   ceoOf,
@@ -43,6 +44,7 @@ import {
   sessionAllowance,
   syncJudge,
   toClientView,
+  StorageError,
   ValidationError,
 } from './state';
 import { cycleComplete, nextWork, settle, type WorkItem } from './work';
@@ -57,6 +59,8 @@ export interface RunnerOptions {
   checkTimes?: Partial<CheckTimes>;
   /** At the slow pace, the pause after one piece of work before the next starts. */
   paceGapMs?: number;
+  /** How long to wait before trying again to hold a hosted session that could not be held; doubles each time, up to ten minutes. */
+  holdRetryMs?: number;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -64,8 +68,13 @@ const MAX_ATTEMPTS = 3;
 export const SLOW_PACE_GAP_MS = 20_000;
 const MAX_ACTIVITY = 300;
 const MAX_HISTORY = 60;
+/** How much of the business records' edit history stays in live state, and how far past that it may run before the oldest are moved out. */
+export const AUDIT_KEPT_LIVE = 100;
+export const AUDIT_SPILL_AT = 100;
+/** How many of the most recent model calls the whole-life views are given. An organisation can make far more than a page can draw. */
+export const MAX_HISTORY_ENTRIES = 20_000;
 /** Failures that say something about one task rather than about the provider. */
-const TASK_LEVEL_ERRORS = new Set(['refusal', 'truncated', 'invalid_output']);
+const TASK_LEVEL_ERRORS = new Set(['refusal', 'truncated', 'too_long', 'invalid_output']);
 
 /** What a piece of work was part of, so the timeline can place it and the calibration can learn from it. */
 function placeOf(org: Organisation, item: WorkItem, agent: number | null): Pick<ActivityEntry, 'planId' | 'phaseIndex' | 'taskId' | 'agent' | 'effort'> {
@@ -96,6 +105,14 @@ export class OrgRunner {
   private readonly listeners = new Set<Listener>();
   /** Hosted sessions being archived right now, so that none is asked twice. */
   private readonly archiving = new Set<string>();
+  /** Hosted sessions being held from here right now, for the same reason. */
+  private readonly holding = new Set<string>();
+  /** Set while a session that was left to itself still has to be held: when to try again. */
+  private holdTimer: NodeJS.Timeout | null = null;
+  private holdTries = 0;
+  /** Whether the board has been told that a session could not be held, and so is owed word when that is over. */
+  private holdSaid = false;
+  private readonly holdRetryMs: number;
   /** Work done beside the loop (archiving sessions), so that coming to rest can wait for it. */
   private chores: Promise<unknown> = Promise.resolve();
   private abort = new AbortController();
@@ -113,6 +130,8 @@ export class OrgRunner {
   private saveTimer: NodeJS.Timeout | null = null;
   private saving: Promise<void> = Promise.resolve();
   private saveError: Error | null = null;
+  private auditWarned = false;
+  private activityWarned = false;
   private activitySeq = 0;
   private readonly retryDelayMs: number;
   private readonly emitIntervalMs: number;
@@ -130,6 +149,7 @@ export class OrgRunner {
     this.checkTimes = { ...CHECK_TIMES, ...options.checkTimes };
     this.emitIntervalMs = options.emitIntervalMs ?? 150;
     this.paceGapMs = options.paceGapMs ?? SLOW_PACE_GAP_MS;
+    this.holdRetryMs = options.holdRetryMs ?? 30_000;
   }
 
   view(): OrgView {
@@ -144,9 +164,9 @@ export class OrgRunner {
     };
   }
 
-  /** Every model call this organisation has made, from its log on disk: for views that span its whole life. */
+  /** The model calls this organisation has made, from its log on disk, for views that span its whole life: the most recent, where there are more than a page can use. */
   history(): Promise<ActivityEntry[]> {
-    return this.store.readActivity(this.org.id);
+    return this.store.readActivity(this.org.id, MAX_HISTORY_ENTRIES);
   }
 
   subscribe(listener: Listener): () => void {
@@ -257,7 +277,9 @@ export class OrgRunner {
       }
     }
     const oldInterval = org.settings.reviewIntervalMinutes;
+    const hadWeb = org.settings.webResearch;
     org.settings = next;
+    if (hadWeb && !next.webResearch) this.sayWhoKeepsWeb(null);
     if (next.reviewIntervalMinutes !== 0 && next.reviewIntervalMinutes !== oldInterval) org.business.nextReviewAt = new Date(Date.now() + next.reviewIntervalMinutes * 60_000).toISOString();
     if (next.reviewIntervalMinutes === 0) { org.business.waiting = false; this.clearWake(); }
     if (org.settings.execution !== before) {
@@ -338,6 +360,95 @@ export class OrgRunner {
     this.chores = this.chores.then(() => this.archiveSessions()).catch(() => {});
   }
 
+  /**
+   * Hold hosted sessions that nobody is following: bring each one's spend cap down to what it has spent, as is
+   * done whenever the organisation is paused. A session is normally held by whoever follows it, on letting go.
+   * This is for the ones that had nobody to do that: sessions that were being followed when the server stopped
+   * without warning (marked `adrift` as the organisation was loaded) and, with `all`, every session of a plan
+   * that is not finished, for an organisation that is being removed. A session that is being followed now is left
+   * to whoever follows it. `left` counts the sessions that could not be held, and `why` is what the last of them said.
+   */
+  async holdSessions(scope: { all?: boolean } = {}): Promise<{ held: number; left: number; why: string | null }> {
+    const provider = this.provider;
+    let held = 0;
+    let left = 0;
+    let why: string | null = null;
+    if (!provider.holdSession) return { held, left, why };
+    for (const plan of this.org.plans) {
+      const managed = plan.managed;
+      const id = managed?.sessionId;
+      if (!managed || !id || !(managed.adrift || scope.all)) continue;
+      if (managed.state === 'finished' || this.inFlight.has(`execute:${plan.id}`) || this.holding.has(id)) continue;
+      this.holding.add(id);
+      try {
+        const now = await provider.holdSession(id);
+        // It may have been picked up, or given up for another, while the answer was on its way: then it is no longer this method's to settle.
+        if (managed.sessionId !== id || this.inFlight.has(`execute:${plan.id}`)) continue;
+        // A session that no longer exists, or has ended, has nothing left to hold.
+        if (now) managed.budgetUsd = now.budgetUsd;
+        managed.adrift = false;
+        held += 1;
+        this.changed();
+      } catch (err) {
+        left += 1;
+        why = err instanceof Error ? err.message : String(err);
+      } finally {
+        this.holding.delete(id);
+      }
+    }
+    return { held, left, why };
+  }
+
+  /**
+   * Hold the sessions that were left to themselves when the server stopped without warning, beside the loop, and
+   * keep at it for as long as one of them is still left so: until its cap has been brought down, such a session
+   * can go on spending up to it whatever the organisation is doing. A session the organisation is picking up
+   * again is left to that, and looked at again later: it stops being left to itself once it is followed, and if it
+   * could not be picked up (there was nothing to give it, or the provider was out of reach) it is held then. The
+   * board is told when a session cannot be held, and again when none is left to itself any longer.
+   */
+  holdAdrift(): void {
+    const adrift = () => this.org.plans.filter((p) => p.managed?.adrift && p.managed.sessionId && p.managed.state !== 'finished');
+    if (this.disposed || this.holdTimer || !adrift().length) return;
+    this.chores = this.chores
+      .then(() => this.holdSessions())
+      .then(({ left, why }) => {
+        if (this.disposed) return;
+        const plans = adrift();
+        if (!plans.length) {
+          if (this.holdSaid) {
+            postToBoard(this.org, 'system', 'system', 'Hosted sessions held', 'The hosted sessions that were left running when the server stopped are no longer left to themselves: each has been held, with its cap down to what it has spent, or is being followed again.');
+            this.changed();
+          }
+          this.holdSaid = false;
+          this.holdTries = 0;
+          return;
+        }
+        // Some are still left to themselves: they could not be held, or the organisation was picking them up just then.
+        if (left && !this.holdSaid) {
+          this.holdSaid = true;
+          const room = plans.reduce((sum, p) => sum + Math.max(0, p.managed!.budgetUsd - p.managed!.spentUsd), 0);
+          const many = plans.length !== 1;
+          postToBoard(
+            this.org,
+            'system',
+            'system',
+            many ? 'Hosted sessions could not be held' : 'A hosted session could not be held',
+            `The server stopped without warning while ${many ? `${plans.length} hosted sessions were` : 'a hosted session was'} at work, so nobody brought ${many ? 'their caps' : 'its cap'} down, and holding ${many ? 'them' : 'it'} now has failed${why ? `: ${why}` : '.'} Until ${many ? 'they are' : 'it is'} held, ${many ? 'they' : 'it'} can go on spending by ${many ? 'themselves' : 'itself'}, up to about $${room.toFixed(2)} more, although the organisation is paused. This is being tried again. Starting the organisation picks ${many ? 'them' : 'it'} up, and ${many ? 'each can' : 'it can'} be looked at from its plan, in the Anthropic Console.`,
+          );
+          this.changed();
+        }
+        const wait = Math.min(600_000, this.holdRetryMs * 2 ** this.holdTries++);
+        this.holdTimer = setTimeout(() => {
+          this.holdTimer = null;
+          this.holdAdrift();
+        }, wait);
+        // A try that is still to come must not keep a server that is shutting down from exiting.
+        this.holdTimer.unref?.();
+      })
+      .catch(() => {});
+  }
+
   // ---- the signatory's desk ----
 
   /** The person says a request has been carried out, or refuses it and says why. The organisation is told. */
@@ -365,7 +476,37 @@ export class OrgRunner {
     const { changed, removed } = changePrivilege(this.org, seatId, privilege, allowed);
     // Hosted sessions cannot reach the vault, so a privilege that does not apply there is one that works through it.
     if (removed && !PRIVILEGE_BY_ID[privilege as Privilege].hosted) await this.access.revoke(String(seatId));
+    if (removed && privilege === 'web_search') this.sayWhoKeepsWeb(String(seatId));
     if (changed) this.changed();
+  }
+
+  /**
+   * A hosted session is given its tools and its network when it starts, and they cannot be changed afterwards.
+   * When web search is taken away, from one role or from the whole organisation, a session that started with it
+   * goes on having it until its plan is over. Nothing here can alter that, so the board is told which sessions
+   * those are, and what does stop one.
+   */
+  private sayWhoKeepsWeb(seatId: string | null): void {
+    const org = this.org;
+    const keeping = org.plans.filter(
+      (p) =>
+        isPlanActive(p) &&
+        (!seatId || p.ownerId === seatId) &&
+        !!p.managed?.sessionId &&
+        p.managed.web === true &&
+        p.managed.state !== 'finished' &&
+        !(org.settings.webResearch && allows(org, p.ownerId, 'web_search')),
+    );
+    if (!keeping.length) return;
+    const who = [...new Set(keeping.map((p) => execById(org, p.ownerId)?.short ?? p.ownerId))];
+    const many = keeping.length !== 1;
+    postToBoard(
+      org,
+      'system',
+      'system',
+      many ? 'Hosted sessions keep the web access they started with' : `The ${who[0]} session keeps the web access it started with`,
+      `Web search has been taken away, but a hosted session is given its tools and its network when it starts, and they cannot be changed afterwards. ${many ? `The sessions carrying out the plans of ${who.join(', ')} started` : `The session carrying out the ${who[0]} plan started`} with web search and an open network, and ${many ? 'keep' : 'keeps'} both until ${many ? 'their plans are' : 'its plan is'} over. Work that starts from now on is without them. To stop ${many ? 'these sessions' : 'this session'} sooner, pause the organisation: a session that is held can run nothing.`,
+    );
   }
 
   setWorkApproach(seatId: unknown, approachId: unknown, allowed: unknown): void {
@@ -479,7 +620,7 @@ export class OrgRunner {
     }
     this.queueSave();
     await this.saving;
-    if (this.saveError) throw this.saveError;
+    if (this.saveError) throw new StorageError(`The organisation could not be saved (${this.saveError.message}), so this may not outlast a restart. Restore storage, then try again.`);
   }
 
   /** Resolves when paused or waiting for a scheduled review, with nothing in flight. */
@@ -684,6 +825,7 @@ export class OrgRunner {
       halting: () => this.halting,
       overBudget: () => org.usage.costUsd >= org.settings.budgetUsd,
       recordUsage: (execId: string, usage: CallUsage) => {
+        if (!countable(usage)) return this.uncounted(usage.model);
         addUsage(org.usage, usage);
         addUsage((org.usageByExec[execId] ??= emptyUsage()), usage);
         spent.model = usage.model;
@@ -693,6 +835,7 @@ export class OrgRunner {
         this.changed();
       },
       recordSpend: (execId, model, delta) => {
+        if (!countable(delta)) return this.uncounted(model);
         addSpend(org.usage, delta);
         addSpend((org.usageByExec[execId] ??= emptyUsage()), delta);
         spent.model = model;
@@ -740,6 +883,19 @@ export class OrgRunner {
       this.changed();
       this.pump();
     }
+  }
+
+  /**
+   * A call reported tokens or a cost that is not a number. Added to the totals it would make them not a number
+   * either, and such a total compares as less than any budget: the organisation would never pause on spend again.
+   * So it is left out, and the organisation stops until a person has put the model's price right.
+   */
+  private uncounted(model: string): void {
+    console.warn(`Organisation ${this.org.id}: a call on ${model || 'an unnamed model'} reported usage that is not a number.`);
+    this.pause(
+      'error',
+      `A call on ${model || 'a model'} reported a cost that is not a number, so what it spent could not be counted and the budget could not be kept. Nothing has been added to the spend for it. Check the price set for this model under Models and keys, or choose another model, before starting again.`,
+    );
   }
 
   /** Decide what a failed call means. Returns the message to log, or null if the failure needs no mention. */
@@ -827,6 +983,9 @@ export class OrgRunner {
       return old(m.cycle) ? m.cycle : null;
     };
     const leaving = new Set([...org.plans, ...org.board].filter((x) => old(x.cycle)).map((x) => x.cycle));
+    // A cycle leaves live state only once it is in the archive. One that cannot be written there (a full disk, say)
+    // stays where it is and is tried again when the next cycle closes: the record is worth more than the room.
+    const staying = new Set<number>();
     for (const cycle of leaving) {
       const data = {
         cycle,
@@ -841,15 +1000,21 @@ export class OrgRunner {
           messages: desk.messages.filter((m) => leavesWith(m) === cycle),
         },
       };
-      this.store.archiveCycle(org.id, cycle, data).catch((err) => console.warn(`Could not archive cycle ${cycle} of ${org.id}: ${err.message}`));
+      try {
+        this.store.archiveCycleNow(org.id, cycle, data);
+      } catch (err) {
+        staying.add(cycle);
+        console.warn(`Could not archive cycle ${cycle} of ${org.id}: ${(err as Error).message}. It stays in the organisation's state for now.`);
+      }
     }
-    org.plans = org.plans.filter((p) => !old(p.cycle));
-    org.decisions = org.decisions.filter((d) => !old(d.cycle));
-    org.reports = org.reports.filter((r) => !old(r.cycle));
-    org.reviewRounds = org.reviewRounds.filter((r) => !old(r.cycle));
-    org.board = org.board.filter((m) => !old(m.cycle));
-    desk.messages = desk.messages.filter((m) => leavesWith(m) === null);
-    desk.requests = desk.requests.filter((r) => !settledIn.has(r.id));
+    const goes = (cycle: number | null | undefined) => cycle !== null && cycle !== undefined && old(cycle) && !staying.has(cycle);
+    org.plans = org.plans.filter((p) => !goes(p.cycle));
+    org.decisions = org.decisions.filter((d) => !goes(d.cycle));
+    org.reports = org.reports.filter((r) => !goes(r.cycle));
+    org.reviewRounds = org.reviewRounds.filter((r) => !goes(r.cycle));
+    org.board = org.board.filter((m) => !goes(m.cycle));
+    desk.messages = desk.messages.filter((m) => !goes(leavesWith(m)));
+    desk.requests = desk.requests.filter((r) => !goes(settledIn.get(r.id)));
     org.inbox = {};
 
     org.cycle = { number: next, stage: 'consult', consults: {}, intent: null, priorities: [], startedAt: endedAt };
@@ -877,7 +1042,14 @@ export class OrgRunner {
     if (this.disposed) return;
     this.activity.push(entry);
     if (this.activity.length > MAX_ACTIVITY) this.activity.splice(0, this.activity.length - MAX_ACTIVITY);
-    this.store.appendActivity(this.org.id, entry).catch(() => {});
+    this.store.appendActivity(this.org.id, entry).then(
+      () => (this.activityWarned = false),
+      (err: Error) => {
+        // The work itself is safe in the organisation's state; what is lost is its line in the log of calls. Said once, not per call.
+        if (!this.activityWarned) console.warn(`Could not write to the activity log of ${this.org.id}: ${err.message}. Calls made until this is put right will be missing from the timeline and the spend history.`);
+        this.activityWarned = true;
+      },
+    );
     for (const listener of this.listeners) listener({ type: 'activity', entry });
   }
 
@@ -903,7 +1075,7 @@ export class OrgRunner {
   private queueSave(): void {
     if (this.disposed) return;
     this.saving = this.saving
-      .then(async () => { await this.store.save(this.org); this.saveError = null; })
+      .then(async () => { await this.spillAudit(); await this.store.save(this.org); this.saveError = null; })
       .catch((err) => {
         this.saveError = err as Error;
         const message = 'Could not save the organisation: ' + this.saveError.message + '. Restore storage before resuming.';
@@ -920,6 +1092,28 @@ export class OrgRunner {
       });
   }
 
+  /**
+   * Keep the edit history of the business records from growing inside the saved state, which is written out whole
+   * on every change. The oldest entries move to a file of their own once there are enough of them. They leave live
+   * state only after they have been written there; if the process stops between the two, they are written again
+   * next time, so the file can hold an entry twice but never lose one. If the file cannot be written they stay.
+   */
+  private async spillAudit(): Promise<void> {
+    const over = this.org.business.audit.length - (AUDIT_KEPT_LIVE + AUDIT_SPILL_AT);
+    if (over < 0) return;
+    const leaving = this.org.business.audit.slice(0, over + AUDIT_SPILL_AT);
+    try {
+      await this.store.appendAudit(this.org.id, leaving);
+    } catch (err) {
+      if (!this.auditWarned) console.warn(`Could not move older edit history of ${this.org.id} to its own file: ${(err as Error).message}. It stays in the organisation's state.`);
+      this.auditWarned = true;
+      return;
+    }
+    this.auditWarned = false;
+    // Entries are only ever added at the end, so the ones written are still the first ones, whatever happened meanwhile.
+    this.org.business.audit.splice(0, leaving.length);
+  }
+
   /** Cancel timers and let go of subscribers. The state must already be flushed; nothing is written after this. */
   dispose(): void {
     this.disposed = true;
@@ -930,7 +1124,8 @@ export class OrgRunner {
     this.backoff.clear();
     if (this.emitTimer) clearTimeout(this.emitTimer);
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.emitTimer = this.saveTimer = null;
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.emitTimer = this.saveTimer = this.holdTimer = null;
     this.listeners.clear();
   }
 }

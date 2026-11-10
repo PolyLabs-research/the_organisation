@@ -35,6 +35,25 @@ describe('the workspace', () => {
     await expect(workspace.read(bad)).rejects.toBeInstanceOf(WorkspaceError);
   });
 
+  it('refuses a path that climbs out of the workspace before it looks at the disk at all', () => {
+    // Two checks keep a path inside: this one, on the path as written, and one on where it really leads. Each
+    // has to hold by itself, since some callers use a path this has passed without going on to the second.
+    for (const outside of ['../outside.txt', '..', 'a/../../outside.txt', 'legal/../../../etc/passwd', '..\\outside.txt', './../outside.txt']) {
+      expect(() => workspace.normalise(outside), outside).toThrow('path escapes the workspace');
+    }
+    expect(() => workspace.normalise('')).toThrow('path is empty');
+    expect(() => workspace.normalise('.')).toThrow('must name a file');
+    expect(() => workspace.normalise('a\0b')).toThrow('null byte');
+    expect(workspace.normalise('legal/../engineering/spec.md')).toBe('engineering/spec.md');
+    expect(workspace.normalise('..notes/plan.md')).toBe('..notes/plan.md');
+  });
+
+  it('takes a folder whose name only begins with two dots for what it is: a folder inside', async () => {
+    expect(await workspace.write('..notes/plan.md', 'A plan.')).toEqual({ path: '..notes/plan.md', bytes: 7 });
+    expect((await workspace.read('..notes/plan.md')).content).toBe('A plan.');
+    expect((await workspace.list('..notes')).map((f) => f.path)).toEqual(['..notes/plan.md']);
+  });
+
   it('refuses to follow a symlink out of the workspace', async () => {
     const outside = path.join(dir, 'outside');
     await mkdir(outside);

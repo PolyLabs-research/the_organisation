@@ -168,7 +168,7 @@ So choose what you connect with that in mind:
 
 ## Outgoing email
 
-Agents prepare plain-text drafts. A person reviews the sender, recipient and full content, then clicks **Send this email**. There is no agent send tool. Drafts have one recipient, no attachments and no remote content.
+Agents prepare plain-text drafts. A person reviews the sender, recipient and full content, clicks **Send this email**, and then confirms the recipient and subject it names. There is no agent send tool. Drafts have one recipient, no attachments and no remote content.
 
 Before contacting Gmail or SMTP, the server saves the draft as `sending`. A confirmed API/SMTP acceptance changes it to `sent`. A timeout, cancellation or restart leaves it `uncertain`; the server will not automatically send it again. Check the external mailbox before preparing another copy. An accepted message is not proof that the recipient read it.
 

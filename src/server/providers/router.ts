@@ -117,7 +117,8 @@ export class ProviderRouter implements Provider {
    * stands today. Null if none is known.
    */
   private priceOf(connection: Connection, model: string): Price | null {
-    const own = connection.prices[model];
+    // Looked up as the connection's own entry: a model may be named after something every object has.
+    const own = Object.hasOwn(connection.prices, model) ? connection.prices[model] : undefined;
     if (own) return own;
     const live = connection.models.find((m) => m.id === model)?.price;
     if (live) return live;
@@ -338,6 +339,7 @@ export class ProviderRouter implements Provider {
             ...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
             // Always said outright: left unsaid, the client would take an address from the environment instead.
             baseURL: connection.baseURL,
+            ...(connection.source === 'stored' ? { defaultHeaders: environmentHeadersCleared(connection.apiKey) } : {}),
           })
         : preset.kind === 'responses'
           ? new OpenAIResponsesProvider(options)
@@ -460,6 +462,13 @@ export class ProviderRouter implements Provider {
     // With no Anthropic key there is nobody to ask. That is not the same as the session being gone.
     if (!this.anthropicKeys().length) throw new ProviderError('No Anthropic key is connected to archive this session with. Add one under Models and keys.', 'auth', false);
     return (await this.onAnthropic((provider) => provider.archiveSession(sessionId), (result) => result === 'gone')) ?? 'gone';
+  }
+
+  async holdSession(sessionId: string): Promise<{ budgetUsd: number; spentUsd: number } | null> {
+    if (this.simulated) return this.mock.holdSession(sessionId);
+    // With no Anthropic key there is nobody to ask. That is not the same as there being nothing to hold.
+    if (!this.anthropicKeys().length) throw new ProviderError('No Anthropic key is connected to hold this session with. Add one under Models and keys.', 'auth', false);
+    return (await this.onAnthropic((provider) => provider.holdSession(sessionId), (result) => result === null)) ?? null;
   }
 
   // ---- adding and looking after keys ----
@@ -588,7 +597,12 @@ export class ProviderRouter implements Provider {
     try {
       if (preset.kind === 'anthropic') {
         // Claude's models are the ones this project has prices for; the call is only to see that the key is good.
-        const client = new Anthropic({ ...(connection.apiKey ? { apiKey: connection.apiKey } : {}), baseURL: connection.baseURL, maxRetries: 1 });
+        const client = new Anthropic({
+          ...(connection.apiKey ? { apiKey: connection.apiKey } : {}),
+          baseURL: connection.baseURL,
+          maxRetries: 1,
+          ...(connection.source === 'stored' ? { defaultHeaders: environmentHeadersCleared(connection.apiKey) } : {}),
+        });
         await client.models.list({ limit: 1 });
         connection.models = [];
       } else {
@@ -680,6 +694,23 @@ export class ProviderRouter implements Provider {
 export function stateFileOf(file: string, connectionId: string): string {
   if (connectionId === 'anthropic') return file;
   return /\.json$/.test(file) ? file.replace(/\.json$/, `-${connectionId}.json`) : `${file}-${connectionId}`;
+}
+
+/**
+ * Headers the Anthropic client would add from ANTHROPIC_CUSTOM_HEADERS, each set to be left out. They were written
+ * for the key the environment gives and wherever that key goes, and a key added in the interface is another
+ * account's, perhaps at another address. An Authorization among them would also go out in place of the key, which
+ * the client sends as a bearer token, so there the key's own is said outright.
+ */
+function environmentHeadersCleared(apiKey: string): Record<string, string | null> {
+  const cleared: Record<string, string | null> = {};
+  for (const line of (process.env.ANTHROPIC_CUSTOM_HEADERS ?? '').split('\n')) {
+    const colon = line.indexOf(':');
+    if (colon <= 0) continue;
+    const name = line.slice(0, colon).trim();
+    cleared[name] = apiKey && name.toLowerCase() === 'authorization' ? `Bearer ${apiKey}` : null;
+  }
+  return cleared;
 }
 
 /** What went wrong, in the provider's own words where it gave some, without the envelope they came in. */

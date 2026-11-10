@@ -40,14 +40,22 @@ function PasswordUpdate({ orgId, kind, id, onView }: { orgId: string; kind: Kind
 function GrantEditor({ org, kind, record, onView }: { org: Organisation; kind: Kind; record: AccountView | MailboxView | RepositoryView; onView: Update }) {
   const action = useAction();
   const [owners, setOwners] = useState(record.ownerIds);
+  // Removing takes two presses: what is saved here goes for good, and for a password generated here there is no other copy.
+  const [removing, setRemoving] = useState(false);
   useEffect(() => setOwners(record.ownerIds), [record.ownerIds.join(',')]);
-  const update = (enabled: boolean) => void action.run(async () => onView(await call(org.id, 'PATCH', '/' + kind + '/' + record.id, { ownerIds: owners, enabled })));
+  // Ticks are saved by "Save team access" and by nothing else. Disabling or enabling keeps the teams already saved: a press that says nothing of teams must not give one access.
+  const update = (ownerIds: string[], enabled: boolean) => void action.run(async () => onView(await call(org.id, 'PATCH', '/' + kind + '/' + record.id, { ownerIds, enabled })));
+  const lost = kind === 'repositories' ? 'Its saved token is deleted for good.' : kind === 'accounts' ? 'Its saved password is deleted for good. If that is its only copy, reveal it and note it first.' : 'Its saved password or Google sign-in is deleted for good, and so are the drafts prepared from it.';
   return <details className="access-details"><summary>Manage access</summary>
     <TeamPicker org={org} value={owners} onChange={setOwners} />
     <div className="access-actions">
-      <button type="button" className="button" disabled={action.busy} onClick={() => update(record.enabled)}>Save team access</button>
-      <button type="button" className="button" disabled={action.busy} onClick={() => update(!record.enabled)}>{record.enabled ? 'Disable' : 'Enable'}</button>
-      <button type="button" className="button" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'DELETE', '/' + kind + '/' + record.id)))}>Remove connection</button>
+      <button type="button" className="button" disabled={action.busy} onClick={() => update(owners, record.enabled)}>Save team access</button>
+      <button type="button" className="button" disabled={action.busy} onClick={() => update(record.ownerIds, !record.enabled)}>{record.enabled ? 'Disable' : 'Enable'}</button>
+      {removing ? <>
+        <span className="pre-wrap">Remove {record.label}? {lost}</span>
+        <button type="button" className="button button-danger" disabled={action.busy} onClick={() => void action.run(async () => onView(await call(org.id, 'DELETE', '/' + kind + '/' + record.id)))}>Yes, remove it</button>
+        <button type="button" className="button" disabled={action.busy} onClick={() => setRemoving(false)}>Keep it</button>
+      </> : <button type="button" className="button" disabled={action.busy} onClick={() => setRemoving(true)}>Remove connection</button>}
     </div>
     <p className="muted">Removing a connection deletes its saved secret here. It does not delete the external account. Google permissions can also be revoked in your Google Account.</p>
     <ErrorNote>{action.error}</ErrorNote>
@@ -188,14 +196,18 @@ function Inbox({ orgId, box }: { orgId: string; box: MailboxView }) {
 function BrowserDesk({ orgId, account }: { orgId: string; account: AccountView }) {
   const action = useAction();
   const [page, setPage] = useState<AccountPage | null>(null);
-  const [element, setElement] = useState(0);
+  const [element, setElement] = useState<number | null>(null);
   const [source, setSource] = useState('username');
   const [value, setValue] = useState('');
   const [url, setUrl] = useState('');
+  // The elements are numbered afresh for every page that comes back, so the same number is a different element after any action. A choice is for one action, and a number is only sent while it is in the list on show.
+  const chosen = page?.elements.some(item => item.id === element) ? element : null;
   const run = (command: string) => void action.run(async () => {
-    const result = await call<AccountPage>(orgId, 'POST', '/browser', { accountId: account.id, action: command, element, source, value, url });
-    setPage(command === 'close' ? null : result);
-    setValue('');
+    try {
+      const result = await call<AccountPage>(orgId, 'POST', '/browser', { accountId: account.id, action: command, ...(chosen === null ? {} : { element: chosen }), source, value, url });
+      setPage(command === 'close' ? null : result);
+      setValue('');
+    } finally { setElement(null); }
   });
   return <details className="access-details"><summary>Account browser</summary>
     <div className="access-actions">
@@ -205,12 +217,12 @@ function BrowserDesk({ orgId, account }: { orgId: string; account: AccountView }
     </div>
     <ErrorNote>{action.error}</ErrorNote>
     {page ? <div className="access-browser"><h4>{page.title}</h4><p className="muted">{page.url}</p><pre className="access-message-body">{page.text}</pre>
-      <Field label="Page element"><select aria-label="Page element" value={element} onChange={e => setElement(Number(e.target.value))}>{page.elements.map(item => <option value={item.id} key={item.id}>{item.id}: {item.tag} {item.type} — {item.label}</option>)}</select></Field>
+      <Field label="Page element"><select aria-label="Page element" value={chosen ?? ''} onChange={e => setElement(e.target.value === '' ? null : Number(e.target.value))}><option value="">Choose an element</option>{page.elements.map(item => <option value={item.id} key={item.id}>{item.id}: {item.tag} {item.type} — {item.label}</option>)}</select></Field>
       <div className="grid-2">
         <Field label="Fill with"><select aria-label="Fill with" value={source} onChange={e => setSource(e.target.value)}><option value="username">Saved username</option><option value="password">Saved password</option><option value="email">Connected email</option><option value="text">Text or verification code</option></select></Field>
         {source === 'text' ? <Field label="Text or verification code"><input value={value} onChange={e => setValue(e.target.value)} autoComplete="off" /></Field> : null}
       </div>
-      <div className="access-actions"><button type="button" className="button" disabled={action.busy} onClick={() => run('fill')}>Fill element</button><button type="button" className="button" disabled={action.busy} onClick={() => run('click')}>Click element</button></div>
+      <div className="access-actions"><button type="button" className="button" disabled={action.busy || chosen === null} onClick={() => run('fill')}>Fill element</button><button type="button" className="button" disabled={action.busy || chosen === null} onClick={() => run('click')}>Click element</button></div>
       <Field label="Verification link (same service)"><input type="url" value={url} onChange={e => setUrl(e.target.value)} /></Field>
       <button type="button" className="button" disabled={action.busy || !url} onClick={() => run('navigate')}>Follow verification link</button>
     </div> : null}
@@ -235,6 +247,8 @@ function Drafts({ org, view, onView }: { org: Organisation; view: AccessView; on
   const action = useAction();
   const [mailboxId, setMailbox] = useState(view.mailboxes[0]?.id ?? '');
   const [to, setTo] = useState(''), [subject, setSubject] = useState(''), [text, setText] = useState('');
+  // Sending takes two presses. The draft waiting for the second is held by its id, so that when the list moves, as it does whenever an agent prepares another, the second press cannot land on a different draft's send.
+  const [sending, setSending] = useState<string | null>(null);
   return <>
     <form className="ops-editor" onSubmit={event => { event.preventDefault(); void action.run(async () => { onView(await call(org.id, 'POST', '/drafts', { mailboxId, to, subject, text })); setTo(''); setSubject(''); setText(''); }); }}>
       <h3>Prepare an email</h3><div className="grid-2">
@@ -252,7 +266,11 @@ function Drafts({ org, view, onView }: { org: Organisation; view: AccessView; on
       <p className="muted">Prepared by {draft.actorId} · {new Date(draft.createdAt).toLocaleString()}</p>
       <pre className="access-message-body">{draft.text}</pre>
       {draft.status === 'uncertain' || draft.status === 'sending' ? <p className="note note-warn">Delivery is unconfirmed. Check Sent in the mailbox before preparing another copy.</p> : null}
-      <div className="access-actions">{draft.status === 'draft' ? <button type="button" className="button button-primary" disabled={action.busy} onClick={() => void action.run(async () => { try { onView(await call(org.id, 'POST', '/drafts/' + draft.id + '/send', {})); } finally { onView(await call(org.id, 'GET')); } })}>Send this email</button> : null}
+      <div className="access-actions">{draft.status !== 'draft' ? null : sending !== draft.id ? <button type="button" className="button button-primary" disabled={action.busy} onClick={() => setSending(draft.id)}>Send this email</button> : <>
+          <span className="pre-wrap">Send “{draft.subject}” to {draft.to}? Once sent, it cannot be taken back.</span>
+          <button type="button" className="button button-primary" disabled={action.busy} onClick={() => void action.run(async () => { try { onView(await call(org.id, 'POST', '/drafts/' + draft.id + '/send', {})); } finally { setSending(null); onView(await call(org.id, 'GET')); } })}>Yes, send it</button>
+          <button type="button" className="button" disabled={action.busy} onClick={() => setSending(null)}>Not yet</button>
+        </>}
         <button type="button" className="button" disabled={action.busy || draft.status === 'sending'} onClick={() => void action.run(async () => onView(await call(org.id, 'POST', '/drafts/' + draft.id + '/remove', {})))}>Remove from desk</button></div>
     </article>)}
   </>;

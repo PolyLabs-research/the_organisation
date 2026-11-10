@@ -1,6 +1,6 @@
 import { CircleAlert, CircleCheck, Clock, Hourglass, Scale, TriangleAlert } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useState, type MouseEvent, type ReactNode } from 'react';
-import { Calibration, EFFORT_SCALE, forecast, phaseSamples, startOf, taskSamples, type ProjectedBar } from '../shared/effort';
+import { Calibration, EFFORT_SCALE, forecast, least, most, phaseSamples, startOf, taskSamples, type ProjectedBar } from '../shared/effort';
 import { isOpen } from '../shared/signatory';
 import { INTERRUPTED, type ActivityEntry, type Organisation, type OrgView, type WorkKind } from '../shared/types';
 import { describeWait, heldBy } from '../shared/waits';
@@ -38,25 +38,38 @@ const CATEGORY_LABEL: Record<Category, string> = {
   board: 'Board work: consulting, direction, reviews, positions, rulings',
 };
 
-/** The whole log from disk, kept current with what arrives live. */
-function useHistory(orgId: string, live: ActivityEntry[]): { entries: ActivityEntry[]; loading: boolean } {
+/**
+ * The whole log from disk, kept current with what arrives live. It is read again whenever the page has been out of view
+ * (`resumed` counts those returns): nothing arrives live in that time, and more can have happened than the live list holds.
+ */
+function useHistory(orgId: string, live: ActivityEntry[], resumed: number): { entries: ActivityEntry[]; loading: boolean; failed: string | null } {
   const [history, setHistory] = useState<ActivityEntry[] | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
     let gone = false;
     api.history(orgId).then(
-      (entries) => !gone && setHistory(entries),
-      () => !gone && setHistory([]),
+      (entries) => {
+        if (gone) return;
+        setHistory(entries);
+        setFailed(null);
+      },
+      (err: Error) => {
+        if (gone) return;
+        // The views are still drawn, from the calls the page has: but they are not the whole record, and say so.
+        setHistory((had) => had ?? []);
+        setFailed(err.message);
+      },
     );
     return () => {
       gone = true;
     };
-  }, [orgId]);
+  }, [orgId, resumed]);
   const entries = useMemo(() => {
     const base = history ?? [];
     const seen = new Set(base.map((e) => `${e.at}|${e.id}`));
     return [...base, ...live.filter((e) => !seen.has(`${e.at}|${e.id}`))].sort((a, b) => a.at.localeCompare(b.at));
   }, [history, live]);
-  return { entries, loading: history === null };
+  return { entries, loading: history === null, failed };
 }
 
 /**
@@ -120,9 +133,9 @@ function Segmented<T extends string>({ value, options, onChange, label }: { valu
 
 type View = 'timeline' | 'effort' | 'spend' | 'bottlenecks';
 
-export function Overseer({ view, activity }: { view: OrgView; activity: ActivityEntry[] }) {
+export function Overseer({ view, activity, resumed = 0 }: { view: OrgView; activity: ActivityEntry[]; resumed?: number }) {
   const { org } = view;
-  const { entries, loading } = useHistory(org.id, activity);
+  const { entries, loading, failed } = useHistory(org.id, activity, resumed);
   const [shown, setShown] = useState<View>('timeline');
   // A clock for the "now" line and the forecast, moved on while the organisation runs.
   const [now, setNow] = useState(() => Date.now());
@@ -134,7 +147,7 @@ export function Overseer({ view, activity }: { view: OrgView; activity: Activity
   useEffect(() => setNow(Date.now()), [entries.length]);
   // Paused, the forecast runs from where the work stopped (as if resumed then), so a long pause does not squeeze the history.
   const running = org.status === 'running';
-  const anchor = running || !entries.length ? now : Math.max(...entries.map((e) => Date.parse(e.at)));
+  const anchor = running || !entries.length ? now : most(entries.map((e) => Date.parse(e.at)));
   const projected = useMemo(() => forecast(org, entries, anchor), [org, entries, anchor]);
 
   return (
@@ -151,6 +164,7 @@ export function Overseer({ view, activity }: { view: OrgView; activity: Activity
         ]}
       />
       {loading ? <p className="muted">Reading the organisation’s activity…</p> : null}
+      {failed ? <p className="note note-warn">The organisation’s record of its calls could not be read, so these views are drawn from the most recent calls only. {failed}</p> : null}
       {!loading && shown === 'timeline' ? <Timeline org={org} entries={entries} projected={projected} now={anchor} running={running} /> : null}
       {!loading && shown === 'effort' ? <EffortView org={org} entries={entries} /> : null}
       {!loading && shown === 'spend' ? <SpendView org={org} entries={entries} projected={projected} /> : null}
@@ -187,13 +201,15 @@ type Window = 'all' | '60' | '15';
 
 const LABEL_COL = 100;
 const ROW_H = 22;
+/** The most calls the timeline draws. Each bar is an element of the page, and tens of thousands of them make the page too slow to use. */
+const MAX_BARS = 3000;
 
 function laneOrder(org: Organisation): string[] {
   const kinds = ['ceo', 'lead', 'judge', 'signatory'];
   return [...org.executives].sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind)).map((e) => e.id);
 }
 
-function Timeline({ org, entries, projected, now, running }: { org: Organisation; entries: ActivityEntry[]; projected: ProjectedBar[]; now: number; running: boolean }) {
+export function Timeline({ org, entries, projected, now, running }: { org: Organisation; entries: ActivityEntry[]; projected: ProjectedBar[]; now: number; running: boolean }) {
   const [win, setWin] = useState<Window>('all');
   const [showForecast, setShowForecast] = useState(true);
   const [asTable, setAsTable] = useState(false);
@@ -201,7 +217,8 @@ function Timeline({ org, entries, projected, now, running }: { org: Organisation
   const [ref, width, box0] = useWidth<HTMLDivElement>();
 
   const { rows, bars } = useMemo(() => {
-    const bars: Bar[] = entries.map((e, i) => {
+    // Of a log too long to draw whole, the latest calls: the log runs from the earliest to the latest.
+    const bars: Bar[] = entries.slice(-MAX_BARS).map((e, i) => {
       const agent = e.kind === 'execute' ? 'session' : e.kind === 'task' ? agentOf(e) : null;
       const seat = e.execId ?? 'system';
       return {
@@ -240,8 +257,8 @@ function Timeline({ org, entries, projected, now, running }: { org: Organisation
   if (!bars.length) return <Empty title="Nothing has happened yet.">Once the organisation starts, every call and agent task appears here on its seat’s lane.</Empty>;
 
   const forecasting = showForecast && projected.length > 0;
-  const last = Math.max(...bars.map((b) => b.end), running || forecasting ? now : 0);
-  const first = Math.min(...bars.map((b) => b.start));
+  const last = Math.max(most(bars.map((b) => b.end)), running || forecasting ? now : 0);
+  const first = least(bars.map((b) => b.start));
   const t1 = last;
   const t0 = win === 'all' ? first : Math.max(first, t1 - Number(win) * 60_000);
   const span = Math.max(t1 - t0, 60_000);
@@ -306,6 +323,11 @@ function Timeline({ org, entries, projected, now, running }: { org: Organisation
         ]}
       />
       {showForecast && !projected.length ? <p className="muted small">No forecast yet: it needs finished work with effort ratings to learn from, and unfinished work that has been rated.</p> : null}
+      {entries.length > MAX_BARS ? (
+        <p className="muted small">
+          The timeline shows the latest {MAX_BARS.toLocaleString('en')} of {entries.length.toLocaleString('en')} calls, so that the page stays quick. Effort and Spend still count every call.
+        </p>
+      ) : null}
       {asTable ? (
         <TimelineTable org={org} bars={visible} />
       ) : (
@@ -458,8 +480,8 @@ function CalibrationChart({ calibration, models }: { calibration: Calibration; m
   const M = { l: 52, r: 12, t: 10, b: 30 };
   const levels = calibration.levels.filter((l) => models.includes(l.model));
   const values = levels.flatMap((l) => [l.minutes.min, l.minutes.max]).filter((v) => v > 0);
-  const lo = Math.max(Math.min(...values) / 1.6, 0.02);
-  const hi = Math.max(...values) * 1.6;
+  const lo = Math.max(least(values) / 1.6, 0.02);
+  const hi = most(values) * 1.6;
   const w = Math.max(width, 280);
   const xOf = (effort: number, i: number) => M.l + ((effort - 0.5) / 10) * (w - M.l - M.r) + (i - (models.length - 1) / 2) * 7;
   const yOf = (minutes: number) => M.t + (1 - (Math.log(Math.max(minutes, lo)) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))) * (H - M.t - M.b);
@@ -485,7 +507,7 @@ function CalibrationChart({ calibration, models }: { calibration: Calibration; m
           // The trend is drawn one level either side of what has been measured, not out to levels nothing supports.
           const seen = levels.filter((l) => l.model === model).map((l) => l.effort);
           const curve = Array.from({ length: 10 }, (_, k) => k + 1)
-            .filter((effort) => effort >= Math.min(...seen) - 1 && effort <= Math.max(...seen) + 1)
+            .filter((effort) => effort >= least(seen) - 1 && effort <= most(seen) + 1)
             .map((effort) => ({ effort, est: calibration.estimate(effort, model) }))
             .filter((p) => p.est && p.est.basis === 'fitted');
           return (
@@ -678,7 +700,7 @@ function SpendLine({ entries, budget }: { entries: ActivityEntry[]; budget: numb
 
 function HBars({ rows }: { rows: Array<{ label: string; title?: string; value: number }> }) {
   const sorted = [...rows].filter((r) => r.value > 0).sort((a, b) => b.value - a.value);
-  const max = Math.max(...sorted.map((r) => r.value), 0.0001);
+  const max = Math.max(most(sorted.map((r) => r.value)), 0.0001);
   if (!sorted.length) return <p className="muted small">Nothing spent yet.</p>;
   return (
     <ul className="hbars">

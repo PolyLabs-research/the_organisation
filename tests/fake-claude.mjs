@@ -14,7 +14,8 @@
 //   FAKE_CLAUDE_LOG      a file to append one JSON line to for each run
 //   FAKE_CLAUDE_MODE     follow (default) | limit | auth | model | overloaded | crash | unknown-option | hang
 //                        | silent | extra | extra-once | credits | needscredits | loop | stubborn | badloop | parallel | notools
-//                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow
+//                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow | toolong | toolong-words
+//                        | filtered | blocked | fallback | renamed-two | lingers
 //   FAKE_CLAUDE_VERSION  the version to claim
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -101,21 +102,25 @@ const endReply = () => {
   if (partial) emit({ type: 'stream_event', session_id: session, api_message_id: id, event: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { input_tokens: 2000, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
 };
 /** One reply: its input in full when it starts and only a little of its output, as the real stream reports it, and its whole size when it ends. */
+/** The model the replies say they are from: the one asked for, unless another stood in for it. */
+let served = model;
 const reply = (content, partialOut = 5) => {
   endReply();
   messages += 1;
   const id = `msg_${messages}`;
   const usage = { input_tokens: 2000, output_tokens: partialOut, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-  if (partial) emit({ type: 'stream_event', session_id: session, event: { type: 'message_start', message: { id, type: 'message', role: 'assistant', model, content: [], usage: { ...usage, output_tokens: 1 } } } });
-  emit({ type: 'assistant', session_id: session, message: { id, type: 'message', role: 'assistant', model, content, stop_reason: null, usage } });
+  if (partial) emit({ type: 'stream_event', session_id: session, event: { type: 'message_start', message: { id, type: 'message', role: 'assistant', model: served, content: [], usage: { ...usage, output_tokens: 1 } } } });
+  emit({ type: 'assistant', session_id: session, message: { id, type: 'message', role: 'assistant', model: served, content, stop_reason: null, usage } });
   ending = id;
 };
 const limits = (more = {}) =>
   emit({ type: 'rate_limit_event', session_id: session, rate_limit_info: { status: 'allowed', resetsAt: 1794358800, rateLimitType: 'seven_day', utilization: 0.25, overageStatus: 'rejected', isUsingOverage: false, overageEnabled: false, ...more } });
 const finish = (more = {}) => {
   endReply();
-  const named = MODE === 'renamed' ? 'some-other-name-for-it' : model;
+  const named = MODE === 'renamed' || MODE === 'renamed-two' ? 'some-other-name-for-it' : model;
   const exact = { inputTokens: 2000 * messages, outputTokens: 500 * messages, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.01 * messages, canonicalModel: named };
+  // A second model that did some small thing on the side, which the run's account lists and its replies never showed.
+  const aside = MODE === 'renamed-two' ? { 'claude-sonnet-5-5': { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 0, costUSD: 0.002, canonicalModel: 'claude-sonnet-5-5' } } : {};
   emit({
     type: 'result',
     subtype: 'success',
@@ -127,9 +132,9 @@ const finish = (more = {}) => {
     terminal_reason: 'completed',
     api_error_status: null,
     permission_denials: [],
-    total_cost_usd: exact.costUSD,
+    total_cost_usd: exact.costUSD + (MODE === 'renamed-two' ? 0.002 : 0),
     usage: { input_tokens: exact.inputTokens, output_tokens: exact.outputTokens, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-    modelUsage: messages ? { [named]: exact } : {},
+    modelUsage: messages ? { ...aside, [named]: exact } : {},
     ...more,
   });
 };
@@ -223,6 +228,30 @@ async function main() {
       return fail(404, `There's an issue with the selected model (${model}). It may not exist or you may not have access to it. Run --model to pick a different model.`);
     case 'overloaded':
       return fail(529, 'API Error: Repeated 529 Overloaded errors');
+    case 'fallback':
+      // The model asked for declined, and the model that stands in for it wrote the reply. The run gets no further.
+      served = 'claude-opus-4-8';
+      reply([{ type: 'text', text: 'Working.' }]);
+      endReply();
+      return new Promise(() => setInterval(() => {}, 1000));
+    case 'filtered':
+      // The API's content filter stopped the reply and answered with an error. Not seen from the real command:
+      // these are the words it has for it.
+      return fail(400, 'API Error: 400 Output blocked by content filtering policy');
+    case 'blocked':
+      // A safety monitor on the API's side blocked the reply. Not seen either: the kind is the one its schema names.
+      emit({ type: 'assistant', session_id: session, message: { id: 'synthetic', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'API Error: the response was blocked.' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+      finish({ is_error: true, result: 'API Error: the response was blocked.', api_error_status: 400, api_error: 'safety_monitor_blocked', terminal_reason: 'api_error', total_cost_usd: 0, modelUsage: {} });
+      process.exit(1);
+    // eslint-disable-next-line no-fallthrough
+    case 'toolong':
+    case 'toolong-words':
+      // What was sent is more than the model takes. This ending was not seen from the real command: it is the one
+      // its own schema names for it (terminal_reason "prompt_too_long"), with the words the command has for it.
+      emit({ type: 'assistant', session_id: session, message: { id: 'synthetic', model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+      finish({ is_error: true, result: 'Prompt is too long', api_error_status: 400, terminal_reason: MODE === 'toolong' ? 'prompt_too_long' : 'api_error', stop_reason: 'stop_sequence', total_cost_usd: 0, modelUsage: {} });
+      process.exit(1);
+    // eslint-disable-next-line no-fallthrough
     case 'crash':
       console.error('Segmentation fault (stand-in)');
       process.exit(134);
@@ -280,7 +309,10 @@ async function main() {
     reply([{ type: 'tool_use', id: 'toolu_structured', name: 'StructuredOutput', input: data }], 24);
     emit({ type: 'user', session_id: session, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_structured', content: 'Structured output provided successfully' }] } });
     limits();
-    return finish({ result: JSON.stringify(data), structured_output: data, stop_reason: 'tool_use' });
+    finish({ result: JSON.stringify(data), structured_output: data, stop_reason: 'tool_use' });
+    // The answer is out, and the run's account of itself with it, and then the process does not end.
+    if (MODE === 'lingers') return new Promise(() => setInterval(() => {}, 1000));
+    return;
   }
 
   if (!server) {

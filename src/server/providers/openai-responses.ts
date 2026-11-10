@@ -6,17 +6,21 @@ import {
   AGENT_MAX_TOKENS,
   MAX_BAD_ARGUMENTS,
   NOT_ABOUT_FORM,
-  OVERFLOW,
   OpenAICompatibleProvider,
   STRUCTURED_MAX_TOKENS,
   TURN_RETRIES,
   WRAP_UP,
+  counted,
   lowerCap,
+  overflows,
+  refusedForContent,
+  refusesContent,
   refusesForm,
   runTool,
   safeParse,
   sleep,
   systemText,
+  whileItLasts,
 } from './openai-compatible';
 import { extractJson, strictSchema, type JsonSchema } from './schema';
 import { ProviderError, type AgentRequest, type AgentResult, type CallUsage, type StructuredRequest } from './types';
@@ -242,6 +246,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         return turn;
       } catch (err) {
         if (!refusesForm(err)) throw err;
+        // Nothing about the form of a request changes what it says.
+        if (refusedForContent(err)) throw this.translate(err);
         if (adaptations >= MAX_ADAPTATIONS) throw unexplained ?? err;
         const said = err.message;
         // The way a structured answer is asked for is the caller's to change.
@@ -252,10 +258,10 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
         } else if (include && /\binclude\b|encrypted_content/i.test(said)) {
           now.include = false;
           lessons.push(() => this.noInclude.add(model));
-        } else if (OVERFLOW.test(said)) {
+        } else if (overflows(err)) {
           // The exchange and the room asked for the reply do not fit the model's window together. A shorter
           // reply may fit: for this request only, since the next exchange may well be shorter.
-          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'invalid_output', false);
+          if (squeezed || now.cap <= SQUEEZED_CAP) throw new ProviderError('The work outgrew the model’s context window.', 'too_long', false);
           squeezed = true;
           now.cap = SQUEEZED_CAP;
         } else if (/max_output_tokens|(output|completion) tokens/i.test(said) && now.cap > 1024) {
@@ -286,13 +292,26 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     const stream = (await this.client.responses.create(body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming, { signal })) as unknown as AsyncIterable<Record<string, unknown>>;
     let final: Record<string, unknown> | undefined;
     const finished: Item[] = [];
-    for await (const event of stream) {
+    // Without counts from the endpoint, the request is still charged for, at about four characters to a token.
+    const sent = Math.ceil((JSON.stringify(body.input).length + String(body.instructions ?? '').length) / 4);
+    // A response that breaks off once it has started was paid for as far as it got, and never says what that came
+    // to: it is counted by the length of what had arrived. A call that was stopped on purpose is not counted.
+    const lost = () => {
+      if (!signal?.aborted) onUsage?.(this.cost(model, { prompt: sent, cached: 0, written: 0, output: Math.ceil(JSON.stringify(finished).length / 4), billed: null }));
+    };
+    for await (const event of whileItLasts(stream, lost)) {
       const type = event.type;
       if (type === 'response.output_item.done' && event.item && typeof event.item === 'object') finished.push(event.item as Item);
       else if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') final = event.response as Record<string, unknown>;
-      else if (type === 'error') throw this.failure(String(event.code ?? ''), String(event.message ?? 'The reply was stopped by an error.'));
+      else if (type === 'error') {
+        lost();
+        throw this.failure(String(event.code ?? ''), String(event.message ?? 'The reply was stopped by an error.'));
+      }
     }
-    if (!final) throw new ProviderError(`The connection to ${this.label} closed before the reply was complete.`, 'unavailable', true);
+    if (!final) {
+      lost();
+      throw new ProviderError(`The connection to ${this.label} closed before the reply was complete.`, 'unavailable', true);
+    }
 
     // The finished response lists everything produced. The items gathered along the way stand in if it does not.
     const items = Array.isArray(final.output) && final.output.length ? (final.output as Item[]) : finished;
@@ -303,11 +322,10 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
     // A response that failed and reports no tokens is taken to have cost none.
     const usage = (final.usage ?? null) as { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } } | null;
     const spent = this.cost(model, {
-      // Without counts from the endpoint, the request is still charged for, at about four characters to a token.
-      prompt: usage?.input_tokens ?? Math.ceil((JSON.stringify(body.input).length + String(body.instructions ?? '').length) / 4),
-      cached: usage?.input_tokens_details?.cached_tokens ?? 0,
-      written: usage?.input_tokens_details?.cache_write_tokens ?? 0,
-      output: usage?.output_tokens ?? Math.ceil(JSON.stringify(items).length / 4),
+      prompt: counted(usage?.input_tokens) ?? sent,
+      cached: counted(usage?.input_tokens_details?.cached_tokens) ?? 0,
+      written: counted(usage?.input_tokens_details?.cache_write_tokens) ?? 0,
+      output: counted(usage?.output_tokens) ?? Math.ceil(JSON.stringify(items).length / 4),
       billed: null,
     });
     if (usage || !broken) onUsage?.(spent);
@@ -333,7 +351,8 @@ export class OpenAIResponsesProvider extends OpenAICompatibleProvider {
 
   /** A response that failed after it was accepted: what it means, by the code it carries. */
   private failure(code: string, message: string): ProviderError {
-    if (/policy|safety|content_filter/.test(code)) return new ProviderError(`The model declined this request: ${message}`, 'refusal', false);
+    if (refusesContent(code, message)) return new ProviderError(`The model declined this request: ${message}`, 'refusal', false);
+    if (code === 'context_length_exceeded') return new ProviderError(`The work outgrew the model’s context window: ${message}`, 'too_long', false);
     if (/rate_limit/.test(code)) return new ProviderError(`${this.label} is rate limiting this key: ${message}`, 'rate_limit', true);
     if (code === '' || /server_error|overloaded|timeout|unavailable/.test(code)) return new ProviderError(`${this.label} failed part-way through a reply: ${message}`, 'unavailable', true);
     return new ProviderError(`${this.label} rejected the request: ${message}`, 'bad_request', false);
