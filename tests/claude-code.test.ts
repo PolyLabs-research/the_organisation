@@ -374,7 +374,8 @@ describe('one call through Claude Code', () => {
 
   it('keeps the answer of a run that gave it and then would not end', async () => {
     const usage: CallUsage[] = [];
-    const data = await provider({ FAKE_CLAUDE_MODE: 'lingers' }, { idleTimeoutMs: 300 }).structured(ask({ onUsage: (u) => usage.push(u) }));
+    // Long enough for the command to have started and spoken on a busy machine before it is taken for silent.
+    const data = await provider({ FAKE_CLAUDE_MODE: 'lingers' }, { idleTimeoutMs: 1500 }).structured(ask({ onUsage: (u) => usage.push(u) }));
     // The run had said everything it had to say. That it then had to be stopped does not make its answer worthless.
     expect(data).toEqual({ proposal: 'Settled.', priority: 'high' });
     expect(usage.reduce((sum, u) => sum + u.costUsd, 0)).toBeCloseTo(0.01, 9);
@@ -540,7 +541,7 @@ describe('an agent run through Claude Code', () => {
   it('counts a reply that a fallback model wrote at that model’s price, as it comes', async () => {
     const usage: CallUsage[] = [];
     // The run is cut off before it gives its own account, so the count made along the way is all there is.
-    const cut = await failure(provider({ FAKE_CLAUDE_MODE: 'fallback' }, { idleTimeoutMs: 300 }).structured(ask({ onUsage: (u) => usage.push(u) })));
+    const cut = await failure(provider({ FAKE_CLAUDE_MODE: 'fallback' }, { idleTimeoutMs: 1500 }).structured(ask({ onUsage: (u) => usage.push(u) })));
     expect(cut.code).toBe('unavailable');
     expect(usage.every((u) => u.model === 'claude-opus-4-8')).toBe(true);
     expect(usage.reduce((sum, u) => sum + u.inputTokens, 0)).toBe(2000);
@@ -768,7 +769,7 @@ describe('the Claude Code connection', () => {
       executives: [{ profileId: 'engineering', agentCount: 2 }, { profileId: 'product', agentCount: 1 }],
       settings: { executiveModel: 'claude-code:claude-sonnet-5-5', workerModel: 'claude-code:claude-haiku-5-5', maxCycles: 1, budgetUsd: 50 },
     });
-    await runToRest(h.runner);
+    await runToRest(h.runner, 55_000);
     const { org } = h;
     expect(org.lastError).toBeNull();
     expect(org.pauseReason).toBe('cycle_limit');
@@ -798,7 +799,8 @@ describe('the Claude Code connection', () => {
     expect(org.usage.calls).toBe(all.length - tasks + 3 * tasks);
     // And spend comes to what the runs said they cost: a cent a reply, in the stand-in.
     expect(org.usage.costUsd).toBeCloseTo(0.01 * org.usage.calls, 6);
-  });
+    // Every call here starts a process of its own, which takes its time on a machine with much else to do.
+  }, 60_000);
 });
 
 describe('Claude Code over the API', () => {

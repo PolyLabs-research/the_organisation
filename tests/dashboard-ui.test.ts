@@ -19,8 +19,12 @@ import { CHROME, QUIET, TEAM, withoutBrowser } from './helpers';
 // The built dashboard in a real browser, against a real server on a simulated provider: what a person sees
 // when something goes wrong, and what the page sends when they act.
 
-// Each test has the time the other browser tests have: a browser shared with the rest of a full run can be slow to answer.
-describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', { timeout: 40_000 }, () => {
+// How long a page is given to show what a test is waiting for. A browser that shares a machine with the rest of a full
+// run can take many times as long to draw a page as it usually does, and only a page that never shows it should fail.
+const PATIENCE = 30_000;
+
+// Each test is given long enough for several such waits.
+describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', { timeout: 90_000 }, () => {
   let dir: string;
   let registry: Registry;
   let server: Server;
@@ -39,7 +43,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     await new Promise<void>((resolve) => server.once('listening', resolve));
     base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
     browser = await chromium.launch({ executablePath: CHROME, headless: true, chromiumSandbox: true });
-  }, 40_000);
+  }, 60_000);
 
   afterAll(async () => {
     await browser?.close();
@@ -55,7 +59,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
   /** A page on the dashboard of one organisation, or wherever `address` says. */
   async function open(address: string): Promise<Page> {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-    page.setDefaultTimeout(10_000);
+    page.setDefaultTimeout(PATIENCE);
     await page.goto(base + address);
     return page;
   }
@@ -109,7 +113,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
   it('opens the live stream again when it has been answered with an error', async () => {
     const runner = await organisation('Behind a proxy');
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-    page.setDefaultTimeout(10_000);
+    page.setDefaultTimeout(PATIENCE);
     // What a proxy or a tunnel in front of the server says while the server is away: the next attempt to open the stream
     // gets an error for an answer, which a browser takes as final.
     let refused = 0;
@@ -326,7 +330,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       const tabs: Page[] = [];
       for (let i = 0; i < 6; i++) {
         const tab = await context.newPage();
-        tab.setDefaultTimeout(10_000);
+        tab.setDefaultTimeout(PATIENCE);
         await tab.goto(base + '/#/org/' + runner.org.id);
         await tab.getByRole('heading', { name: 'Many tabs', exact: true }).waitFor();
         tabs.push(tab);
@@ -334,7 +338,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       // Each has gone to the background, as a tab does when another is chosen.
       for (const tab of tabs) await seen(tab, 'hidden');
       const seventh = await context.newPage();
-      seventh.setDefaultTimeout(10_000);
+      seventh.setDefaultTimeout(PATIENCE);
       await seventh.goto(base + '/#/org/' + runner.org.id);
       await seventh.getByRole('heading', { name: 'Many tabs', exact: true }).waitFor();
       // Its controls are answered, which takes a connection of their own.

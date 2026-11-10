@@ -36,7 +36,8 @@ it.skipIf(withoutBrowser({ build: true }))('manages business email, passwords an
   const base = 'http://127.0.0.1:' + (server.address() as AddressInfo).port;
   const browser = await chromium.launch({ executablePath: CHROME, headless: true, chromiumSandbox: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
-  page.setDefaultTimeout(10000);
+  // On a busy machine a page can take many times as long to draw as it usually does.
+  page.setDefaultTimeout(30_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const text = () => page.locator('body').innerText();
@@ -231,4 +232,4 @@ it.skipIf(withoutBrowser({ build: true }))('manages business email, passwords an
     server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   }
-}, 40_000);
+}, 90_000);

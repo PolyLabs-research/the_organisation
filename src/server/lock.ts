@@ -104,10 +104,12 @@ export async function claimDataDir(dataDir: string, port: number, times: Partial
 
   const isMine = (holder: Holder | null) => holder !== null && holder.pid === mine.pid && holder.host === mine.host && holder.startedAt === mine.startedAt;
   let warned = false;
-  // The beat under way, if there is one, so that letting go can wait for it: a beat that landed after the file
-  // had been removed would put it back.
-  let beating: Promise<void> = Promise.resolve();
+  // The beat under way, if there is one. Letting go waits for it: a beat that landed after the file had been
+  // removed would put it back. And the next beat waits its turn behind it: two at once would share the file
+  // beside the lock, and one could rename it into place while the other had only just emptied it.
+  let beating: Promise<void> | null = null;
   const beat = setInterval(() => {
+    if (beating) return;
     beating = (async () => {
       try {
         const found = await holderOf(file);
@@ -120,6 +122,8 @@ export async function claimDataDir(dataDir: string, port: number, times: Partial
         await sayAgain();
       } catch {
         // A beat that could not be written is tried again at the next one.
+      } finally {
+        beating = null;
       }
     })();
   }, beatMs);

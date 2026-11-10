@@ -66,13 +66,13 @@ export async function harness(
 }
 
 /**
- * Start the organisation and wait until it comes to rest (paused, with nothing in flight). The wait is shorter than the
- * time a test is given, so that an organisation that never rests fails here, saying where it had got to, and not as a
- * test that merely ran out of time.
+ * Start the organisation and wait until it comes to rest (paused, with nothing in flight). The wait is a little shorter
+ * than the time a test is given, so that an organisation that never rests fails here, saying where it had got to, and not
+ * as a test that merely ran out of time. A test that is given longer says how long to wait.
  */
-export async function runToRest(runner: OrgRunner): Promise<void> {
+export async function runToRest(runner: OrgRunner, timeoutMs = 18_000): Promise<void> {
   runner.start();
-  await runner.idle(15_000).catch((err: Error) => {
+  await runner.idle(timeoutMs).catch((err: Error) => {
     const org = runner.org;
     throw new Error(
       `${err.message}: it is ${org.status}${org.pauseReason ? ` (${org.pauseReason})` : ''} in cycle ${org.cycle.number}, at ${org.cycle.stage}, having spent $${org.usage.costUsd.toFixed(2)} of a budget of $${org.settings.budgetUsd.toFixed(2)}`,

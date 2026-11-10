@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,32 @@ async function until(what: () => boolean | Promise<boolean>, timeoutMs = 10_000)
     if (Date.now() > deadline) throw new Error('timed out waiting');
     await sleep(10);
   }
+}
+
+/**
+ * Another server saying that it is still there, the way a real one does: the file replaced whole, one beat at a
+ * time. Returns how to stop it, which waits for a beat that is under way so that none lands afterwards.
+ */
+function saying(other: object, everyMs = 20): () => Promise<void> {
+  let under: Promise<void> | null = null;
+  const timer = setInterval(() => {
+    if (under) return;
+    under = (async () => {
+      const beside = `${lock()}.other.tmp`;
+      try {
+        await writeFile(beside, JSON.stringify({ ...other, beatAt: new Date().toISOString() }));
+        await rename(beside, lock());
+      } catch {
+        // The folder has gone: the test is over.
+      } finally {
+        under = null;
+      }
+    })();
+  }, everyMs);
+  return async () => {
+    clearInterval(timer);
+    await under;
+  };
 }
 
 /** A process that is certainly not running: one that was started and has ended. */
@@ -56,6 +82,7 @@ describe('one server to a data folder', () => {
     dir = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-lock-'));
     // A beat every couple of milliseconds, read as fast as it can be read: a server that is starting reads this file.
     const letGo = await claimDataDir(dir, 4780, { ...QUICK, beatMs: 2 });
+    release.push(letGo);
     const first = JSON.parse(await readFile(lock(), 'utf8')).beatAt as string;
     const beats = new Set<string>();
     const deadline = Date.now() + 5000;
@@ -74,8 +101,8 @@ describe('one server to a data folder', () => {
     dir = await mkdtemp(path.join(os.tmpdir(), 'the-organisation-lock-'));
     // Another server on another machine, still saying it is there.
     const other = { pid: 4242, host: 'another-machine', port: 4781, startedAt: '2026-11-01T09:00:00.000Z' };
-    const beat = setInterval(() => void writeFile(lock(), JSON.stringify({ ...other, beatAt: new Date().toISOString() })), 20);
     await writeFile(lock(), JSON.stringify({ ...other, beatAt: new Date().toISOString() }));
+    const stop = saying(other);
     try {
       const error = await claimDataDir(dir, 4780, QUICK).then(
         (letGo) => (release.push(letGo), null),
@@ -86,7 +113,7 @@ describe('one server to a data folder', () => {
       // And it has not touched the holder's claim.
       expect(JSON.parse(await readFile(lock(), 'utf8'))).toMatchObject({ pid: 4242, host: 'another-machine' });
     } finally {
-      clearInterval(beat);
+      await stop();
     }
   });
 
@@ -95,16 +122,13 @@ describe('one server to a data folder', () => {
     // The server being replaced is still there, still saying so, and lets go a moment later.
     const other = { pid: 4242, host: 'another-machine', port: 4780, startedAt: '2026-11-01T09:00:00.000Z' };
     await writeFile(lock(), JSON.stringify({ ...other, beatAt: new Date().toISOString() }));
-    const beat = setInterval(() => void writeFile(lock(), JSON.stringify({ ...other, beatAt: new Date().toISOString() })), 20);
-    setTimeout(() => {
-      clearInterval(beat);
-      void rm(lock(), { force: true });
-    }, 100);
+    const stop = saying(other);
+    setTimeout(() => void stop().then(() => rm(lock(), { force: true })), 100);
     const started = Date.now();
     try {
       release.push(await claimDataDir(dir, 4790, { ...QUICK, waitMs: 5000 }));
     } finally {
-      clearInterval(beat);
+      await stop();
     }
     expect(Date.now() - started).toBeGreaterThanOrEqual(80);
     expect(JSON.parse(await readFile(lock(), 'utf8'))).toMatchObject({ pid: process.pid, port: 4790 });
