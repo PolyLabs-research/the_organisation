@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
 import { GitHubHost } from '../src/server/access-github';
 import { AccessError } from '../src/server/access-vault';
 import { createApp } from '../src/server/app';
@@ -11,7 +12,8 @@ import type { EngineContext } from '../src/server/engine/handlers';
 import { ValidationError, normaliseLoaded } from '../src/server/engine/state';
 import { MockProvider } from '../src/server/providers/mock';
 import type { AgentRequest, AgentResult, PlanJob, PlanOutcome, StructuredRequest } from '../src/server/providers/types';
-import { WORK_APPROACHES, approachChoices, approachesOf } from '../src/shared/approaches';
+import { SandboxRuntime } from '../src/server/sandbox';
+import { WORK_APPROACHES, approachChoices, approachesOf, readsRepository } from '../src/shared/approaches';
 import { PROFILE_BY_ID } from '../src/shared/profiles';
 import type { CheckResult, GateEvidence, Organisation, OrgView, Plan, PlanPhase } from '../src/shared/types';
 import { FakeGitHub } from './fake-github-api';
@@ -71,8 +73,9 @@ describe('the library', () => {
       for (const id of approach.profileIds) expect(PROFILE_BY_ID[id]?.kind).toBe('lead');
       expect(new Set(approach.phases.map((p) => p.id)).size).toBe(approach.phases.length);
       expect(approach.phases.length).toBeGreaterThanOrEqual(3);
-      // A gate that reads a repository means nothing on an approach that need not have one.
-      if (approach.phases.some((p) => p.gate)) expect(approach.needsCode).toBe(true);
+      // A gate that reads a repository means nothing on an approach that need not have one, and one that runs something means nothing without a sandbox.
+      expect(approach.phases.some((p) => readsRepository(p.gate))).toBe(approach.needsCode === true);
+      expect(approach.phases.some((p) => p.gate === 'run')).toBe(approach.needsSandbox === true);
     }
   });
   it('has DevOps hold a change to green checks, then to an open pull request', () => {
@@ -418,6 +421,34 @@ describe('DevOps delivery', () => {
     await runToRest(h.runner);
     expect(pushed).toBeTruthy();
     expect(planOf(h.org).code?.sha).toBe(pushed);
+  });
+  it('leaves a branch open on a plan whose only gate is one the system runs, and tells nobody on it to push', async () => {
+    let pushed = '';
+    const told: string[] = [];
+    github = new FakeGitHub();
+    await github.listen();
+    // A stand-in for the container service, which runs nothing and says that the check passed.
+    delete process.env.FAKE_DOCKER_REAL;
+    delete process.env.FAKE_DOCKER_SAYS;
+    const sandbox = new SandboxRuntime({ command: fileURLToPath(new URL('./fake-docker.mjs', import.meta.url)) });
+    const provider = new Choosing('tested_build', async (phase, request) => {
+      told.push(request.prompt);
+      if (phase === 'Release') pushed = JSON.parse(await push(request)).commit;
+    });
+    h = await harness({ provider, executives: ONE_LEAD, runner: { sandbox, access: { code: new GitHubHost(github.base) } } });
+    await h.runner.access.unlock(phrase, true, true);
+    await h.runner.access.addRepository({ label: 'Website', repository: 'acme/website', token: github.token, ownerIds: ['cto'] });
+    await h.runner.setPrivilege('cto', 'push_code', true);
+    await h.runner.setPrivilege('cto', 'run_code', true);
+    await runToRest(h.runner);
+    expect(planOf(h.org)).toMatchObject({ workApproachId: 'tested_build', status: 'done' });
+    expect(planOf(h.org).phases.map((p) => [p.name, p.evidence?.state ?? null])).toEqual([['Spec', null], ['Build', null], ['Prove', 'passed'], ['Release', null]]);
+    // That gate says nothing about a repository, so no branch closed behind it: the phase after it pushed.
+    expect(pushed).toBeTruthy();
+    expect(planOf(h.org).code?.sha).toBe(pushed);
+    // And nobody was told that the plan has code to push, as agents are on a plan whose gates read a repository.
+    expect(told.length).toBeGreaterThan(3);
+    expect(told.every((prompt) => !prompt.includes('Nothing has been pushed yet'))).toBe(true);
   });
   it('closes the branch to the phases after the last gate', async () => {
     let refused = '';

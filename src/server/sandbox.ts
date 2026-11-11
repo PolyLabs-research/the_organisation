@@ -368,6 +368,8 @@ export interface RunResult extends SandboxRun {
   dropped: number;
   /** What the agent should know beyond the output: why it was stopped, or why it could not be run. */
   note: string | null;
+  /** For one that could not be run: true where that was because of what was asked (a folder that is not there), and not because of the sandbox. */
+  asked?: boolean;
 }
 export interface Brought { saved: Array<{ path: string; bytes: number }>; skipped: Array<{ path: string; why: string }>; }
 
@@ -518,6 +520,10 @@ export class OrgSandbox {
     let give: (() => void) | null = null;
     try {
       dir = within(this.workspace, spec.dir);
+    } catch (error) {
+      return { ...answer('failed', null, '', 0, error instanceof WorkspaceError ? `The folder to run it in cannot be used: ${error.message}.` : 'The folder to run it in cannot be used.'), asked: true };
+    }
+    try {
       // Work that has been stopped starts nothing more, however quickly the command would have been over.
       if (control.signal.aborted || !control.active()) return answer('stopped', null, '', 0, 'It was not run: the work it was for had been stopped.');
       const blocked = await this.unusable();
@@ -588,7 +594,7 @@ export class OrgSandbox {
       if (!marks.has('started')) {
         const sync = /@@org-sandbox sync-failed (.*)/.exec(said)?.[1]?.trim();
         if (marks.has('sync-failed')) return answer('failed', null, '', 0, `The workspace's files could not be put in the sandbox${sync ? ` (${sync})` : ''}. It may be full: start again with fresh.`);
-        if (marks.has('no-dir')) return answer('failed', null, '', 0, `There is no folder ${dir} in the workspace. Give dir as a folder that has files in it, or leave it out to run at the top.`);
+        if (marks.has('no-dir')) return { ...answer('failed', null, '', 0, `There is no folder ${dir} in the workspace. Give dir as a folder that has files in it, or leave it out to run at the top.`), asked: true };
         return answer('failed', null, '', 0, `The sandbox could not be started${complaint(said) ? `: ${complaint(said)}` : ''}.`);
       }
       const starved = marks.has('oom');
@@ -724,7 +730,7 @@ export function sandboxTools(sandbox: OrgSandbox, options: SandboxToolOptions): 
         if (!given.success) return refuse('Give the command to run, as text.');
         if (redact(given.data.command) !== given.data.command) return refuse('A command cannot contain a saved password or token.');
         const result = await sandbox.run(planId, { command: given.data.command, dir: given.data.dir, seconds: given.data.timeout_seconds, fresh: given.data.fresh }, { signal, active });
-        const { output, dropped, note, ...run } = result;
+        const { output, dropped, note, asked, ...run } = result;
         options.ran(run);
         if (result.ended === 'failed') return refuse(note ?? 'The command could not be run.');
         return JSON.stringify({

@@ -191,6 +191,8 @@ Each command runs in a container that cannot reach the rest of this machine, on 
 
 The board tells you if Docker is not running or the image cannot be fetched, and so does the Privileges page. Under **Plans**, each task then lists what it ran and how each command ended, as the system recorded it: go by that where an agent's report says more. See the [guide to running code](code-execution.md) before you open the network.
 
+A lead whose role may run code can also choose the **Tested build** approach for a plan. It names one command that proves the work, such as its tests, and the system runs that command itself when the work is in: the phase passes only if it exits with 0. The plan shows the check and what the system found, and the board shows every change a lead makes to a check. The check is the lead's choice, so read it: a gate proves no more than its check does.
+
 ## Work on code
 
 This has been tested against a local stand-in for GitHub, and not yet with a real token. Try it on a throwaway repository first. The [full guide](code-repositories.md) covers the token and the limits.

@@ -638,7 +638,7 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
         };
 
       case 'kickoff': {
-        const phase = c.phase as { name: string; deliverable: string; index: number };
+        const phase = c.phase as { name: string; deliverable: string; index: number; gate?: string | null };
         const count = Math.max(1, Math.min(seat!.agentCount, Number(c.maxTasks ?? 3), 3));
         const parts = ['the core deliverable', 'the supporting analysis', 'a review against the success criteria'];
         return {
@@ -649,6 +649,8 @@ ${task.rework ? '- This is rework: it closes the gap the lead found at the phase
           })),
           notes: 'Keep each file short enough to review in one sitting.',
           decisions: [],
+          // Where the system proves the phase by running something: that the simulated agents' files are where they said. Nothing more can be proved of a simulation.
+          ...(phase.gate === 'run' ? { check: { command: 'ls *.md', dir: `${c.dir as string}/${plan!.id}`, seconds: 60 } } : {}),
         };
       }
 
