@@ -358,6 +358,12 @@ function SessionBlock({ orgId, plan, simulated, onOpenFile }: { orgId: string; p
 }
 
 const EVIDENCE_HEADING: Record<GateEvidence['state'], string> = { passed: 'Checked by the system', waiting: 'Waiting on the repository', failed: 'Not passed' };
+/** What the system does at each kind of gate, before it has done it. */
+const GATE_WAITS: Record<NonNullable<PlanPhase['gate']>, string> = {
+  checks: 'The system checks this gate for itself, against the repository.',
+  pull_request: 'The system checks this gate for itself, against the repository.',
+  run: 'The system checks this gate for itself, by running the check in the sandbox.',
+};
 
 /** A link from GitHub's own answer. Anything that is not a plain web address is shown as text. */
 function Outward({ url, children }: { url: string; children: ReactNode }) {
@@ -388,7 +394,7 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
             return (
               <li key={check.name + check.url}>
                 <span>
-                  {check.name}
+                  {evidence.gate === 'run' ? <code>{check.name}</code> : check.name}
                   {site ? <> (<Outward url={check.url}>{site}</Outward>)</> : null}
                 </span>
                 <span className="muted">{check.state}</span>
@@ -397,6 +403,31 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
           })}
         </ul>
       ) : null}
+      {evidence.output ? (
+        // What a program printed, as text and nothing else. Open where the gate did not pass, which is when it is wanted.
+        <details className="gate-output" open={evidence.state !== 'passed'}>
+          <summary>The end of what the check printed</summary>
+          <pre>{evidence.output}</pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+/** What a phase is held to, where the system proves it by running something: the lead's own words for the command, as the system will run them. */
+function PhaseCheckLine({ phase }: { phase: PlanPhase }) {
+  const check = phase.check;
+  return (
+    <div className="phase-check">
+      <span className="field-label">The system proves this phase by running</span>
+      {check ? (
+        <>
+          <code>{check.command}</code>
+          <span className="muted">{check.dir ? `in ${check.dir}` : 'at the top of the workspace'}, with {check.seconds} seconds to finish</span>
+        </>
+      ) : (
+        <span className="muted">{phase.status === 'pending' ? 'A check the lead names when the phase begins.' : 'Nothing yet: the lead has named no check, and the gate cannot pass without one.'}</span>
+      )}
     </div>
   );
 }
@@ -423,6 +454,7 @@ function PhaseBlock({ orgId, phase, index, held, ladder, waitsFor, onOpenFile }:
         <span className="muted">{state}</span>
       </header>
       <p className="muted">{phase.intent}</p>
+      {phase.gate === 'run' ? <PhaseCheckLine phase={phase} /> : null}
       {phase.tasks.length ? (
         <ul className="tasks">
           {phase.tasks.map((task) => (
@@ -436,7 +468,7 @@ function PhaseBlock({ orgId, phase, index, held, ladder, waitsFor, onOpenFile }:
           <Markdown>{phase.summary}</Markdown>
         </div>
       ) : null}
-      {phase.evidence ? <GateResult evidence={phase.evidence} /> : phase.gate ? <p className="muted">The system checks this gate for itself, against the repository.</p> : null}
+      {phase.evidence ? <GateResult evidence={phase.evidence} /> : phase.gate ? <p className="muted">{GATE_WAITS[phase.gate]}</p> : null}
     </li>
   );
 }

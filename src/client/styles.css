@@ -2869,6 +2869,13 @@ a.provider:hover {
   .privileges-table thead th:first-child, .privileges-table th[scope='row'] { width: 11rem; min-width: 11rem; }
 }
 
+/* What a phase is held to where the system proves it by running something: the command as the lead wrote it. */
+.phase-check { display: grid; gap: 2px; margin: .35rem 0 .5rem; font-size: 12.5px; }
+.phase-check code, .gate-checks code { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gate-output { margin-top: .45rem; font-size: .85rem; }
+.gate-output summary { cursor: pointer; color: var(--ink-2); }
+.gate-output pre { margin: .35rem 0 0; padding: .5rem .6rem; max-height: 18rem; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* What the system found at a gate, set apart from what the lead wrote about it. */
 .gate-evidence { margin-top: .6rem; padding: .6rem .75rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .gate-evidence p { margin: .2rem 0 0; }

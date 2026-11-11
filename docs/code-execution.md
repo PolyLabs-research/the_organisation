@@ -1,6 +1,6 @@
 # Running code in a sandbox
 
-On this machine an agent reads and writes files. Whether its code runs, or its tests pass, used to be whatever it said. A role you allow can now run commands in a sandbox: a container on this machine that holds a copy of the workspace and has no way to the rest of the machine. The system keeps its own record of every command and how it ended, and the lead reads that record at the phase gate, beside the agent's report.
+On this machine an agent reads and writes files. Whether its code runs, or its tests pass, used to be whatever it said. A role you allow can now run commands in a sandbox: a container on this machine that holds a copy of the workspace and has no way to the rest of the machine. The system keeps its own record of every command and how it ended, and the lead reads that record at the phase gate, beside the agent's report. A plan can also have a gate that the system checks by running a command itself: the phase passes if the command exits with 0, and not otherwise, whatever anyone reported.
 
 It works with any model provider. [Hosted sessions](../README.md#hosted-sessions-claude-managed-agents) have a sandbox of their own on Anthropic's side and are not affected by any of this.
 
@@ -32,6 +32,21 @@ Each command is recorded on its task as it ends: the command, the folder, how lo
 You read it under **Plans**: each task lists the commands it ran, in order, with where each was run, how it ended and how long it took, and the task's own line says how the last of them ended. A task that could run commands and ran none says so.
 
 At the phase gate the lead is shown the same, under each task: what it ran and how that ended, or that it ran nothing. The lead is told to go by that record where an agent's report says more. A lead whose agents can run code is told so when it hands out a phase's tasks, so that it asks for work to be run and tested.
+
+## A gate the system checks for itself
+
+A record of what agents ran still leaves the verdict with the lead. For work that one command can prove, a lead can choose the **Tested build** approach for a plan in place of its own operating profile: Spec → Build → **Prove** → Release. The Prove phase has a gate that the system checks by running a command, as [DevOps delivery](../README.md#work-approaches) has gates it checks against a repository.
+
+- **The lead names the check** as it hands out the Prove phase: the command that proves the work (its tests, its build), the folder to run it in, and how long it may take. That is five minutes unless the lead says, and never more than fifteen. The check is shown on the phase under **Plans**, and the phase's agents are told what it is, so that they run it themselves and get it passing.
+- **The system runs it** when the phase's work is in, before the lead is asked anything. It runs in the plan's sandbox, confined like every other command, after the sandbox's copy has been brought up to date with the workspace.
+- **Exit code 0 passes, and nothing else does.** A check that fails, runs out of time, is killed for the memory or the disk it used, or cannot be run because its folder is not there, holds the phase. The lead is shown the result and the end of what the check printed, and is told that the phase goes back for rework whatever it rules. It does.
+- **A phase held this way can go back three times.** After that the plan stops, and the board says why. It stops at once if the role's privilege to run code has been taken away, since no number of goes could change that.
+- **The lead can put a wrong check right.** If the check itself was the mistake (the wrong command, the wrong folder), the lead names another at the review, and the system runs that one next time. Each change goes on the board with what it replaced.
+- **Docker stopping is nobody's failure.** If the check cannot be started because the container service has gone, the gate is tried again, and then the organisation pauses and says so. Start Docker and then the organisation, and the gate is checked. Stopping the organisation while a check runs stops the check, and it is run afresh when work starts again.
+
+What the check printed is treated as every other command's output is: a saved password or token in it is blanked out before anyone is shown it, and a check that contains one is not run.
+
+Tested build is offered to the engineering and data leads, and only while the role may run code, the container service answers, and agents work on this machine. You can close it for a role under **Approaches**. What it proves is that the command the lead named exited with 0 when the system ran it: see [what that leaves open](#what-this-does-not-do).
 
 ## What confines a command
 
@@ -79,7 +94,8 @@ An image is run as it is. Choose one you trust, as you would for anything else y
 
 - **It is a container, not a virtual machine.** A container shares this machine's kernel. A flaw in the kernel or in Docker could let code out of one, and on Linux the Docker service usually runs as root. Docker Desktop, on macOS and Windows, runs containers inside a virtual machine of its own, which is a second wall. On Linux, [rootless Docker](https://docs.docker.com/engine/security/rootless/) is the stronger arrangement.
 - **It bounds what code can use, not whether it is worth running.** Within its limits, a command does what it is written to do, for as long as it is allowed.
-- **A gate does not yet run anything itself.** The lead reads the record of what agents ran. A check that the system runs at the gate is the next step.
+- **A gate proves what its check proves, and no more.** The lead chooses the command, and one that cannot fail will pass. The check is on the plan for you to read, and every change to it is on the board. There is not yet a way for you to set a check yourself, or to approve one before it counts.
+- **A check runs in the plan's sandbox as the plan's commands left it.** That is what lets it use the packages an agent installed. It also means that a file a command made in the sandbox, and nobody brought out to the workspace, is there when the check runs. A check that passes says the work passes in that sandbox, which is not quite to say that the workspace alone would.
 - **No registries-only network**, as above.
 - **Nothing keeps running between commands.** An agent can start a server, test it and stop it within one command, but cannot leave one running.
 
@@ -94,6 +110,6 @@ An image is run as it is. Choose one you trust, as you would for anything else y
 
 ## What has been checked
 
-Everything in the table above is tested in real containers, on Docker 29 on Linux: that a command cannot reach the network, cannot see this machine's files, holds no capability, cannot write to its system, and is stopped at each of its limits; that files go in and come out as described; that the leavings of a finished plan are removed. Whole simulated organisations are run with agents that run commands, and the record is checked on every task and in what the lead is shown. What is sent to Docker is also checked against a stand-in for the `docker` command, on any machine.
+Everything in the table above is tested in real containers, on Docker 29 on Linux: that a command cannot reach the network, cannot see this machine's files, holds no capability, cannot write to its system, and is stopped at each of its limits; that files go in and come out as described; that the leavings of a finished plan are removed. Whole simulated organisations are run with agents that run commands, and the record is checked on every task and in what the lead is shown. A gate that runs a check is taken through whole simulated plans in real containers: a check that passes, one that fails and is put right, one that never passes, one that runs out of time or of memory, one named for a folder that is not there, one the lead corrects, a role that loses the privilege, and an organisation stopped while its check runs. What is sent to Docker is also checked against a stand-in for the `docker` command, on any machine.
 
-Not yet tried: Docker Desktop on macOS or Windows, Podman, rootless Docker, and any real model deciding what to run.
+Not yet tried: Docker Desktop on macOS or Windows, Podman, rootless Docker, and any real model deciding what to run or which check to name.

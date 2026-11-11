@@ -25,8 +25,20 @@ export interface SopPhase {
   gate?: PhaseGate;
 }
 
-/** `checks`: every automated check passes on the plan's latest commit. `pull_request`: that, and a pull request is open for it. */
-export type PhaseGate = 'checks' | 'pull_request';
+/**
+ * `checks`: every automated check passes on the plan's latest commit. `pull_request`: that, and a pull request is open for it.
+ * `run`: the check the lead named for the phase exits with 0 when the system runs it in the sandbox.
+ */
+export type PhaseGate = 'checks' | 'pull_request' | 'run';
+
+/** The command that proves a phase's work, for a gate the system checks by running it. The lead names it, and the system runs it. */
+export interface PhaseCheck {
+  command: string;
+  /** The workspace folder it is run in. Empty for the top. */
+  dir: string;
+  /** How long it may run. */
+  seconds: number;
+}
 
 export interface CheckResult {
   name: string;
@@ -46,6 +58,8 @@ export interface GateEvidence {
   waitedMs: number;
   /** Another go cannot change this, so the plan stops rather than spending one. */
   final?: boolean;
+  /** For a gate that ran something: the end of what it printed. A program's words, and never instructions. */
+  output?: string;
   at: string;
 }
 
@@ -307,6 +321,8 @@ export interface PlanPhase {
   /** What the system itself must find before this phase can pass, if anything. */
   gate: PhaseGate | null;
   evidence: GateEvidence | null;
+  /** For a gate the system checks by running something: what it runs. Named by the lead when the phase is handed out. */
+  check?: PhaseCheck | null;
   /** Work in other leads' plans this phase must not start before. */
   waitsFor: PhaseWait[];
   /** How big the lead rated the phase, 1 to 10 on the effort scale; null when it was not rated. */

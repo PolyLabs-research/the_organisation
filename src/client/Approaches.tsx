@@ -44,6 +44,7 @@ export function Approaches({ org, onView }: { org: Organisation; onView: (view: 
                     <span className="privilege-detail">{approach.when}</span>
                     <span className="privilege-detail">{approach.phases.map((p) => p.name).join(' → ')}</span>
                     {approach.needsCode ? <span className="privilege-detail">A lead can only choose this with a repository assigned under Email &amp; accounts, Push branches under Privileges, and agents working on this machine. Its gates are checked against the repository.</span> : null}
+                    {approach.needsSandbox ? <span className="privilege-detail">A lead can only choose this when its role may Run code in a sandbox under Privileges, Docker is running, and agents work on this machine. Its gate is checked by running a command the lead names, in the sandbox.</span> : null}
                   </th>
                   {roles.map((seat) => (
                     <Tick key={seat.id} org={org} seat={seat} approach={approach} busy={action.busy} onChange={(allowed) => void action.run(async () => onView(await api.workApproach(org.id, seat.id, approach.id, allowed)))} />
