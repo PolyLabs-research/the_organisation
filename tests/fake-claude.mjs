@@ -17,6 +17,7 @@
 //                        | renamed | maxturns | nostructured | invalid | refusal | badinput | swallow | toolong | toolong-words
 //                        | filtered | blocked | fallback | renamed-two | lingers
 //   FAKE_CLAUDE_VERSION  the version to claim
+//   FAKE_CLAUDE_RESETS_AT when the plan's limit is due to reset, in seconds since 1970. Left out, a week from now
 //   FAKE_CLAUDE_AUTH     JSON for `auth status`
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -113,8 +114,11 @@ const reply = (content, partialOut = 5) => {
   emit({ type: 'assistant', session_id: session, message: { id, type: 'message', role: 'assistant', model: served, content, stop_reason: null, usage } });
   ending = id;
 };
+// When the plan's limit is due to reset. A test that reads the time back says what it is. Left to itself it is a week off, and
+// never a date written down here: one was, and every test of it began to fail in the hour that date came.
+const RESETS_AT = Number(env.FAKE_CLAUDE_RESETS_AT) || Math.floor(Date.now() / 1000) + 7 * 24 * 3600;
 const limits = (more = {}) =>
-  emit({ type: 'rate_limit_event', session_id: session, rate_limit_info: { status: 'allowed', resetsAt: 1794358800, rateLimitType: 'seven_day', utilization: 0.25, overageStatus: 'rejected', isUsingOverage: false, overageEnabled: false, ...more } });
+  emit({ type: 'rate_limit_event', session_id: session, rate_limit_info: { status: 'allowed', resetsAt: RESETS_AT, rateLimitType: 'seven_day', utilization: 0.25, overageStatus: 'rejected', isUsingOverage: false, overageEnabled: false, ...more } });
 const finish = (more = {}) => {
   endReply();
   const named = MODE === 'renamed' || MODE === 'renamed-two' ? 'some-other-name-for-it' : model;
