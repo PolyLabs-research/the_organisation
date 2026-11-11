@@ -5,6 +5,7 @@ import { OrgRunner, type RunnerOptions } from './engine/runner';
 import { UnreadableOrganisation, ValidationError, assertLoadable, assertModelRefs, createOrganisation, normaliseLoaded, summarise, toClientView } from './engine/state';
 import { nextWork } from './engine/work';
 import type { Provider } from './providers/types';
+import type { SandboxRuntime } from './sandbox';
 import type { Store } from './store';
 
 /** How long deleting an organisation waits for its hosted sessions to be held. */
@@ -19,6 +20,11 @@ export class Registry {
     readonly provider: Provider,
     private readonly options: RunnerOptions = {},
   ) {}
+
+  /** What this server runs code with, if anything: for telling a person whether it can. */
+  get sandbox(): SandboxRuntime | null {
+    return this.options.sandbox ?? null;
+  }
 
   /**
    * Organisations on disk that could not be loaded, and why. One damaged file must not stand between a person
@@ -110,6 +116,8 @@ export class Registry {
     // Its hosted sessions would be left with nothing to say what they were for. Where the organisation was
     // set to archive sessions, the ones still open are archived with it.
     if (runner.org.settings.archiveSessions) await runner.archiveSessions({ all: true }).catch(() => {});
+    // What its plans' commands left in sandboxes is removed with it. Half a minute, as above: the container service may be away.
+    await Promise.race([runner.clearSandboxes(true), new Promise<void>((resolve) => setTimeout(resolve, HOLD_BEFORE_REMOVAL_MS).unref())]);
     await runner.flush();
     runner.dispose();
     await runner.access.dispose();

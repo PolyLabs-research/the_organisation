@@ -158,6 +158,22 @@ export class Workspace {
     return text;
   }
 
+  /** A file as it is, bytes and all, with whether it may be run: for a sandbox, where a work product need not be text. */
+  async readBytes(input: string, maxBytes: number): Promise<{ path: string; bytes: Buffer; executable: boolean; modifiedMs: number }> {
+    const rel = this.normalise(input);
+    const target = await this.resolveSafe(rel);
+    let stat;
+    try {
+      stat = await fs.stat(target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new WorkspaceError(`no such file: ${rel}`);
+      throw err;
+    }
+    if (!stat.isFile()) throw new WorkspaceError(`${rel} is not a file`);
+    if (stat.size > maxBytes) throw new WorkspaceError(`${rel} is ${stat.size} bytes; the limit is ${maxBytes}`);
+    return { path: rel, bytes: await fs.readFile(target), executable: (stat.mode & 0o111) !== 0, modifiedMs: stat.mtimeMs };
+  }
+
   /** Every file under `dir` (default: the whole workspace), oldest path first. */
   async list(dir = ''): Promise<WorkspaceFile[]> {
     const start = dir.trim().replace(/^\.?\/*$/, '') ? await this.resolveSafe(this.normalise(dir)) : this.root;

@@ -12,7 +12,9 @@ import type { OrgRunner } from '../src/server/engine/runner';
 import { MockProvider } from '../src/server/providers/mock';
 import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
-import type { BoardMessage } from '../src/shared/types';
+import { allows } from '../src/shared/privileges';
+import type { SandboxRun } from '../src/shared/sandbox';
+import type { BoardMessage, Task } from '../src/shared/types';
 import { plan } from './client-helpers';
 import { CHROME, QUIET, TEAM, withoutBrowser } from './helpers';
 
@@ -499,6 +501,86 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       await standing.waitFor();
       expect(await standing.locator('tbody tr').first().innerText()).toMatch(/claude-haiku-5-5\s+tasks rated 1 to 3\s+tasks rated 1 to 3\s+\d+ of \d+ let stand/);
       expect(await standing.locator('tbody tr').last().innerText()).toMatch(/claude-opus-5-5\s+tasks rated 4 to 10, and any not rated/);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('shows what each task ran in the sandbox as the system recorded it, and says under Privileges whether code can be run', async () => {
+    const runner = await organisation('Runs things');
+    const org = runner.org;
+    const at = new Date().toISOString();
+    const made = plan(org, 'cto', 'p-1');
+    const task = (id: string, title: string, runs?: SandboxRun[]): Task => ({ id, title, brief: 'Do it.', status: 'done', agent: 1, rework: false, result: 'All the tests pass.', files: [], error: null, attempts: 1, startedAt: at, finishedAt: at, effort: null, ...(runs ? { runs } : {}) });
+    made.phases[0]!.status = 'working';
+    made.phases[0]!.tasks.push(
+      // It failed, was fixed, and passed. Its agent says only that the tests pass.
+      task('t-1', 'Build the parser', [{ at, command: 'npm test', dir: 'engineering/app', ended: 'exited', exitCode: 1, ms: 4200 }, { at, command: 'npm test', dir: 'engineering/app', ended: 'exited', exitCode: 0, ms: 3900 }]),
+      // It could run things and ran nothing, whatever its report says.
+      task('t-2', 'Write the notes', []),
+      // It had no sandbox.
+      task('t-3', 'Draft the spec'),
+      task('t-4', 'Run the long job', [{ at, command: 'node slow.js "<img src=x onerror=alert(1)>"', dir: '', ended: 'timed_out', exitCode: null, ms: 120_000 }]),
+    );
+    const page = await open('/#/org/' + org.id);
+    // Once Docker has been started: the same server, asked again.
+    let started = false;
+    await page.route('**/api/meta', async (route) => {
+      if (!started) return route.continue();
+      const answer = await route.fetch();
+      await route.fulfill({ response: answer, json: { ...(await answer.json()), sandbox: { available: true, runtime: 'Docker 29.9.2', reason: null } } });
+    });
+    try {
+      await page.getByRole('tab', { name: /^Plans/ }).click();
+      const tasks = page.locator('.task');
+      await tasks.first().waitFor({ state: 'attached' });
+      await page.evaluate(() => document.querySelectorAll('.tab-panel details').forEach((details) => { (details as HTMLDetailsElement).open = true; }));
+      const row = (title: string) => tasks.filter({ hasText: title });
+      // How the last thing it ran ended is on the task's own line, by the record and not the report.
+      expect(await row('Build the parser').locator('summary .tag').allInnerTexts()).toEqual(['Last run passed']);
+      expect(await row('Run the long job').locator('summary .tag').allInnerTexts()).toEqual(['Last run did not pass']);
+      expect(await row('Write the notes').locator('summary .tag').count()).toBe(0);
+      // Every command, in order, with where it was run and how it ended.
+      const runs = row('Build the parser').locator('.runs li');
+      expect(await runs.count()).toBe(2);
+      expect((await runs.nth(0).innerText()).replace(/\s+/g, ' ')).toBe('npm test in engineering/app · failed (exit 1) · 4.2 s');
+      expect(await runs.nth(0).getAttribute('class')).toBe('run-bad');
+      expect((await runs.nth(1).innerText()).replace(/\s+/g, ' ')).toBe('npm test in engineering/app · passed (exit 0) · 3.9 s');
+      expect(await runs.nth(1).getAttribute('class')).toBe('run-ok');
+      expect(await row('Write the notes').getByText('Nothing. It could run commands, and ran none.').count()).toBe(1);
+      expect(await row('Draft the spec').getByText('Ran in the sandbox').count()).toBe(0);
+      // A command is an agent's words, and is shown as words.
+      expect((await row('Run the long job').locator('.runs li').innerText()).replace(/\s+/g, ' ')).toBe('node slow.js "<img src=x onerror=alert(1)>" stopped at its time limit · 2 min 0 s');
+      expect(await page.locator('.runs img').count()).toBe(0);
+
+      // No role may run code to begin with. Allowing one says at once whether anything can be run for it.
+      await page.getByRole('tab', { name: 'Privileges', exact: true }).click();
+      const tick = page.getByRole('checkbox', { name: 'CTO: Run code in a sandbox' });
+      expect(await tick.isChecked()).toBe(false);
+      expect(await page.getByText('may run code').count()).toBe(0);
+      // The tick shows what the server holds, so it changes once the server has answered.
+      await tick.click();
+      await page.getByText('CTO may run code, but nothing can be run yet. Nothing was set up on this server to run code with. Until then its agents are told that they cannot run code.').waitFor();
+      await expect.poll(() => allows(runner.org, 'cto', 'run_code')).toBe(true);
+      expect(allows(runner.org, 'cpo', 'run_code')).toBe(false);
+      // With something to run it in, the page says what, from which image, and whether it can reach the network.
+      started = true;
+      await page.getByRole('tab', { name: 'Board', exact: true }).click();
+      await page.getByRole('tab', { name: 'Privileges', exact: true }).click();
+      await page.getByText('can run code, in a sandbox started with Docker 29.9.2 from the image node:22-bookworm. The sandbox has no network.').waitFor();
+      // The image and the network are settings. A name that could not be an image's is not sent, and the person is told.
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      const image = page.getByLabel('Image that code is run in');
+      expect(await image.inputValue()).toBe('node:22-bookworm');
+      await image.fill('python --privileged');
+      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+      await page.getByText('"python --privileged" is not a name an image can have.').waitFor();
+      expect(runner.org.settings.sandboxImage).toBe('node:22-bookworm');
+      await image.fill('python:3.12-bookworm');
+      await page.getByRole('checkbox', { name: /Let code in a sandbox reach the network/ }).check();
+      await saveSettings(page);
+      expect(runner.org.settings).toMatchObject({ sandboxImage: 'python:3.12-bookworm', sandboxNetwork: true });
+      await page.getByText('from the image python:3.12-bookworm. The sandbox can reach the network, so what is run in it can reach any site and this machine’s own network, and send what it can read there.').waitFor();
     } finally {
       await page.close();
     }

@@ -206,6 +206,9 @@ describe('the API', () => {
     const meta = await api('GET', '/api/meta');
     expect(meta.data.provider.managed).toBe(true);
     expect(meta.data.defaults).toMatchObject({ execution: 'local', workflowRuns: true, archiveSessions: false });
+    // Running code: the image and the closed network a new organisation starts with, and whether this server can run any. This one was given nothing to run it with.
+    expect(meta.data.defaults).toMatchObject({ sandboxImage: 'node:22-bookworm', sandboxNetwork: false });
+    expect(meta.data.sandbox).toEqual({ available: false, runtime: null, reason: 'Nothing was set up on this server to run code with.' });
 
     const { org } = await establish({
       executives: [{ profileId: 'engineering', agentCount: 2 }],

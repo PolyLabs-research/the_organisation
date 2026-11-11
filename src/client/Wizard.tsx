@@ -373,7 +373,7 @@ export function Wizard({ meta }: { meta: Meta }) {
                   }}
                 />
                 <span>
-                  <strong>On this machine.</strong> They read and write files in the organisation’s workspace folder and cannot run anything. The cheapest way to work.
+                  <strong>On this machine.</strong> They read and write files in the organisation’s workspace folder. They run nothing unless you later allow a role to run code, which it then does in a sandbox. The cheapest way to work.
                 </span>
               </label>
               <label>
