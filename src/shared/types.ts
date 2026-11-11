@@ -143,6 +143,11 @@ export interface OrgSettings {
    */
   archiveSessions: boolean;
   /**
+   * Whether a lead is shown what the organisation's memory holds on what it is about to decide, plan or hand out.
+   * It adds a little to those prompts. Agents can search the memory, and so can a person, whatever this says.
+   */
+  recall: boolean;
+  /**
    * Who holds the seat that signs and pays.
    * human: a person, who acts outside this system and says here what was done or why it was refused.
    * ai: an AI seat authorises or declines each request. What it authorises still has to be carried out by a

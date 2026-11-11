@@ -149,6 +149,59 @@ describe('the API', () => {
     expect(activity.some((a) => a.kind === 'direct' && a.ok)).toBe(true);
   });
 
+  it('searches what an organisation remembers, and gives the whole of what it finds', async () => {
+    const created = await establish();
+    const id = created.org.id;
+    // Before anything has happened there is nothing to find, and it says how much it holds: nothing.
+    const before = await api('GET', `/api/orgs/${id}/memory`);
+    expect(before.status).toBe(200);
+    expect(before.data).toMatchObject({ hits: [], stats: { items: 0, files: 0, cycles: null, leftOut: 0, unread: [] } });
+    await api('POST', `/api/orgs/${id}/start`);
+    await registry.get(id)!.idle();
+
+    // Asked with nothing to look for, it says how much there is to search.
+    const held = (await api('GET', `/api/orgs/${id}/memory`)).data;
+    expect(held.hits).toEqual([]);
+    expect(held.stats).toMatchObject({ cycles: { from: 1, to: 1 }, byKind: { cycle: 1, report: 2, plan: 2 }, leftOut: 0, unread: [] });
+    expect(held.stats.files).toBeGreaterThan(0);
+    expect(held.stats.items).toBe(Object.values(held.stats.byKind as Record<string, number>).reduce((sum, n) => sum + n, 0));
+
+    const found = (await api('GET', `/api/orgs/${id}/memory?q=${encodeURIComponent('release notes and handover instructions')}`)).data;
+    expect(found.hits.length).toBeGreaterThan(1);
+    expect(found.hits.length).toBeLessThanOrEqual(20);
+    for (const hit of found.hits) expect(hit).toMatchObject({ id: expect.stringMatching(/^(cycle|report|decision|plan|task|file):\S/), title: expect.any(String), excerpt: expect.stringMatching(/\S/), matched: expect.any(Number), asked: 4 });
+    // The closest first.
+    expect(found.hits.map((hit: any) => hit.score)).toEqual([...found.hits.map((hit: any) => hit.score)].sort((a, b) => b - a));
+    expect(found.stats.items).toBe(held.stats.items);
+
+    const reports = (await api('GET', `/api/orgs/${id}/memory?q=release%20notes&kind=report`)).data;
+    expect(reports.hits.length).toBeGreaterThan(0);
+    expect(reports.hits.every((hit: any) => hit.kind === 'report')).toBe(true);
+    const whole = await api('GET', `/api/orgs/${id}/memory/item?id=${encodeURIComponent(reports.hits[0].id)}`);
+    expect(whole.data).toMatchObject({ id: reports.hits[0].id, kind: 'report', cycle: 1, from: 'cto', title: reports.hits[0].title });
+    expect(whole.data.text).toContain('The plan ran Spec → Build → Test → Release');
+    // A file is found by what is written in it. Its id holds its path, slashes and all.
+    const files = (await api('GET', `/api/orgs/${id}/memory?q=simulated%20work%20product&kind=file`)).data;
+    expect(files.hits[0]).toMatchObject({ kind: 'file', id: expect.stringMatching(/^file:.+\/.+#\d+$/), cycle: null });
+    expect((await api('GET', `/api/orgs/${id}/memory/item?id=${encodeURIComponent(files.hits[0].id)}`)).data).toMatchObject({ kind: 'file', path: files.hits[0].path, text: expect.stringContaining('Simulated work product') });
+
+    expect((await api('GET', `/api/orgs/${id}/memory?q=giraffes`)).data.hits).toEqual([]);
+    // A file written a moment ago is found: a person's search looks at the workspace again, however lately it was looked at.
+    await registry.get(id)!.workspace.write('ops/crossing.md', 'A zebra crossing was painted outside the shop.');
+    expect((await api('GET', `/api/orgs/${id}/memory?q=zebra`)).data.hits.map((hit: any) => hit.path)).toEqual(['ops/crossing.md']);
+    expect((await api('GET', `/api/orgs/${id}/memory/item?id=report:nothing`)).status).toBe(404);
+    expect((await api('GET', `/api/orgs/${id}/memory/item`)).status).toBe(404);
+    const unknown = await api('GET', `/api/orgs/${id}/memory?q=notes&kind=gossip`);
+    expect(unknown.status).toBe(400);
+    expect(unknown.data.error).toContain('The kinds are: cycle, report, decision, plan, task, steer, request, knowledge, file.');
+    const long = await api('GET', `/api/orgs/${id}/memory?q=${encodeURIComponent('word '.repeat(250))}`);
+    expect(long.status).toBe(400);
+    expect(long.data.error).toContain('1000 characters at most');
+    expect((await api('GET', '/api/orgs/org_nothing/memory?q=notes')).status).toBe(404);
+    // What is asked has to be words. Asked two things at once, it is taken as asked nothing.
+    expect((await api('GET', `/api/orgs/${id}/memory?q=notes&q=release`)).data.hits).toEqual([]);
+  });
+
   it('runs an organisation on hosted sessions, and reads a run agent\'s task from the session when asked', async () => {
     const meta = await api('GET', '/api/meta');
     expect(meta.data.provider.managed).toBe(true);

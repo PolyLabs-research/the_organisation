@@ -106,9 +106,20 @@ The left side shows the hierarchy: you, the CEO, the signatory, and each lead wi
 | **Decisions** | What went to the board, each lead's position and the ruling |
 | **Signatory** | What has been asked of you, and where you answer |
 | **Files** | What the agents have written |
+| **Memory** | A search over everything it has reported, decided, planned and written, in every cycle |
 | **Activity** | Each unit of work, with its tokens, cost and time |
 
 ![The dashboard](dashboard.png)
+
+### What it remembers
+
+A lead is shown this cycle and the last four in brief, and cycles older than the three most recent are archived. So that a long-running organisation does not forget what it did, everything it has reported, decided, planned and written stays findable, however long ago it was.
+
+- **Leads** are shown, before they propose, direct, plan, hand out tasks or take part in a board decision, the passages from earlier cycles that bear most on the matter: six at most. To switch that off, open **Settings** and untick **Show leads what the organisation remembers**.
+- **Agents** search it themselves, with a tool called `recall`, when their work may have been done before or touches something the board has ruled on.
+- **You** search it under **Memory**. Type a few words and press Enter. Each result says what it is, whose it was and which cycle it is from, with the words you asked about marked. **Read all of it** shows the whole item in place, and **Open the file** or **Open the plan** takes you to where it lives. The buttons under the box keep the search to one kind of thing.
+
+It finds words, not meanings. The [README](../README.md#memory) says what is remembered and what is left out.
 
 ## Steer it
 
@@ -215,7 +226,7 @@ Agents work on this machine for this, so keep **On this machine** selected. Ever
 
 ## Change the settings
 
-The gear at the top right of an organisation opens **Settings**, where you can change the budget, the review interval, models, effort, how many calls run at once, web search and the cycle limit. Most changes apply at once.
+The gear at the top right of an organisation opens **Settings**, where you can change the budget, the review interval, models, effort, how many calls run at once, web search, whether leads are shown what the organisation remembers, and the cycle limit. Most changes apply at once.
 
 Lower the budget or the cycle limit if you want it to stop sooner. Set **Minutes between operating reviews** to zero to run continuously, which spends much faster.
 

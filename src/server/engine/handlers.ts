@@ -1,6 +1,8 @@
 import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
 import { accessTools, connectedTools } from '../access-tools';
+import { memoryTools, type OrgMemory } from '../memory';
+import { recalled, who, type RecallOptions } from './recall';
 import { codeTools } from '../access-code-tools';
 import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
@@ -26,6 +28,8 @@ import type { WorkItem } from './work';
 export interface EngineContext {
   org: Organisation;
   access: BusinessAccess;
+  /** Everything the organisation has reported, decided and written, to look things up in. */
+  memory: OrgMemory;
   provider: Provider;
   workspace: Workspace;
   signal: AbortSignal;
@@ -222,11 +226,19 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
   const exec = need(execById(org, item.execId), `seat ${item.execId}`);
   const cycle = org.cycle.number;
 
-  const ask = <T>(system: SystemPrompt, prompt: string, schema: z.ZodType<T>, context: Record<string, unknown>): Promise<T> =>
-    provider.structured({
+  // What the work in hand turns on, in its own words. Where a step says, what the organisation remembers on that is put in front of whoever is asked.
+  let about = '';
+  let recall: RecallOptions = {};
+  const turnsOn = (matters: Array<string | null | undefined>, options: RecallOptions = {}) => {
+    about = matters.filter(Boolean).join('\n');
+    recall = options;
+  };
+  const ask = async <T>(system: SystemPrompt, prompt: string, schema: z.ZodType<T>, context: Record<string, unknown>): Promise<T> => {
+    const memory = await recalled(org, ctx.memory, about, recall);
+    return provider.structured({
       kind: item.kind,
       system,
-      prompt: prompt + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
+      prompt: prompt + (memory ? '\n\n' + memory : '') + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
       schema,
       model: org.settings.executiveModel,
       effort: org.settings.executiveEffort,
@@ -234,10 +246,12 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       onUsage: (usage) => ctx.recordUsage(exec.id, usage),
       context: { ...context, seat: seatContext(exec), cycle, organisation: org.name, mission: org.mission },
     });
+  };
   const system = prompts.systemFor(org, exec);
 
   switch (item.kind) {
     case 'consult': {
+      turnsOn([...org.steers.slice(-2).map((s) => s.text), exec.function, org.mission]);
       const data = await ask(system, prompts.consultPrompt(org, exec), schemas.Consult, {
         steer: org.steers.at(-1)?.text ?? null,
       });
@@ -257,6 +271,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     case 'direct': {
       const leads = leadsOf(org);
       const steerIds = org.steers.filter((s) => s.status === 'new').map((s) => s.id);
+      turnsOn([...org.steers.slice(-2).map((s) => s.text), ...Object.values(org.cycle.consults).map((c) => c.proposal)]);
       const data = await ask(system, prompts.directPrompt(org), schemas.directionSchema(leads.map((l) => l.id), org.business.jobs.filter((j) => jobReady(org, j)).map((j) => j.id)), {
         leads: leads.map(seatContext),
         readyJobs: org.business.jobs.filter((j) => jobReady(org, j)).map((j) => ({ id: j.id, ownerId: j.ownerId, title: j.title, description: j.description })),
@@ -311,6 +326,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const choices = approachChoices(org, exec, org.settings.execution === 'local' && ctx.access.canCode(exec.id));
       const draft = schemas.planDraftSchema([...new Set(choices.flatMap((c) => c.phases.map((p) => p.id)))], otherLeads(org, exec));
       const schema = choices.length > 1 ? draft.extend(schemas.workApproachSchema(choices.map((c) => c.id)).shape) : draft;
+      turnsOn([plan.objective, plan.successCriteria, plan.rationale]);
       const data = await ask(system, prompts.planPrompt(org, exec, plan, files, choices), schema as typeof draft, {
         plan: planContext(org, plan),
         otherPlans: org.plans.filter((p) => p.cycle === cycle && p.id !== plan.id).map((p) => planContext(org, p)),
@@ -378,6 +394,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         `decision ${item.decisionId}`,
       );
       const plan = need(decision.planId ? planById(org, decision.planId) : undefined, `plan of ${decision.id}`);
+      turnsOn([decision.title, decision.context, ...decision.issues.map((i) => i.concern + ' ' + i.proposal)]);
       const data = await ask(system, prompts.answerPrompt(org, exec, decision, plan), schemas.AnswerOut, {
         decisionId: decision.id,
         objectors: decision.issues.map((i) => i.byId),
@@ -409,6 +426,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         `decision ${item.decisionId}`,
       );
       const plan = decision.planId ? planById(org, decision.planId) : undefined;
+      turnsOn([decision.title, decision.context, ...decision.issues.map((i) => i.concern + ' ' + i.proposal)]);
       const data = await ask(system, prompts.positionPrompt(org, exec, decision, plan), schemas.PositionOut, {
         decisionId: decision.id,
         isOwner: plan?.ownerId === exec.id,
@@ -427,6 +445,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       );
       const plan = decision.planId ? planById(org, decision.planId) : undefined;
       const stances = decision.participantIds.map((id) => decision.positions[id]?.stance);
+      turnsOn([decision.title, decision.context, ...decision.issues.map((i) => i.concern + ' ' + i.proposal)]);
       const data = await ask(system, prompts.signoffPrompt(org, decision, plan), schemas.SignOff, {
         decisionId: decision.id,
         stances,
@@ -491,6 +510,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const phase = need(plan.phases[item.phaseIndex], `phase ${item.phaseIndex}`);
       const files = await workspace.list();
       const max = Math.min(org.settings.maxTasksPerPhase, Math.max(exec.agentCount, 1) * 2);
+      turnsOn([plan.objective, phase.name, phase.intent, phase.deliverable]);
       const data = await ask(system, prompts.kickoffPrompt(org, exec, plan, item.phaseIndex, files), schemas.Kickoff, {
         plan: planContext(org, plan),
         phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex },
@@ -524,6 +544,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       tools.push(...businessTools(org, { id: exec.id, worker: true }, ctx.touch, () => !ctx.halting() && !ctx.signal.aborted && isPlanActive(plan)));
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(...connectedTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
+      tools.push(...memoryTools(ctx.memory, who(org), () => !ctx.halting() && isPlanActive(plan)));
       tools.push(
         ...codeTools(
           ctx.access,
@@ -658,6 +679,11 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       );
       const plan = request.planId ? planById(org, request.planId) : undefined;
       const files = await readForReview(workspace, request.files);
+      // What was asked of the signatory in cycles gone by, and what the board ruled, so that a repeat is seen for one. This request is not a
+      // memory of itself, and the latest of the others are in front of the seat already. It is shown nothing an agent wrote: this seat is a
+      // check on the leads, not their reader.
+      const onDesk = new Set([request, ...org.signatory.requests.filter((r) => r.id !== request.id).slice(-15)].map((r) => 'request:' + r.id));
+      turnsOn([request.title, request.detail, request.party], { kinds: ['request', 'decision'], already: (item) => onDesk.has(item.id), reader: null });
       const data = await ask(system, prompts.authorisePrompt(org, request, plan, files), schemas.Authorise, {
         request: { id: request.id, kind: request.kind, title: request.title, amount: request.amount, party: request.party, detail: request.detail },
       });

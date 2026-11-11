@@ -382,18 +382,32 @@ describe('one call through Claude Code', () => {
   });
 
   it('pauses rather than carry on into paid extra usage, unless told it may', async () => {
-    const guarded = provider({ FAKE_CLAUDE_MODE: 'extra-once', FAKE_CLAUDE_EXTRA_WAIT_MS: '3000' });
+    // When the plan's limit is due to reset is Claude Code's to say, and here the test says it for it: a whole hour, between two and three hours off.
+    const resets = (Math.floor(Date.now() / 3_600_000) + 3) * 3600;
+    const when = `${new Date(resets * 1000).toISOString().slice(0, 16).replace('T', ' at ')} UTC`;
+    const guarded = provider({ FAKE_CLAUDE_MODE: 'extra-once', FAKE_CLAUDE_EXTRA_WAIT_MS: '3000', FAKE_CLAUDE_RESETS_AT: String(resets) });
     // Two runs are in flight when one of them hears that the plan's included usage is spent. Both are ended,
     // the one that heard nothing as well: its next reply would have been billed.
     const [error, other] = await Promise.all([failure(guarded.structured(ask())), failure(guarded.structured(ask({ model: 'claude-sonnet-5-5' })))]);
     expect([error.code, error.retryable, other.code, other.retryable]).toEqual(['rate_limit', false, 'rate_limit', false]);
-    expect(error.message).toMatch(/has started to bill further usage as extra\. The organisation is paused so that it does not spend money without your say-so\. Nothing more is run on this login until 2026-11-11 at 01:00 UTC.*CLAUDE_CODE_EXTRA_USAGE=allow/);
+    expect(error.message).toContain(`has started to bill further usage as extra. The organisation is paused so that it does not spend money without your say-so. Nothing more is run on this login until ${when}, when the plan's limit is due to reset.`);
+    expect(error.message).toContain('start the server with CLAUDE_CODE_EXTRA_USAGE=allow to let it carry on at your expense.');
     expect(guarded.limits()).toMatchObject({ usingExtra: true, extraAllowed: true, utilization: 1, window: 'seven_day' });
     // And nothing more is started on the login, on any model, until the limit is due to reset: resuming costs nothing.
     const before = (await runs()).length;
     expect((await failure(guarded.structured(ask()))).message).toMatch(/Nothing more is run on this login until/);
     expect((await failure(guarded.agent(task({ tools: tools().tools, model: 'claude-opus-5-5' })))).code).toBe('rate_limit');
     expect((await runs()).length).toBe(before);
+
+    // A reset that is said to have been an hour ago says nothing about when it is safe to carry on. Nothing more is run for half an hour.
+    const began = Date.now();
+    const stale = await failure(provider({ FAKE_CLAUDE_MODE: 'extra', FAKE_CLAUDE_EXTRA_WAIT_MS: '3000', FAKE_CLAUDE_RESETS_AT: String(Math.floor(began / 1000) - 3600) }).structured(ask()));
+    expect([stale.code, stale.retryable]).toEqual(['rate_limit', false]);
+    const said = /Nothing more is run on this login until (\d{4}-\d{2}-\d{2}) at (\d{2}:\d{2}) UTC/.exec(stale.message);
+    expect(said).not.toBeNull();
+    const until = new Date(`${said![1]}T${said![2]}:00Z`).getTime() - began;
+    expect(until).toBeGreaterThan(28 * 60_000);
+    expect(until).toBeLessThan(32 * 60_000);
 
     const allowed = provider({ FAKE_CLAUDE_MODE: 'extra', FAKE_CLAUDE_EXTRA_WAIT_MS: '10' }, { extraUsage: true });
     expect(await allowed.structured(ask())).toEqual({ proposal: 'Settled.', priority: 'high' });

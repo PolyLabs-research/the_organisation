@@ -3,6 +3,7 @@ import { SIGN_IN_CALLBACK, accessRoutes, toolSignIns } from './access-routes';
 import { AccessError } from './access-vault';
 import { googleRoutes } from './access-google';
 import { operatingDigest } from '../shared/business';
+import { MEMORY_KINDS, type MemoryKind, type MemorySearch } from '../shared/memory';
 import { isIP } from 'node:net';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { MAX_AGENTS_PER_LEAD, MAX_LEADS, PROFILES } from '../shared/profiles';
@@ -18,6 +19,9 @@ import type { Registry } from './registry';
 import { WorkspaceError } from './workspace';
 
 class NotFound extends Error {}
+
+/** How much a person may type into a search of the memory. An agent's tool takes the same. */
+const MAX_MEMORY_QUERY = 1000;
 
 /** Loopback as it appears in a Host header, and as HOST may be configured. */
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -383,6 +387,26 @@ export function createApp(registry: Registry, config: Config, router?: ProviderR
 
   app.get('/api/orgs/:id/file', async (req, res) => {
     res.json(await runnerOf(req).workspace.read(text(req.query.path)));
+  });
+
+  // The organisation's memory, for a person: what a search finds in everything it has reported, decided and written, and how much there is to search.
+  // Asked with nothing to look for, it says only how much it holds.
+  app.get('/api/orgs/:id/memory', async (req, res) => {
+    const { memory } = runnerOf(req);
+    const query = text(req.query.q).trim();
+    if (query.length > MAX_MEMORY_QUERY) throw new ValidationError(`Ask in fewer words: ${MAX_MEMORY_QUERY} characters at most.`);
+    const kind = text(req.query.kind);
+    if (kind && !MEMORY_KINDS.includes(kind as MemoryKind)) throw new ValidationError(`The memory holds nothing of the kind "${kind.slice(0, 40)}". The kinds are: ${MEMORY_KINDS.join(', ')}.`);
+    const hits = query ? await memory.search(query, { kinds: kind ? [kind as MemoryKind] : undefined, limit: 20, fresh: true }) : [];
+    const found: MemorySearch = { hits, stats: await memory.stats(!query) };
+    res.json(found);
+  });
+
+  // The whole of one remembered item. The id is the one a search gave, and for a file it holds the file's path, so it is asked for by name and not as part of the address.
+  app.get('/api/orgs/:id/memory/item', async (req, res) => {
+    const item = await runnerOf(req).memory.read(text(req.query.id));
+    if (!item) throw new NotFound('Nothing is remembered under that id.');
+    res.json(item);
   });
 
   // Live updates for an open dashboard, as server-sent events.

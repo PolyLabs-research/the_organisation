@@ -13,6 +13,7 @@ import type {
   TeamRecommendation,
   WorkspaceFile,
 } from '../shared/types';
+import type { MemoryKind, MemorySearch, MemoryWhole } from '../shared/memory';
 
 export interface Meta {
   provider: ProviderInfo;
@@ -87,6 +88,10 @@ export const api = {
   patchConnection: (id: string, body: { label?: string; apiKey?: string; addModel?: string; price?: { model: string; input: number | null; output?: number } }) =>
     request<KeysView>('PATCH', `/api/connections/${id}`, body),
   disconnect: (id: string) => request<KeysView>('DELETE', `/api/connections/${id}`),
+  /** Search the organisation's memory. With nothing to look for, it answers with how much the memory holds. */
+  memory: (id: string, query: string, kind: MemoryKind | null) =>
+    request<MemorySearch>('GET', `/api/orgs/${id}/memory?q=${encodeURIComponent(query)}${kind ? `&kind=${kind}` : ''}`),
+  remembered: (id: string, itemId: string) => request<MemoryWhole>('GET', `/api/orgs/${id}/memory/item?id=${encodeURIComponent(itemId)}`),
   files: (id: string) => request<WorkspaceFile[]>('GET', `/api/orgs/${id}/files`),
   file: (id: string, path: string) =>
     request<{ path: string; content: string; truncated: boolean }>('GET', `/api/orgs/${id}/file?path=${encodeURIComponent(path)}`),

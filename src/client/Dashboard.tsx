@@ -9,6 +9,7 @@ const Overseer = lazy(() => import('./Overseer').then((module) => ({ default: mo
 import { Approaches } from './Approaches';
 import { Privileges } from './Privileges';
 import { Hierarchy } from './Hierarchy';
+import { Memory, type MemoryAsk } from './Memory';
 import { EXECUTION, STAGES } from './labels';
 import { waitingOnPerson } from '../shared/signatory';
 import { HelpButton, HelpProvider } from './Guide';
@@ -17,7 +18,7 @@ import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorBoundary, ErrorNote, PAUSE_REASONS, money } from './ui';
 
-type Tab = 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'activity' | 'overseer';
+type Tab = 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'memory' | 'activity' | 'overseer';
 
 function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
   const { org } = view;
@@ -58,6 +59,8 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planTarget, setPlanTarget] = useState<string | null>(null);
   const [file, setFile] = useState<string | null>(null);
+  // What was last looked for in the memory. Kept here so that it is still there after a look at a file or a plan it found.
+  const [recall, setRecall] = useState<MemoryAsk>({ query: '', kind: null });
   // The address says a mailbox has just been connected, or a tool server signed in to, which is why this page opened on that
   // tab. Once it has, the note is taken out of the address: left there, every organisation opened from here on, and every reload, opened on that tab too.
   useEffect(() => {
@@ -111,6 +114,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
     { id: 'decisions', label: 'Decisions', count: openDecisions || undefined },
     { id: 'signatory', label: 'Signatory', count: waiting || undefined },
     { id: 'files', label: 'Files' },
+    { id: 'memory', label: 'Memory' },
     { id: 'activity', label: 'Activity' },
   ];
 
@@ -228,6 +232,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
               {tab === 'plans' ? <Plans org={org} target={planTarget} simulated={meta.provider.simulated} onOpenFile={openFile} /> : null}
               {tab === 'decisions' ? <Decisions org={org} onOpenPlan={openPlan} /> : null}
               {tab === 'files' ? <Files org={org} selected={file} onSelect={setFile} /> : null}
+              {tab === 'memory' ? <Memory org={org} asked={recall} onAsk={setRecall} onOpenPlan={openPlan} onOpenFile={openFile} /> : null}
               {tab === 'overseer' ? <Suspense fallback={<p className="muted">Loading the overseer…</p>}><Overseer view={view} activity={activity} resumed={resumed} /></Suspense> : null}
               {tab === 'activity' ? <ActivityLog org={org} activity={activity} simulated={meta.provider.simulated} /> : null}
             </ErrorBoundary>

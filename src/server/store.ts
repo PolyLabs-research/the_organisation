@@ -143,6 +143,23 @@ export class Store {
     renameSync(tmp, file);
   }
 
+  /** The cycles of an organisation that are in its archive, by number. */
+  async archivedCycles(id: string): Promise<number[]> {
+    let names: string[];
+    try {
+      names = await fs.readdir(path.join(this.orgDir(id), 'archive'));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    return names.map((name) => /^cycle-(\d+)\.json$/.exec(name)?.[1]).filter((number): number is string => number !== undefined).map(Number);
+  }
+
+  /** One archived cycle, as it was written. */
+  async archivedCycle(id: string, cycle: number): Promise<unknown> {
+    return JSON.parse(await fs.readFile(path.join(this.orgDir(id), 'archive', `cycle-${cycle}.json`), 'utf8'));
+  }
+
   async archiveCycle(id: string, cycle: number, data: unknown): Promise<void> {
     const dir = path.join(this.orgDir(id), 'archive');
     await fs.mkdir(dir, { recursive: true });

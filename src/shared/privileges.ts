@@ -154,7 +154,7 @@ export const PRIVILEGES: readonly PrivilegeSpec[] = [
 ];
 
 /** What is always so, whatever is ticked: no setting changes these. */
-export const EVERY_ROLE_CAN = ['Read and write files in the shared workspace', 'Read the board and the business records', 'Ask a person for help under Email & accounts'];
+export const EVERY_ROLE_CAN = ['Read and write files in the shared workspace', 'Read the board and the business records', 'Search the organisation’s memory of earlier cycles', 'Ask a person for help under Email & accounts'];
 export const NO_ROLE_CAN = [
   'Send an email: a person reviews and sends every message',
   'See a saved password, token or session cookie',

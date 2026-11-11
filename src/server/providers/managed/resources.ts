@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { BusinessUpdates } from '../../../shared/business-schema';
+import { MEMORY_KINDS } from '../../../shared/memory';
 import { strictSchema } from '../schema';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -133,6 +134,23 @@ const REPORT_TO_BOARD: CustomTool = {
   },
 };
 
+const RECALL: CustomTool = {
+  type: 'custom',
+  name: PLAN_TOOLS.recall,
+  description:
+    'Search the organisation’s memory: everything it has reported, decided, planned and written in every cycle so far, however long ago, and the text of the files in its workspace. Use it before a phase that may repeat earlier work, and to find what was decided on a matter before you go against it. A search returns the passages that match, each with an id; a read returns the whole of one item by its id. It matches words, so ask in the words the thing itself would use. It changes nothing, and you may call it at any time. Your agents cannot call it: put what they need of it in their task.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['search', 'read'], description: 'search: find what matches a few words. read: the whole of one item a search found.' },
+      query: { type: 'string', description: 'For a search: a few words on what you are looking for.' },
+      kind: { type: 'string', enum: [...MEMORY_KINDS], description: 'For a search: keep it to one kind of thing. Leave it out to look among everything.' },
+      id: { type: 'string', description: 'For a read: an id that a search gave.' },
+    },
+    required: ['action'],
+  },
+};
+
 function workerParams(spec: TeamSpec): AgentCreateParams {
   return {
     name: spec.workerName,
@@ -156,7 +174,7 @@ function leadParams(spec: TeamSpec, worker: AgentRef): AgentCreateParams {
         ? ' When a phase of a plan has many separate pieces of the same kind of work, more than your agents could take one each, start a workflow run for it. Hand a handful of tasks out to your agents directly, without a run.'
         : ' Hand every task out to your agents yourself.'
     }`,
-    tools: [toolset(spec.web), RECORD_PHASE, REPORT_TO_BOARD],
+    tools: [toolset(spec.web), RECORD_PHASE, REPORT_TO_BOARD, RECALL],
     multiagent: {
       type: 'multiagent_20261001',
       // The lead's agents are copies of the team agent and nothing else: it cannot define agents of its own,
