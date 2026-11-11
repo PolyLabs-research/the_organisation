@@ -350,6 +350,39 @@ describe('when a container cannot be had', () => {
     expect(await sandbox.run('p7', { command: 'ls' }, forever)).toMatchObject({ ended: 'exited', exitCode: 0 });
   });
 
+  it('says a command was stopped, and not that it failed, when the work stops while it waits for the image or for its turn', async () => {
+    const runtime = new SandboxRuntime({ command: FAKE, limits: { atOnce: 1 } });
+    const settings = () => ({ image: SANDBOX_IMAGE, network: false });
+    const first = new OrgSandbox('org_one', runtime, workspace, settings);
+    const second = new OrgSandbox('org_two', runtime, workspace, settings);
+    const ran = async () => (await calls()).filter((args) => args[0] === 'run' && args.at(-1) === 'kept').length;
+    // The first commands of a server's life, from two organisations at once, while the image has yet to be looked at. One is stopped.
+    const stop = new AbortController();
+    const stopped = first.run('p1', { command: 'ls' }, { signal: stop.signal, active: () => true });
+    const other = second.run('p1', { command: 'ls' }, forever);
+    stop.abort();
+    expect(await stopped).toMatchObject({ ended: 'stopped', exitCode: null, output: '', note: 'It was stopped because the work it was for was stopped.' });
+    // The image is everyone's. The other organisation's command was waiting on the same look at it, and is not stopped with the first.
+    expect(await other).toMatchObject({ ended: 'exited', exitCode: 0 });
+    expect((await calls()).filter((args) => args[0] === 'run' && args.at(-1)!.includes('command -v'))).toHaveLength(1);
+    expect(await ran()).toBe(1);
+    // Stopped while it waits its turn: the one place there is, is taken.
+    const give = await runtime.turn();
+    const waiting = new AbortController();
+    const queued = first.run('p2', { command: 'ls' }, { signal: waiting.signal, active: () => true });
+    const inLine = runtime as unknown as { waiting: unknown[] };
+    for (let waited = 0; waited < 2000 && inLine.waiting.length === 0; waited++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(inLine.waiting).toHaveLength(1);
+    waiting.abort();
+    expect(await queued).toMatchObject({ ended: 'stopped', exitCode: null, note: 'It was stopped because the work it was for was stopped.' });
+    expect(inLine.waiting).toHaveLength(0);
+    give();
+    // Nothing was started for either of the two that were stopped, and what comes after them runs as usual.
+    expect(await ran()).toBe(1);
+    expect(await first.run('p1', { command: 'ls' }, forever)).toMatchObject({ ended: 'exited', exitCode: 0 });
+    expect(await ran()).toBe(2);
+  });
+
   it('sends the workspace again to a sandbox that its files never reached', async () => {
     const sandbox = sandboxFor('org_abc');
     await workspace.write('engineering/app/main.js', 'console.log(1)\n');
@@ -567,9 +600,17 @@ describe.skipIf(withoutSandbox())('in a real container', { timeout: 120_000 }, (
   });
 
   it('stops a command when the work it was for is stopped', async () => {
+    // The image is looked at and the plan's sandbox made ready first, so that what is stopped below is the command and nothing before it.
+    expect((await run('true')).exitCode).toBe(0);
     const stop = new AbortController();
-    setTimeout(() => stop.abort(), 1200);
+    // Stopped once the command's own container is up and has had a moment to print its first line, however long this machine takes to start one.
+    const stopping = (async () => {
+      for (let waited = 0; waited < 300 && containersOf(org).length === 0; waited++) await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      stop.abort();
+    })();
     const aborted = await sandbox.run('p1', { command: 'echo going; sleep 60' }, { signal: stop.signal, active: () => true });
+    await stopping;
     expect(aborted).toMatchObject({ ended: 'stopped', exitCode: null, output: 'going\n', note: 'It was stopped because the work it was for was stopped.' });
     expect(aborted.ms).toBeLessThan(15_000);
     // And when its plan is cancelled, or its role may no longer run code: that is asked while it runs.

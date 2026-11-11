@@ -229,17 +229,21 @@ export class SandboxRuntime {
     return this.asking;
   }
 
-  /** Have an image here, fetching it the first time, and make sure it has the few tools a sandbox is run with. */
-  image(image: string, signal?: AbortSignal): Promise<void> {
+  /**
+   * Have an image here, fetching it the first time, and make sure it has the few tools a sandbox is run with. Every
+   * organisation on the server that names the image waits on the same look at it, so it is nobody's to stop: one
+   * whose work is stopped leaves off waiting, and the others, and its own next command, find the image here.
+   */
+  image(image: string): Promise<void> {
     const known = this.images.get(image);
     if (known) return known;
     const ready = (async () => {
       const here = await this.exec({ args: ['image', 'inspect', '--format', '{{.Id}}', image], timeoutMs: 20_000 });
       if (here.code !== 0) {
-        const pulled = await this.exec({ args: ['pull', '--quiet', image], timeoutMs: this.pullMs, signal });
+        const pulled = await this.exec({ args: ['pull', '--quiet', image], timeoutMs: this.pullMs });
         if (pulled.code !== 0) throw new SandboxError(`The sandbox's image, ${image}, is not on this machine and could not be fetched${pulled.timedOut ? ' in time' : complaint(pulled.stderr) ? `: ${complaint(pulled.stderr)}` : ''}.`);
       }
-      const checked = await this.exec({ args: ['run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pull', 'never', '--log-driver', 'none', '--entrypoint', 'sh', image, '-c', NEEDS], timeoutMs: 60_000, signal });
+      const checked = await this.exec({ args: ['run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pull', 'never', '--log-driver', 'none', '--entrypoint', 'sh', image, '-c', NEEDS], timeoutMs: 60_000 });
       const lacking = checked.stdout.toString('utf8').trim();
       if (checked.code !== 0) throw new SandboxError(`The sandbox's image, ${image}, could not be started${complaint(checked.stderr) ? `: ${complaint(checked.stderr)}` : ''}.`);
       if (lacking) throw new SandboxError(`The sandbox's image, ${image}, has no ${lacking.split(/\s+/).join(', ')}, which a sandbox is run with. Choose an image that has a shell and the usual tools.`);
@@ -270,6 +274,16 @@ export class SandboxRuntime {
       else this.running--;
     };
   }
+}
+
+/** Wait for what others are waiting for too, for as long as this caller's own work stands. What is waited for goes on for the others. */
+function whileWanted<T>(shared: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const leave = () => reject(new SandboxError('The work was stopped while it waited.'));
+    if (signal.aborted) return leave();
+    signal.addEventListener('abort', leave, { once: true });
+    shared.then(resolve, reject).finally(() => signal.removeEventListener('abort', leave));
+  });
 }
 
 /** The tools a sandbox is run with. What is printed is what the image lacks. */
@@ -530,7 +544,7 @@ export class OrgSandbox {
       if (blocked) return answer('failed', null, '', 0, blocked);
       const image = this.image();
       const { network } = this.settings();
-      await this.runtime.image(image, control.signal);
+      await whileWanted(this.runtime.image(image), control.signal);
       give = await this.runtime.turn(control.signal);
       await this.prepare(planId, image);
       // Starting again means sending everything again, into a copy the command empties first.
@@ -601,6 +615,9 @@ export class OrgSandbox {
       if (ran.code === 137 || ran.code === null) return answer('killed', null, text, dropped, starved ? `It was killed for using more memory than the ${limits.memoryMb} MB a sandbox may use.` : 'It was killed before it finished.');
       return answer('exited', ran.code, text, dropped, [starved ? `A process it started was killed for using more memory than the ${limits.memoryMb} MB a sandbox may use.` : null, left].filter(Boolean).join(' ') || null);
     } catch (error) {
+      // Stopped while it waited: for the image to be looked at, for its turn, for its sandbox to be made ready. That is the work stopping,
+      // and no failure of the sandbox's, so nothing is said to have gone wrong.
+      if (control.signal.aborted || !control.active()) return answer('stopped', null, '', 0, 'It was stopped because the work it was for was stopped.');
       if (!(error instanceof SandboxError) && !(error instanceof WorkspaceError)) console.warn(`A sandbox command for ${this.orgId} failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`);
       return answer('failed', null, '', 0, error instanceof SandboxError || error instanceof WorkspaceError ? error.message : 'The sandbox could not run the command.');
     } finally {
@@ -616,7 +633,7 @@ export class OrgSandbox {
     if (blocked) throw new SandboxError(blocked);
     if (!this.prepared.has(this.volume(planId)) && !(await this.exists(planId))) throw new SandboxError('Nothing has been run in this plan’s sandbox yet, so there is nothing to bring out of it.');
     const image = this.image();
-    await this.runtime.image(image, signal);
+    await whileWanted(this.runtime.image(image), signal);
     const chunks: Buffer[] = [];
     let total = 0;
     const name = `theorg-${randomBytes(8).toString('hex')}`;
