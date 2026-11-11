@@ -14,7 +14,6 @@ import type {
   WorkspaceFile,
 } from '../shared/types';
 import type { MemoryKind, MemorySearch, MemoryWhole } from '../shared/memory';
-import type { SandboxStatus } from '../shared/sandbox';
 
 export interface Meta {
   provider: ProviderInfo;
@@ -22,8 +21,6 @@ export interface Meta {
   profiles: OperatingProfile[];
   defaults: OrgSettings;
   limits: { maxAgentsPerLead: number; maxLeads: number };
-  /** Whether this server can run code in a sandbox, for the roles allowed to, and if not, why not. */
-  sandbox?: SandboxStatus;
   /** Organisations on disk that the server could not load when it started, and why: each is a folder under the data folder's orgs. */
   unreadable?: Array<{ folder: string; reason: string }>;
   /** The providers a key can be added for, and the day their list prices were read. Null on a server that keeps no keys. */

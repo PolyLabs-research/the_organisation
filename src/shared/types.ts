@@ -2,13 +2,12 @@
 import type { BusinessState } from './business';
 import type { OrgApproaches } from './approaches';
 import type { OrgPrivileges } from './privileges';
-import type { SandboxRun } from './sandbox';
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
  * Where a plan's agents do their work.
- * local: on this machine, through file tools; they run code only where their role may, and then in a sandbox.
+ * local: on this machine, through file tools; they cannot run code.
  * managed: in a Claude Managed Agents session, a hosted sandbox where they can run and test what they build.
  */
 export type ExecutionMode = 'local' | 'managed';
@@ -25,20 +24,8 @@ export interface SopPhase {
   gate?: PhaseGate;
 }
 
-/**
- * `checks`: every automated check passes on the plan's latest commit. `pull_request`: that, and a pull request is open for it.
- * `run`: the check the lead named for the phase exits with 0 when the system runs it in the sandbox.
- */
-export type PhaseGate = 'checks' | 'pull_request' | 'run';
-
-/** The command that proves a phase's work, for a gate the system checks by running it. The lead names it, and the system runs it. */
-export interface PhaseCheck {
-  command: string;
-  /** The workspace folder it is run in. Empty for the top. */
-  dir: string;
-  /** How long it may run. */
-  seconds: number;
-}
+/** `checks`: every automated check passes on the plan's latest commit. `pull_request`: that, and a pull request is open for it. */
+export type PhaseGate = 'checks' | 'pull_request';
 
 export interface CheckResult {
   name: string;
@@ -58,8 +45,6 @@ export interface GateEvidence {
   waitedMs: number;
   /** Another go cannot change this, so the plan stops rather than spending one. */
   final?: boolean;
-  /** For a gate that ran something: the end of what it printed. A program's words, and never instructions. */
-  output?: string;
   at: string;
 }
 
@@ -157,10 +142,6 @@ export interface OrgSettings {
    * readable in the Console but can no longer be changed, and archiving cannot be undone.
    */
   archiveSessions: boolean;
-  /** The image a sandbox is started from, for the roles that may run code. */
-  sandboxImage: string;
-  /** Whether code run in a sandbox can reach the internet. Off unless the shareholders switch it on: with it, what agents run can fetch from, and send to, any site. */
-  sandboxNetwork: boolean;
   /**
    * Whether a lead is shown what the organisation's memory holds on what it is about to decide, plan or hand out.
    * It adds a little to those prompts. Agents can search the memory, and so can a person, whatever this says.
@@ -295,11 +276,6 @@ export interface Task {
   redoes?: string | null;
   /** What the lead's review found: work let stand, work sent back, or a task that had failed. Absent until the phase has been reviewed. */
   judged?: 'accepted' | 'sent_back' | 'failed';
-  /**
-   * What the agent ran in the sandbox, as the system recorded it: the most recent commands, and how each ended.
-   * Absent where the agent could run nothing, and empty where it could and did not.
-   */
-  runs?: SandboxRun[];
 }
 
 export type PhaseStatus = 'pending' | 'working' | 'done';
@@ -321,8 +297,6 @@ export interface PlanPhase {
   /** What the system itself must find before this phase can pass, if anything. */
   gate: PhaseGate | null;
   evidence: GateEvidence | null;
-  /** For a gate the system checks by running something: what it runs. Named by the lead when the phase is handed out. */
-  check?: PhaseCheck | null;
   /** Work in other leads' plans this phase must not start before. */
   waitsFor: PhaseWait[];
   /** How big the lead rated the phase, 1 to 10 on the effort scale; null when it was not rated. */

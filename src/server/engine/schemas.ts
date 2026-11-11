@@ -179,19 +179,6 @@ export const Kickoff = z.object({
 });
 export type Kickoff = z.infer<typeof Kickoff>;
 
-/** The command that proves a phase's work, where the system checks the phase's gate by running it. */
-export const CheckSpec = z.object({
-  command: z.string().default('').describe('The command that proves the work, as you would type it in a shell: the tests, the build. The gate passes if it exits with 0'),
-  dir: z.string().default('').describe('The workspace folder to run it in, like "engineering/app". Empty for the top of the workspace'),
-  seconds: z.number().int().default(0).describe('How long it may run, in seconds, up to 900. 0 for the usual 300'),
-});
-export type CheckSpec = z.infer<typeof CheckSpec>;
-
-/** For a phase whose gate the system checks by running something: the lead names what, as it hands the phase out. */
-export const KickoffWithCheck = Kickoff.extend({
-  check: CheckSpec.default({ command: '', dir: '', seconds: 0 }).describe('The check for this phase: the one command the system runs at its gate, which passes only if that command exits with 0'),
-});
-
 /** A payment to make or a document to sign, as a lead asks for it. */
 export const RequestSpec = z.object({
   kind: z.enum(['payment', 'signature']),
@@ -212,11 +199,6 @@ export const PhaseReview = z.object({
   requests: z.array(RequestSpec).describe('Payments to be made or documents to be signed that the plan now needs from the signatory. Empty at most gates'),
 });
 export type PhaseReview = z.infer<typeof PhaseReview>;
-
-/** At a gate the system checked by running something, the lead can put the check itself right, where that was what was wrong. */
-export const PhaseReviewWithCheck = PhaseReview.extend({
-  check: CheckSpec.default({ command: '', dir: '', seconds: 0 }).describe('Only if the check itself was wrong (the wrong command, or the wrong folder): the right one, which the system runs at the next review. Otherwise leave its command empty'),
-});
 
 export const Authorise = z.object({
   verdict: z.enum(['authorise', 'decline']),

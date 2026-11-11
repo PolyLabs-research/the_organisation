@@ -16,8 +16,6 @@ export interface WorkApproach {
   phases: SopPhase[];
   /** Whether it works on a connected repository. Then a role needs one assigned, and may be held to what the checks say. */
   needsCode?: boolean;
-  /** Whether it has a gate the system checks by running something. Then the role must be allowed to run code, with something here to run it in. */
-  needsSandbox?: boolean;
 }
 
 function phase(name: string, purpose: string, deliverable: string, gate?: PhaseGate): SopPhase {
@@ -37,19 +35,6 @@ export const WORK_APPROACHES: readonly WorkApproach[] = [
       phase('Verify', 'Get the repository’s automated checks passing on that branch.', 'Every check green on the latest commit of the branch.', 'checks'),
       phase('Release', 'Put the change forward for a person to review and merge.', 'An open pull request with release notes and how to roll back.', 'pull_request'),
       phase('Improve', 'Say what slowed this change down and what to automate next.', 'A short note of what to keep, what to fix and what to automate.'),
-    ],
-  },
-  {
-    id: 'tested_build',
-    label: 'Tested build',
-    when: 'Software, a script or an analysis that can be run on this machine, where a command can prove that it works.',
-    profileIds: ['engineering', 'data'],
-    needsSandbox: true,
-    phases: [
-      phase('Spec', 'Pin down what will be built, and what will prove that it works.', 'A short specification, with the check that will be run and what it must show.'),
-      phase('Build', 'Write it, with the tests that go with it, and run them.', 'The work and its tests in the workspace, run in the sandbox.'),
-      phase('Prove', 'Get the check passing in the sandbox.', 'The check named for this phase exits with 0 when the system runs it.', 'run'),
-      phase('Release', 'Say what was built, how to run it and what the check covers.', 'Release notes: what it does, how to run it, what was proved and what was not.'),
     ],
   },
   {
@@ -104,11 +89,6 @@ export const WORK_APPROACHES: readonly WorkApproach[] = [
 
 export type OrgApproaches = Record<string, Record<string, boolean>>;
 
-/** Whether a gate is one the system reads off a repository, and not one it checks by running something on this machine. */
-export function readsRepository(gate: PhaseGate | null | undefined): boolean {
-  return gate === 'checks' || gate === 'pull_request';
-}
-
 /** The approaches that suit a seat, whether or not it may use them. */
 export function approachesOf(seat: Pick<Executive, 'kind' | 'profileId'>): WorkApproach[] {
   return seat.kind === 'lead' ? WORK_APPROACHES.filter((a) => a.profileIds.includes(seat.profileId)) : [];
@@ -120,10 +100,10 @@ export function approachAllowed(org: Pick<Organisation, 'workApproaches'>, seatI
 }
 
 /** What a lead can choose from for a plan: its own profile first, then whatever is allowed and can work today. */
-export function approachChoices(org: Pick<Organisation, 'workApproaches'>, seat: Executive, canUseCode: boolean, canRunCode = false): Array<Pick<WorkApproach, 'id' | 'label' | 'when' | 'phases'>> {
+export function approachChoices(org: Pick<Organisation, 'workApproaches'>, seat: Executive, canUseCode: boolean): Array<Pick<WorkApproach, 'id' | 'label' | 'when' | 'phases'>> {
   return [
     { id: STANDARD_APPROACH, label: 'Standard operating profile', when: 'Anything else. This is the default.', phases: seat.phases },
-    ...approachesOf(seat).filter((a) => approachAllowed(org, seat.id, a.id) && (!a.needsCode || canUseCode) && (!a.needsSandbox || canRunCode)),
+    ...approachesOf(seat).filter((a) => approachAllowed(org, seat.id, a.id) && (!a.needsCode || canUseCode)),
   ];
 }
 

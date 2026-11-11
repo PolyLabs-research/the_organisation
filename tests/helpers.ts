@@ -1,5 +1,4 @@
 import type { RunnerOptions } from '../src/server/engine/runner';
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -102,27 +101,6 @@ export const CHROME = process.env.CHROME_PATH ?? '/opt/google/chrome/chrome';
  * decides whether a change may go in, set REQUIRE_BROWSER=1: a test that was skipped has checked nothing, so there
  * a missing browser or a missing build stops the run and says what is missing.
  */
-/** The command the sandbox tests run containers with, and the image they run them from: anything with a shell and the usual tools. */
-export const DOCKER = process.env.ORG_SANDBOX_COMMAND ?? 'docker';
-export const SANDBOX_IMAGE = process.env.ORG_SANDBOX_TEST_IMAGE ?? 'alpine:3.20';
-
-let sandboxMissing: string | null | undefined;
-/**
- * Whether the tests that run real containers have to be left out: the container service is not running here, or the
- * image cannot be had. Like the tests that need a browser, they are skipped then on your own machine. Where a run
- * decides whether a change may go in, set REQUIRE_SANDBOX=1, and a missing service stops the run and says so.
- */
-export function withoutSandbox(): boolean {
-  if (sandboxMissing === undefined) {
-    const ask = (args: string[], timeout: number) => spawnSync(DOCKER, args, { timeout, encoding: 'utf8' });
-    if (ask(['version', '--format', '{{.Server.Version}}'], 15_000).status !== 0) sandboxMissing = `no container service answered the ${DOCKER} command`;
-    else if (ask(['image', 'inspect', '--format', '{{.Id}}', SANDBOX_IMAGE], 20_000).status !== 0 && ask(['pull', '--quiet', SANDBOX_IMAGE], 240_000).status !== 0) sandboxMissing = `the image ${SANDBOX_IMAGE} is not here and could not be fetched (set ORG_SANDBOX_TEST_IMAGE to one that can)`;
-    else sandboxMissing = null;
-  }
-  if (sandboxMissing && process.env.REQUIRE_SANDBOX === '1') throw new Error(`REQUIRE_SANDBOX is set, but ${sandboxMissing}.`);
-  return sandboxMissing !== null;
-}
-
 export function withoutBrowser(needs: { build?: boolean } = {}): boolean {
   const missing = [
     ...(existsSync(CHROME) ? [] : [`Chrome was not found at ${CHROME} (set CHROME_PATH to where it is)`]),

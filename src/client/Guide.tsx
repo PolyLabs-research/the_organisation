@@ -4,7 +4,6 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import readme from '../../README.md?raw';
 import businessOperations from '../../docs/business-operations.md?raw';
-import codeExecution from '../../docs/code-execution.md?raw';
 import codeRepositories from '../../docs/code-repositories.md?raw';
 import emailAndAccounts from '../../docs/email-and-accounts.md?raw';
 import toolServers from '../../docs/tool-servers.md?raw';
@@ -16,7 +15,6 @@ export const GUIDES = {
   'email-and-accounts': { title: 'Email & accounts', file: 'email-and-accounts.md', text: emailAndAccounts },
   'code-repositories': { title: 'GitHub repositories', file: 'code-repositories.md', text: codeRepositories },
   'tool-servers': { title: 'Tool servers', file: 'tool-servers.md', text: toolServers },
-  'code-execution': { title: 'Running code', file: 'code-execution.md', text: codeExecution },
   'business-operations': { title: 'Calendar & business', file: 'business-operations.md', text: businessOperations },
   reference: { title: 'Full reference', file: 'README.md', text: readme },
 } as const;

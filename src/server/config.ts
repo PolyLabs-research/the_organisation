@@ -26,14 +26,6 @@ export interface Config {
   production: boolean;
   /** The Anthropic workspace the API key belongs to, as it appears in Console links to hosted sessions. */
   workspace: string;
-  /** How code is run for the roles that may run it: in containers, started with this command. Where this is left out, none is run. */
-  sandbox?: {
-    command: string;
-    /** Why code may not be run on this server at all, if it may not. */
-    blocked: string | null;
-    /** What a sandbox may use, where the server was told something other than the usual. */
-    limits?: { memoryMb?: number; cpus?: number };
-  };
   /** How the Claude Code on this machine is run, for the connection that uses its login instead of a key. */
   claudeCode: {
     command: string;
@@ -53,17 +45,6 @@ function claudeCredentialsPresent(env: NodeJS.ProcessEnv): boolean {
 }
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
-
-/** How much memory and how many processors a sandbox may use, where the environment says. What is not a sensible number is left at the usual. */
-function sandboxLimits(env: NodeJS.ProcessEnv): { memoryMb?: number; cpus?: number } | null {
-  const memoryMb = Number(env.ORG_SANDBOX_MEMORY_MB);
-  const cpus = Number(env.ORG_SANDBOX_CPUS);
-  const limits = {
-    ...(Number.isFinite(memoryMb) && memoryMb >= 64 && memoryMb <= 1_000_000 ? { memoryMb: Math.round(memoryMb) } : {}),
-    ...(Number.isFinite(cpus) && cpus >= 0.1 && cpus <= 512 ? { cpus } : {}),
-  };
-  return Object.keys(limits).length ? limits : null;
-}
 
 /** Host names from a comma-separated list, as they appear in a Host header: lower case, without a port. */
 export function hostNames(list: string | undefined): string[] {
@@ -100,17 +81,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     anthropicAmbient: !env.ANTHROPIC_API_KEY && claudeCredentialsPresent(env),
     production: env.NODE_ENV === 'production',
     workspace: (env.ANTHROPIC_WORKSPACE_ID ?? '').trim() || 'default',
-    sandbox: {
-      command: (env.ORG_SANDBOX_COMMAND ?? '').trim() || 'docker',
-      ...(sandboxLimits(env) ? { limits: sandboxLimits(env)! } : {}),
-      blocked:
-        (env.ORG_SANDBOX ?? '').trim().toLowerCase() === 'off'
-          ? 'Running code is switched off on this server (ORG_SANDBOX=off).'
-          : LOOPBACK.has(host)
-            ? null
-            // There is no login. Whoever can reach the server can change what a role may do, and so could have code run on this machine.
-            : `Running code is for a server that only you can reach, and is switched off while this one listens on ${host}: it has no login, so anyone who could reach it could have code run on this machine. Set HOST back to 127.0.0.1.`,
-    },
     claudeCode: {
       command: (env.CLAUDE_CODE_PATH ?? '').trim() || 'claude',
       extraUsage: (env.CLAUDE_CODE_EXTRA_USAGE ?? '').trim().toLowerCase() === 'allow',

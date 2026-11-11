@@ -1,6 +1,5 @@
 import { Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { imageName } from '../shared/sandbox';
 import type { Effort, Organisation, OrgSettings, OrgView } from '../shared/types';
 import { api, useAction, type Meta } from './api';
 import { navigate } from './App';
@@ -45,9 +44,7 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
     save.run(async () => {
       // Only what was changed here is sent. Every setting sent, as the dialog found them, put back whatever had been set
       // somewhere else while it was open: the pace chosen in another window, say.
-      // The server takes only what could be the name of an image, and would leave any other as it was without a word.
-      if (!imageName(draft.sandboxImage)) throw new Error(`"${draft.sandboxImage}" is not a name an image can have. Give one as docker pull takes it, such as node:22-bookworm.`);
-      const next: OrgSettings = { ...draft, sandboxImage: draft.sandboxImage.trim(), maxCycles: limitCycles ? (draft.maxCycles ?? org.cycle.number) : null };
+      const next: OrgSettings = { ...draft, maxCycles: limitCycles ? (draft.maxCycles ?? org.cycle.number) : null };
       const changed = Object.fromEntries(Object.entries(next).filter(([key, value]) => value !== opened[key as keyof OrgSettings])) as Partial<OrgSettings>;
       if (Object.keys(changed).length) onView(await api.settings(org.id, changed));
       onClose();
@@ -143,7 +140,7 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
           </Field>
           <Field
             label="The leads’ agents do their work"
-            hint={`On this machine they write files, and run code only where their role is allowed to, in a sandbox. In a hosted session they share a sandbox on Anthropic’s side where work can be run. A plan under way finishes the way it began.${
+            hint={`On this machine they write files and run nothing. In a hosted session they share a sandbox where work can be run. A plan under way finishes the way it began.${
               hostable ? '' : ' Hosted sessions need Claude models from one Anthropic key, for both the executives and the agents.'
             }`}
           >
@@ -159,12 +156,6 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
                 In hosted sessions
               </option>
             </select>
-          </Field>
-          <Field
-            label="Image that code is run in"
-            hint="For work on this machine, by the roles allowed to run code in a sandbox under Privileges. Any image with a shell and the usual tools: node:22-bookworm has Node.js and Python’s standard library, and python:3.12-bookworm suits Python work."
-          >
-            <input type="text" value={draft.sandboxImage} spellCheck={false} autoCapitalize="none" onChange={(e) => set('sandboxImage', e.target.value)} />
           </Field>
         </div>
         {fellBack ? (
@@ -204,13 +195,6 @@ export function SettingsPanel({ org, meta, onClose, onView }: { org: Organisatio
           <span>
             <strong>Let agents search the web.</strong>{' '}
             {searchable ? 'Searches are billed separately by Anthropic.' : 'Not available with the model chosen for the agents: here, only agents on Claude models can search.'}
-          </span>
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={draft.sandboxNetwork} onChange={(e) => set('sandboxNetwork', e.target.checked)} />
-          <span>
-            <strong>Let code in a sandbox reach the network.</strong> It can then install packages, and reach any site and this machine’s own network. Whatever it can read, which is a copy of the
-            workspace, it can send anywhere. Without this a sandbox has no network at all.
           </span>
         </label>
         <label className="check">

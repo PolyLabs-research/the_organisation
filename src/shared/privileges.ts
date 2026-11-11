@@ -8,7 +8,7 @@ import type { Executive, Organisation } from './types';
 
 export type Privilege =
   | 'web_search' | 'update_records' | 'ask_signatory' | 'read_mail' | 'draft_mail' | 'sign_in' | 'act' | 'create_accounts'
-  | 'read_code' | 'push_code' | 'run_workflows' | 'edit_pipelines' | 'use_tools' | 'run_code';
+  | 'read_code' | 'push_code' | 'run_workflows' | 'edit_pipelines' | 'use_tools';
 
 export interface PrivilegeSpec {
   id: Privilege;
@@ -151,15 +151,6 @@ export const PRIVILEGES: readonly PrivilegeSpec[] = [
     byDefault: false,
     hosted: false,
   },
-  {
-    id: 'run_code',
-    group: 'Running code',
-    label: 'Run code in a sandbox',
-    detail: 'Run commands on a copy of the workspace, in a container on this machine: tests, scripts, builds. The container cannot reach the rest of this machine, or the internet unless that is switched on in the settings. It needs Docker running here.',
-    forbids: 'run code',
-    byDefault: false,
-    hosted: false,
-  },
 ];
 
 /** What is always so, whatever is ticked: no setting changes these. */
@@ -169,7 +160,6 @@ export const NO_ROLE_CAN = [
   'See a saved password, token or session cookie',
   'Merge a pull request or push to a repository’s main branch: a person merges',
   'Call a tool on a connected server that a person has not allowed, or connect a server',
-  'Run anything on this machine outside a sandbox, or read a file of this machine’s from inside one',
   'Change these privileges, or give itself access to anything',
   'Record a payment or a measurement as confirmed: only a person can',
   'Reach a private or local network address from the account browser',

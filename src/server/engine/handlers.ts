@@ -2,22 +2,20 @@ import type { z } from 'zod';
 import type { BusinessAccess } from '../access';
 import { accessTools, connectedTools } from '../access-tools';
 import { memoryTools, type OrgMemory } from '../memory';
-import { sandboxTools, type OrgSandbox } from '../sandbox';
 import { recalled, who, type RecallOptions } from './recall';
 import { codeTools } from '../access-code-tools';
-import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel, readsRepository } from '../../shared/approaches';
+import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
 import { applyBusinessCommand, applyBusinessUpdates, businessContext, businessTools, linkBusinessJob } from './business';
 import { allows } from '../../shared/privileges';
 import { describeRequest, isOpen } from '../../shared/signatory';
 import { namedWaits } from '../../shared/waits';
 import { clampEffort } from '../../shared/effort';
-import { SANDBOX_MAX_SECONDS } from '../../shared/sandbox';
-import type { BoardReport, Executive, Organisation, PhaseCheck, Plan, PlanOrigin, PlanPhase, SopPhase, Task } from '../../shared/types';
+import type { BoardReport, Executive, Organisation, Plan, PlanOrigin, PlanPhase, SopPhase, Task } from '../../shared/types';
 import { ProviderError, type CallUsage, type Provider, type SystemPrompt } from '../providers/types';
 import { Workspace, workspaceTools } from '../workspace';
 import { AGENT_BRANCHES } from '../access';
-import { CHECK_SECONDS, gateEvidence, type CheckTimes } from './evidence';
+import { gateEvidence, type CheckTimes } from './evidence';
 import { closeOpenWork, executeInSession } from './hosted';
 import * as prompts from './prompts';
 import { judgeRound } from './routing';
@@ -32,8 +30,6 @@ export interface EngineContext {
   access: BusinessAccess;
   /** Everything the organisation has reported, decided and written, to look things up in. */
   memory: OrgMemory;
-  /** Where a role that may run code runs it. */
-  sandbox: OrgSandbox;
   provider: Provider;
   workspace: Workspace;
   signal: AbortSignal;
@@ -55,29 +51,11 @@ export interface EngineContext {
 export type Commit = () => void;
 
 const MAX_TASK_TURNS = 24;
-/** How many of a task's commands are kept on its record. The most recent say most about where the work stands. */
-const MAX_TASK_RUNS = 30;
 const MAX_TASK_SEARCHES = 8;
 const MAX_REWORK_ROUNDS = 1;
 /** A phase held to what the checks say gets more goes: seeing a build fail and fixing it is the work. */
 const MAX_GATED_REWORK_ROUNDS = 3;
 const MAX_FOLLOW_UPS = 1;
-/** How long a check may be, which is how long a command an agent runs may be. */
-const MAX_CHECK_CHARS = 4000;
-
-/** The check a lead named for a gate, as it is kept. Null where no command was given. The command is kept as it was written. */
-function namedCheck(given: schemas.CheckSpec | undefined): PhaseCheck | null {
-  const command = (given?.command ?? '').trim().slice(0, MAX_CHECK_CHARS);
-  if (!command) return null;
-  const seconds = Math.round(Number(given?.seconds) || 0);
-  return { command, dir: clean(given?.dir ?? '', 400), seconds: seconds > 0 ? Math.min(seconds, SANDBOX_MAX_SECONDS) : CHECK_SECONDS };
-}
-
-/** A check as the board is shown it: the command set apart as it was written, then where it is run. */
-function checkOnBoard(check: PhaseCheck | null | undefined): string {
-  if (!check) return 'No check had been named.';
-  return `${check.command.split('\n').map((line) => `    ${line}`).join('\n')}\n\nRun ${check.dir ? `in ${check.dir}` : 'at the top of the workspace'}, with ${check.seconds} seconds to finish.`;
-}
 
 function need<T>(value: T | undefined, what: string): T {
   if (value === undefined || value === null) throw new StaleWork(what);
@@ -345,10 +323,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const plan = need(planById(org, item.planId), `plan ${item.planId}`);
       const files = await workspace.list();
       // Repository work is local: a hosted session cannot reach the vault, so nothing could check its gates.
-      // So is work the system proves by running it: the sandbox is on this machine, and holds this machine's workspace.
-      const local = org.settings.execution === 'local';
-      const canProve = local && allows(org, exec.id, 'run_code') && (await ctx.sandbox.unusable()) === null;
-      const choices = approachChoices(org, exec, local && ctx.access.canCode(exec.id), canProve);
+      const choices = approachChoices(org, exec, org.settings.execution === 'local' && ctx.access.canCode(exec.id));
       const draft = schemas.planDraftSchema([...new Set(choices.flatMap((c) => c.phases.map((p) => p.id)))], otherLeads(org, exec));
       const schema = choices.length > 1 ? draft.extend(schemas.workApproachSchema(choices.map((c) => c.id)).shape) : draft;
       turnsOn([plan.objective, plan.successCriteria, plan.rationale]);
@@ -536,19 +511,14 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const files = await workspace.list();
       const max = Math.min(org.settings.maxTasksPerPhase, Math.max(exec.agentCount, 1) * 2);
       turnsOn([plan.objective, phase.name, phase.intent, phase.deliverable]);
-      const canRun = allows(org, exec.id, 'run_code') && (await ctx.sandbox.unusable()) === null;
-      // Where the system checks the phase by running something, the lead says what, now, before any of the work is done.
-      const proves = phase.gate === 'run';
-      const data = await ask(system, prompts.kickoffPrompt(org, exec, plan, item.phaseIndex, files, canRun ? { network: org.settings.sandboxNetwork } : null), (proves ? schemas.KickoffWithCheck : schemas.Kickoff) as typeof schemas.Kickoff, {
+      const data = await ask(system, prompts.kickoffPrompt(org, exec, plan, item.phaseIndex, files), schemas.Kickoff, {
         plan: planContext(org, plan),
-        phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex, gate: phase.gate },
+        phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex },
         maxTasks: max,
         dir: teamDir(exec),
       });
       return () => {
         if (plan.status !== 'executing' || phase.status !== 'pending') return;
-        // A lead that named nothing is told so at the gate, which then cannot pass until it has.
-        if (proves) phase.check = namedCheck((data as Partial<z.infer<typeof schemas.KickoffWithCheck>>).check);
         const specs = data.tasks.filter((t) => t.title.trim() && t.brief.trim()).slice(0, max);
         // A phase always has work: if the lead named none, the phase deliverable is the task.
         if (!specs.length) specs.push({ title: `Produce the ${phase.name} deliverable`, brief: `${phase.intent}\n\nDeliverable: ${phase.deliverable}`, effort: phase.effort ?? 0 });
@@ -575,31 +545,6 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(...connectedTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(...memoryTools(ctx.memory, who(org), () => !ctx.halting() && isPlanActive(plan)));
-      // Running code: for a role that may, where there is something on this machine to run it in. What was run is the system's to
-      // record, as each command ends: a lead reads that at the gate, beside whatever the agent says of it.
-      const canRun = allows(org, exec.id, 'run_code') && (await ctx.sandbox.unusable()) === null;
-      if (canRun) {
-        task.runs ??= [];
-        tools.push(
-          ...sandboxTools(ctx.sandbox, {
-            planId: plan.id,
-            workspace,
-            signal: ctx.signal,
-            // Taking the privilege away stops what is running, as it does for every other tool.
-            active: () => !ctx.halting() && isPlanActive(plan) && allows(org, exec.id, 'run_code'),
-            redact: (text) => ctx.access.withoutSecrets(text),
-            ran: (run) => {
-              const runs = (task.runs ??= []);
-              runs.push(run);
-              if (runs.length > MAX_TASK_RUNS) runs.splice(0, runs.length - MAX_TASK_RUNS);
-              ctx.touch();
-            },
-            wrote: (path) => {
-              if (!written.includes(path)) written.push(path);
-            },
-          }),
-        );
-      }
       tools.push(
         ...codeTools(
           ctx.access,
@@ -613,7 +558,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
               ctx.touch();
             },
             open: () => {
-              const gated = plan.phases.filter((p) => readsRepository(p.gate));
+              const gated = plan.phases.filter((p) => p.gate);
               return !gated.length || gated.some((p) => p.status !== 'done');
             },
           },
@@ -629,7 +574,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const canSearch = org.settings.webResearch && allows(org, exec.id, 'web_search') && (provider.searches?.(model) ?? true);
       const result = await provider.agent({
         kind: 'task',
-        system: prompts.systemForAgent(org, exec, canSearch, canRun ? { network: org.settings.sandboxNetwork } : null),
+        system: prompts.systemForAgent(org, exec, canSearch),
         prompt: prompts.taskPrompt(org, exec, plan, item.phaseIndex, task, phase.notes, files, planBranch(org, plan)) + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
         model,
         effort: org.settings.workerEffort,
@@ -681,8 +626,7 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       const held = proof !== null && proof.state !== 'passed';
       const canRework = phase.reworkRounds < (phase.gate ? MAX_GATED_REWORK_ROUNDS : MAX_REWORK_ROUNDS);
       const written = await readForReview(workspace, [...new Set(phase.tasks.flatMap((t) => t.files))]);
-      const proves = phase.gate === 'run';
-      const data = await ask(system, prompts.phaseReviewPrompt(org, plan, item.phaseIndex, canRework, written, proof), (proves ? schemas.PhaseReviewWithCheck : schemas.PhaseReview) as typeof schemas.PhaseReview, {
+      const data = await ask(system, prompts.phaseReviewPrompt(org, plan, item.phaseIndex, canRework, written, proof), schemas.PhaseReview, {
         plan: planContext(org, plan),
         phase: { name: phase.name, deliverable: phase.deliverable, index: item.phaseIndex },
         tasks: phase.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, files: t.files })),
@@ -705,28 +649,8 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
         }
         if (held || (data.verdict === 'rework' && canRework && rework.length)) {
           phase.reworkRounds += 1;
-          // Where it was the check that was wrong, the lead has said what it should have been, and the next review runs that. It can say so
-          // only as it sends the phase back, so a check is never changed for a phase that then counts as passed.
-          // The board is told: what a gate is held to is the lead's to name, and everyone's to see.
-          const had = phase.check ?? null;
-          const corrected = proves ? namedCheck((data as Partial<z.infer<typeof schemas.PhaseReviewWithCheck>>).check) : null;
-          const changed = corrected !== null && (corrected.command !== had?.command || corrected.dir !== had.dir || corrected.seconds !== had.seconds);
-          if (corrected && changed) {
-            postToBoard(org, 'system', 'system', `${exec.short} changed the check at the ${phase.name} gate`, `The ${exec.short} has sent the ${phase.name} phase back and named a different check for its gate. From now on the system runs:\n\n${checkOnBoard(corrected)}\n\nBefore:\n\n${checkOnBoard(had)}`, { planId: plan.id });
-            phase.check = corrected;
-          }
           // Check names come from the repository, so they are left out of a brief an agent takes as its instructions.
-          // What the system says of a check it ran itself is its own words, and goes in.
-          if (held && !rework.length) {
-            const brief = !proves
-              ? `The system did not pass this gate. Read the checks and the logs of any failed runs with read_repository, find out why, put it right and push the fix to the plan's branch.`
-              : !phase.check
-                ? `The system could not check this phase's gate, because no check has been named for it. Make sure that one command proves the work, and say in your report exactly which command that is and which folder it is run in.`
-                : !had
-                  ? `No check had been named for this phase's gate, so the system could not check it. One has been named now, and is given with this task: run it yourself with run_command, and put right whatever stops it passing.`
-                  : `The system did not pass this phase's gate. ${proof.summary} ${changed ? 'The check has been changed since, and the one the system will run next' : 'The check'} is given with this task: run it yourself with run_command, find out why it does not pass, and put that right.`;
-            rework.push({ title: `Clear the ${phase.name} gate`, brief, effort: 0, redoes: '' });
-          }
+          if (held && !rework.length) rework.push({ title: `Clear the ${phase.name} gate`, brief: `The system did not pass this gate. Read the checks and the logs of any failed runs with read_repository, find out why, put it right and push the fix to the plan's branch.`, effort: 0, redoes: '' });
           const added = rework.map((t) => {
             const task = rated(newTask(org, t.title, t.brief, true), t.effort);
             // Whose work this puts right, as the lead named it: by its id, or failing that by its title.
@@ -948,12 +872,8 @@ export function describeWork(org: Organisation, item: WorkItem): string {
       const task = plan?.phases[item.phaseIndex]?.tasks.find((t) => t.id === item.taskId);
       return task?.title ?? 'Working on a task';
     }
-    case 'phase_review': {
-      const phase = plan?.phases[item.phaseIndex];
-      // The check comes first, and can take minutes: whoever is watching is told that is what is going on.
-      if (phase?.gate === 'run' && phase.check) return `Running the check at the ${phase.name} gate, then reviewing the phase`;
-      return `Reviewing the ${phase?.name ?? ''} phase`.replace('  ', ' ');
-    }
+    case 'phase_review':
+      return `Reviewing the ${plan?.phases[item.phaseIndex]?.name ?? ''} phase`.replace('  ', ' ');
     case 'report':
       return 'Writing the report to the board';
     case 'react':

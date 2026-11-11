@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { BusinessAccess, type AccessOptions } from '../access';
 import { operatingDigest } from '../../shared/business';
-import { PRIVILEGE_BY_ID, allows, rolesOf, type Privilege } from '../../shared/privileges';
+import { PRIVILEGE_BY_ID, allows, type Privilege } from '../../shared/privileges';
 import { applyBusinessCommand, consumeBusinessWake, nextBusinessWake, syncBusinessJobs } from './business';
 import type {
   ActiveWork,
@@ -20,7 +20,6 @@ import { waitsOnAi } from '../../shared/signatory';
 import { ProviderError, type CallUsage, type Provider } from '../providers/types';
 import type { Store } from '../store';
 import { OrgMemory } from '../memory';
-import { OrgSandbox, SandboxRuntime } from '../sandbox';
 import { Workspace } from '../workspace';
 import { changeApproach } from './approaches';
 import { CHECK_TIMES, WaitingOnChecks, type CheckTimes } from './evidence';
@@ -55,8 +54,6 @@ import { cycleComplete, nextWork, settle, type WorkItem } from './work';
 
 export interface RunnerOptions {
   access?: AccessOptions;
-  /** What code is run with, for the roles that may run it. Where none is given, none is run. */
-  sandbox?: SandboxRuntime;
   /** Base delay before a failed call is retried; doubles each attempt. */
   retryDelayMs?: number;
   /** Minimum gap between pushes to subscribers. */
@@ -68,9 +65,6 @@ export interface RunnerOptions {
   /** How long to wait before trying again to hold a hosted session that could not be held; doubles each time, up to ten minutes. */
   holdRetryMs?: number;
 }
-
-/** For a runner that was given nothing to run code with. Nothing is looked for, and nothing is run. */
-const NO_SANDBOX = new SandboxRuntime({ blocked: 'Nothing was set up on this server to run code with.' });
 
 const MAX_ATTEMPTS = 3;
 /** Long enough to read what a call produced before the next one starts. */
@@ -107,8 +101,6 @@ export class OrgRunner {
   readonly access: BusinessAccess;
   /** Everything this organisation has reported, decided and written, to be searched. Built from its own files when it is first asked. */
   readonly memory: OrgMemory;
-  /** Where the roles that may run code run it: a volume for each plan, and a container for each command. */
-  readonly sandbox: OrgSandbox;
   readonly activity: ActivityEntry[] = [];
   private readonly inFlight = new Map<string, ActiveWork>();
   private readonly attempts = new Map<string, number>();
@@ -158,7 +150,6 @@ export class OrgRunner {
   ) {
     this.workspace = new Workspace(store.workspaceRoot(org.id));
     this.memory = new OrgMemory(org, { archivedCycles: () => store.archivedCycles(org.id), archivedCycle: (cycle) => store.archivedCycle(org.id, cycle) }, this.workspace);
-    this.sandbox = new OrgSandbox(org.id, options.sandbox ?? NO_SANDBOX, this.workspace, () => ({ image: org.settings.sandboxImage, network: org.settings.sandboxNetwork }));
     this.access = new BusinessAccess(path.join(store.orgDir(org.id), 'access-vault.json'), org.id, () => org.executives.filter(exec => exec.kind === 'lead' || exec.kind === 'ceo').map(exec => exec.id), {
       ...options.access,
       allows: (actorId, privilege) => allows(org, actorId, privilege),
@@ -222,7 +213,6 @@ export class OrgRunner {
     this.halting = false;
     // Sessions that could not be archived when their plans ended (the provider was out of reach, say) are tried again.
     if (org.settings.archiveSessions) this.tidy();
-    this.clearSandboxes();
     org.status = 'running';
     if (!org.business.waiting) consumeBusinessWake(org);
     org.pauseReason = null;
@@ -308,9 +298,7 @@ export class OrgRunner {
     }
     const oldInterval = org.settings.reviewIntervalMinutes;
     const hadWeb = org.settings.webResearch;
-    const hadImage = org.settings.sandboxImage;
     org.settings = next;
-    if (next.sandboxImage !== hadImage) this.warmSandbox();
     if (hadWeb && !next.webResearch) this.sayWhoKeepsWeb(null);
     if (next.reviewIntervalMinutes !== 0 && next.reviewIntervalMinutes !== oldInterval) org.business.nextReviewAt = new Date(Date.now() + next.reviewIntervalMinutes * 60_000).toISOString();
     if (next.reviewIntervalMinutes === 0) { org.business.waiting = false; this.clearWake(); }
@@ -510,22 +498,7 @@ export class OrgRunner {
     // Hosted sessions cannot reach the vault, so a privilege that does not apply there is one that works through it.
     if (removed && !PRIVILEGE_BY_ID[privilege as Privilege].hosted) await this.access.revoke(String(seatId));
     if (removed && privilege === 'web_search') this.sayWhoKeepsWeb(String(seatId));
-    if (changed && privilege === 'run_code' && allowed === true) this.warmSandbox();
     if (changed) this.changed();
-  }
-
-  /**
-   * A role has been let run code, or the image code is run in has been changed. Whether anything can be run is found
-   * out now, and the image fetched now, and not when the first agent wants to run something. What stands in the way
-   * goes on the board, where a person looks first: until it is put right the role's agents are told they cannot run code.
-   */
-  private warmSandbox(): void {
-    if (!rolesOf(this.org).some((seat) => allows(this.org, seat.id, 'run_code'))) return;
-    void this.sandbox.warm().then((problem) => {
-      if (!problem || this.disposed) return;
-      postToBoard(this.org, 'system', 'system', 'Code cannot be run yet', `A role is allowed to run code, but nothing can be run for it yet. ${problem} Until that is put right its agents are told that they cannot run code, as before.`);
-      this.changed();
-    });
   }
 
   /**
@@ -870,7 +843,6 @@ export class OrgRunner {
       org,
       access: this.access,
       memory: this.memory,
-      sandbox: this.sandbox,
       provider: this.provider,
       workspace: this.workspace,
       signal: this.abort.signal,
@@ -1070,8 +1042,6 @@ export class OrgRunner {
     org.inbox = {};
 
     org.cycle = { number: next, stage: 'consult', consults: {}, intent: null, priorities: [], startedAt: endedAt };
-    // Every plan of the cycle is over, and what its commands left in a sandbox goes with it.
-    void this.clearSandboxes();
     if (org.settings.maxCycles !== null && finished >= org.settings.maxCycles) {
       postToBoard(org, 'system', 'system', 'Cycle limit reached', `The organisation has completed ${finished} cycle${finished === 1 ? '' : 's'}, the limit set by the shareholders, and is paused.`);
       this.pause('cycle_limit');
@@ -1166,22 +1136,6 @@ export class OrgRunner {
     this.auditWarned = false;
     // Entries are only ever added at the end, so the ones written are still the first ones, whatever happened meanwhile.
     this.org.business.audit.splice(0, leaving.length);
-  }
-
-  /**
-   * Remove what the sandboxes of finished plans left behind: the packages their commands installed, what they built.
-   * Done beside everything else, and never waited for by the work: a plan is over whether or not its leavings are gone.
-   */
-  clearSandboxes(all = false): Promise<void> {
-    const kept = (planId: string) => {
-      const plan = this.org.plans.find((p) => p.id === planId);
-      return !all && !!plan && isPlanActive(plan);
-    };
-    const clearing = this.sandbox.sweep(kept).catch((error: unknown) => {
-      console.warn(`Could not clear the sandboxes of ${this.org.id}: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    this.chores = this.chores.then(() => clearing);
-    return clearing;
   }
 
   /** Cancel timers and let go of subscribers. The state must already be flushed; nothing is written after this. */
