@@ -68,6 +68,25 @@ export interface MemorySearch {
   stats: MemoryStats;
 }
 
+/**
+ * One time the memory was put to use, kept so that a person can see it at work: passages put in front of a lead
+ * before it decided, or a search that an agent or a lead made for itself.
+ */
+export interface MemoryUse {
+  at: string;
+  cycle: number;
+  /** The lead it was for: the one that was shown, the one whose agent searched, or the one that searched from its session. */
+  seatId: string;
+  /** shown: passages put in front of a lead. agent: an agent's own search. lead: a lead's own search, from a hosted session. */
+  by: 'shown' | 'agent' | 'lead';
+  /** For what was shown: the step the lead was at. For a search: the words that were searched for. */
+  about: string;
+  /** What was shown, oldest first, or what the search found, closest first. None where a search found nothing. */
+  items: Array<Pick<MemoryItem, 'id' | 'kind' | 'cycle' | 'title' | 'from' | 'path'>>;
+}
+/** How many uses are kept: enough to see the memory at work, and few enough to send with every change. */
+export const MAX_MEMORY_USES = 30;
+
 // ---- words ----
 // The memory finds things by their words. The page marks the same words in what it shows, so both read a text the same way.
 

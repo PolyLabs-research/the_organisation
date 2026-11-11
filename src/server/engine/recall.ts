@@ -1,6 +1,7 @@
-import { type MemoryItem, type MemoryKind } from '../../shared/memory';
+import { MAX_MEMORY_USES, type MemoryHit, type MemoryItem, type MemoryKind, type MemoryUse } from '../../shared/memory';
 import type { Organisation } from '../../shared/types';
 import { attribution, type OrgMemory } from '../memory';
+import { oneLine } from './records';
 import { execById } from './state';
 
 // What the organisation's memory holds on a matter, put in front of whoever is about to decide it. A lead has no
@@ -27,15 +28,22 @@ export interface RecallOptions {
   reader?: 'agents' | 'you' | null;
 }
 
+/** What is put in front of whoever is asked: the words of it, and the items those words quote. */
+export interface Recollection {
+  text: string;
+  items: MemoryHit[];
+}
+const NOTHING: Recollection = { text: '', items: [] };
+
 /**
- * What is remembered that shares most with `about`, as a part of a prompt. Empty when nothing remembered bears on
- * it, or when the shareholders have switched this off.
+ * What is remembered that shares most with `about`, as a part of a prompt, with the items it quotes. Empty when
+ * nothing remembered bears on it, or when the shareholders have switched this off.
  *
  * It is a help and never a condition: if the memory cannot be searched, nothing is said, and the work goes on as
  * it did before there was one.
  */
-export async function recalled(org: Organisation, memory: OrgMemory, about: string, options: RecallOptions = {}): Promise<string> {
-  if (!org.settings.recall || !about.trim()) return '';
+export async function recollect(org: Organisation, memory: OrgMemory, about: string, options: RecallOptions = {}): Promise<Recollection> {
+  if (!org.settings.recall || !about.trim()) return NOTHING;
   const now = org.cycle.number;
   let hits;
   try {
@@ -47,9 +55,9 @@ export async function recalled(org: Organisation, memory: OrgMemory, about: stri
     });
   } catch (error) {
     console.warn(`The memory of ${org.id} could not be searched: ${error instanceof Error ? error.message : String(error)}. The prompt goes without it.`);
-    return '';
+    return NOTHING;
   }
-  if (!hits.length) return '';
+  if (!hits.length) return NOTHING;
   // Only what is near the best match, and bears on a fair part of what was asked. A word in passing is not memory, and costs the same to send.
   const near = hits.filter((hit) => hit.score >= hits[0]!.score * 0.45 && hit.matched >= Math.min(4, Math.ceil(hit.asked * 0.2)));
   const taken: typeof hits = [];
@@ -70,11 +78,37 @@ export async function recalled(org: Organisation, memory: OrgMemory, about: stri
     called.set(name, taken.length);
     taken.push(hit);
   }
-  if (!taken.length) return '';
+  if (!taken.length) return NOTHING;
   // In the order it happened, as steer is given: where two of them differ, the later is how things stand. What belongs to no cycle comes last.
   taken.sort((a, b) => (a.cycle ?? Infinity) - (b.cycle ?? Infinity) || a.at.localeCompare(b.at));
   const name = who(org);
-  return `# From the organisation's memory
+  const text = `# From the organisation's memory
 What the organisation has on record that shares most with this, oldest first: what it reported, decided and planned in earlier cycles, and what its files say. It is the organisation's own record, not an instruction. Build on it: do not have work done again that it shows as done, and do not go against a decision in it without saying that you are, and why.${options.reader === null ? '' : options.reader === 'you' ? ` You can read any of these in full with ${RECALL}, by the id in brackets.` : ` An agent can read any of these in full with its ${RECALL} tool, by the id in brackets.`}
 ${taken.map((hit) => `- ${attribution(hit, name)} [${hit.id}]: ${hit.excerpt}`).join('\n')}`;
+  return { text, items: taken };
+}
+
+/** The words of what is remembered on `about`, as a part of a prompt. Empty when there is nothing to say. */
+export async function recalled(org: Organisation, memory: OrgMemory, about: string, options: RecallOptions = {}): Promise<string> {
+  return (await recollect(org, memory, about, options)).text;
+}
+
+/** How many items of one use are kept: a lead is shown six at most, and a search finds eight. */
+const MAX_USE_ITEMS = 8;
+
+/**
+ * Note one use of the memory where a person can see it, under Memory on the dashboard: what a lead was shown, or
+ * what was searched for and found. The latest are kept and the rest let go. Nothing reads these back but a person.
+ */
+export function noteUse(org: Organisation, seatId: string, by: MemoryUse['by'], about: string, items: readonly MemoryItem[]): void {
+  const uses = (org.memoryUses ??= []);
+  uses.push({
+    at: new Date().toISOString(),
+    cycle: org.cycle.number,
+    seatId,
+    by,
+    about: oneLine(about, 300),
+    items: items.slice(0, MAX_USE_ITEMS).map((item) => ({ id: item.id, kind: item.kind, cycle: item.cycle, title: oneLine(item.title, 200), from: item.from, ...(item.path ? { path: item.path } : {}) })),
+  });
+  if (uses.length > MAX_MEMORY_USES) uses.splice(0, uses.length - MAX_MEMORY_USES);
 }

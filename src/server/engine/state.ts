@@ -1,4 +1,5 @@
 import { emptyBusiness } from '../../shared/business';
+import { MAX_MEMORY_USES } from '../../shared/memory';
 import { STANDARD_APPROACH } from '../../shared/approaches';
 import { PROFILE_BY_ID, MAX_LEADS, executiveFromDraft } from '../../shared/profiles';
 import { MAX_LADDER, MAX_RUNG_LEVEL } from '../../shared/routing';
@@ -401,6 +402,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     signatory: { requests: [], messages: [] },
     privileges: {},
     workApproaches: {},
+    memoryUses: [],
     usage: emptyUsage(),
     usageByExec: {},
   };
@@ -507,6 +509,8 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.privileges ??= {};
   // From before there were work approaches: every plan ran the lead's own profile.
   org.workApproaches ??= {};
+  // From before the uses of the memory were noted: none have been.
+  org.memoryUses = Array.isArray(org.memoryUses) ? org.memoryUses.slice(-MAX_MEMORY_USES) : [];
   syncSignatory(org);
   syncRouting(org);
   for (const plan of org.plans) {

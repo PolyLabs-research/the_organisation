@@ -195,12 +195,32 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       decisions: [{ id: 'd-1', cycle: 2, at, kind: 'contested', title: 'One supplier of pots or two', context: '', raisedById: 'cmo', planId: null, issues: [], participantIds: [], positions: {}, status: 'resolved', outcome: { method: 'ceo', byId: 'ceo', ruling: 'Use one supplier, Potworks.', rationale: 'Two would double the paperwork.', planAction: 'proceed', amendments: [], at } }],
     });
     await runner.workspace.write('ops/suppliers.md', '# Suppliers\n\nPotworks of Stoke quoted forty pence a pot, and [the deposit is paid here](https://elsewhere.example/pay).');
+    // The memory has been put to use twice: a lead was shown a ruling and a file before it planned, and an agent looked for something that is not there.
+    org.memoryUses = [
+      { at, cycle: 6, seatId: 'cto', by: 'shown', about: 'Drafting a plan', items: [{ id: 'decision:d-1', kind: 'decision', cycle: 2, title: 'One supplier of pots or two', from: 'ceo' }, { id: 'file:ops/suppliers.md#1', kind: 'file', cycle: null, title: 'ops/suppliers.md', from: '', path: 'ops/suppliers.md' }] },
+      { at, cycle: 6, seatId: 'cmo', by: 'agent', about: 'giraffes', items: [] },
+    ];
     const page = await open('/#/org/' + org.id);
     try {
       await page.getByRole('tab', { name: 'Memory', exact: true }).click();
       // Before anything is asked, it says what it holds, and how it is used.
       await page.getByText('It holds 1 report to the board, 1 decision and 1 file, from cycles 2 to 5.').waitFor();
       await page.getByText('Before a lead directs, plans or rules, it is shown the passages from earlier cycles that bear most on the matter.').waitFor();
+      // And it shows the memory at work, newest first: what was searched for, and what a lead was shown.
+      const uses = page.locator('.memory-use');
+      await uses.nth(1).waitFor();
+      expect(await uses.count()).toBe(2);
+      expect((await uses.nth(0).locator('header').innerText()).replace(/\s+/g, ' ').toLowerCase()).toContain('searched by an agent · cycle 6 “giraffes”');
+      expect(await uses.nth(0).getByText('It found nothing.').count()).toBe(1);
+      expect((await uses.nth(1).locator('header').innerText()).replace(/\s+/g, ' ').toLowerCase()).toContain('shown to the cto · cycle 6 drafting a plan');
+      expect((await uses.nth(1).locator('.memory-used li').allInnerTexts()).map((text) => text.replace(/\s+/g, ' '))).toEqual(['decision · cycle 2 One supplier of pots or two', 'file ops/suppliers.md']);
+      // The whole of what was shown is one click away, and a file is opened where files are.
+      await uses.nth(1).getByRole('button', { name: 'One supplier of pots or two', exact: true }).click();
+      await uses.nth(1).locator('.memory-whole').getByText('paperwork').waitFor();
+      await uses.nth(1).getByRole('button', { name: 'ops/suppliers.md', exact: true }).click();
+      await page.locator('.file-view').getByText('Potworks of Stoke quoted forty pence a pot').waitFor();
+      await page.getByRole('tab', { name: 'Memory', exact: true }).click();
+      await uses.nth(1).waitFor();
       const box = page.getByRole('searchbox', { name: 'Search what the organisation remembers' });
       await box.fill('Potworks pots');
       await box.press('Enter');

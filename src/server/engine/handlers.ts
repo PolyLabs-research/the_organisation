@@ -3,7 +3,8 @@ import type { BusinessAccess } from '../access';
 import { accessTools, connectedTools } from '../access-tools';
 import { memoryTools, type OrgMemory } from '../memory';
 import { sandboxTools, type OrgSandbox } from '../sandbox';
-import { recalled, who, type RecallOptions } from './recall';
+import type { MemoryHit } from '../../shared/memory';
+import { noteUse, recollect, who, type RecallOptions } from './recall';
 import { codeTools } from '../access-code-tools';
 import { STANDARD_APPROACH, WORK_APPROACHES, approachChoices, approachLabel, readsRepository } from '../../shared/approaches';
 import { jobReady } from '../../shared/business';
@@ -244,6 +245,20 @@ const otherLeads = (org: Organisation, exec: Executive) => leadsOf(org).filter((
  * The commit re-checks that the state the work was for still holds.
  */
 export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commit> {
+  // What a lead is shown from the memory before it answers is noted where a person can see the memory at work. It is noted when
+  // the answer is taken up, so that a call that failed and was made again is noted once.
+  const shown: MemoryHit[] = [];
+  const commit = await carryOut(item, ctx, shown);
+  if (!shown.length) return commit;
+  const step = describeWork(ctx.org, item);
+  return () => {
+    commit();
+    noteUse(ctx.org, item.execId, 'shown', step, shown);
+  };
+}
+
+/** The work itself. `shown` is given what the memory put in front of whoever was asked, if anything. */
+async function carryOut(item: WorkItem, ctx: EngineContext, shown: MemoryHit[]): Promise<Commit> {
   const { org, provider, workspace } = ctx;
   const exec = need(execById(org, item.execId), `seat ${item.execId}`);
   const cycle = org.cycle.number;
@@ -256,11 +271,12 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
     recall = options;
   };
   const ask = async <T>(system: SystemPrompt, prompt: string, schema: z.ZodType<T>, context: Record<string, unknown>): Promise<T> => {
-    const memory = await recalled(org, ctx.memory, about, recall);
+    const memory = await recollect(org, ctx.memory, about, recall);
+    shown.push(...memory.items);
     return provider.structured({
       kind: item.kind,
       system,
-      prompt: prompt + (memory ? '\n\n' + memory : '') + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
+      prompt: prompt + (memory.text ? '\n\n' + memory.text : '') + '\n\n' + businessContext(org) + '\n\n' + ctx.access.context(exec.id),
       schema,
       model: org.settings.executiveModel,
       effort: org.settings.executiveEffort,
@@ -574,7 +590,13 @@ export async function perform(item: WorkItem, ctx: EngineContext): Promise<Commi
       tools.push(...businessTools(org, { id: exec.id, worker: true }, ctx.touch, () => !ctx.halting() && !ctx.signal.aborted && isPlanActive(plan)));
       tools.push(...accessTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
       tools.push(...connectedTools(ctx.access, exec.id, task.id, ctx.signal, () => !ctx.halting() && isPlanActive(plan)));
-      tools.push(...memoryTools(ctx.memory, who(org), () => !ctx.halting() && isPlanActive(plan)));
+      tools.push(
+        ...memoryTools(ctx.memory, who(org), () => !ctx.halting() && isPlanActive(plan), (query, found) => {
+          // Noted as it happens, for a person to see: an agent chose to look, for this, and found that.
+          noteUse(org, exec.id, 'agent', query, found);
+          ctx.touch();
+        }),
+      );
       // Running code: for a role that may, where there is something on this machine to run it in. What was run is the system's to
       // record, as each command ends: a lead reads that at the gate, beside whatever the agent says of it.
       const canRun = allows(org, exec.id, 'run_code') && (await ctx.sandbox.unusable()) === null;

@@ -2088,6 +2088,42 @@ input[type='radio'] {
   max-width: 78ch;
 }
 
+/* The memory at work: what leads were shown and what was searched for, under what the memory says of itself. */
+.memory-uses {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.memory-uses > h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.memory-used {
+  display: grid;
+  gap: 3px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.memory-used .link {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.memory-whole {
+  margin: 4px 0 6px;
+  padding: 6px 9px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
 /* Where a seat's badge stands on the board, for what came from no seat. */
 .memory-file {
   display: inline-grid;

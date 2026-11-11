@@ -117,7 +117,7 @@ A lead is shown this cycle and the last four in brief, and cycles older than the
 
 - **Leads** are shown, before they propose, direct, plan, hand out tasks or take part in a board decision, the passages from earlier cycles that bear most on the matter: six at most. To switch that off, open **Settings** and untick **Show leads what the organisation remembers**.
 - **Agents** search it themselves, with a tool called `recall`, when their work may have been done before or touches something the board has ruled on.
-- **You** search it under **Memory**. Type a few words and press Enter. Each result says what it is, whose it was and which cycle it is from, with the words you asked about marked. **Read all of it** shows the whole item in place, and **Open the file** or **Open the plan** takes you to where it lives. The buttons under the box keep the search to one kind of thing.
+- **You** search it under **Memory**. Type a few words and press Enter. Each result says what it is, whose it was and which cycle it is from, with the words you asked about marked. **Read all of it** shows the whole item in place, and **Open the file** or **Open the plan** takes you to where it lives. The buttons under the box keep the search to one kind of thing. Before you ask anything, the tab shows **The memory at work**: what each lead was last shown from it, and what agents searched for. In an organisation's first cycle that list is nearly always empty, because a lead is shown what earlier cycles left.
 
 It finds words, not meanings. The [README](../README.md#memory) says what is remembered and what is left out.
 

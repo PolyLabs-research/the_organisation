@@ -1,5 +1,6 @@
 // Domain model shared by the server (engine, API) and the browser client.
 import type { BusinessState } from './business';
+import type { MemoryUse } from './memory';
 import type { OrgApproaches } from './approaches';
 import type { OrgPrivileges } from './privileges';
 import type { SandboxRun } from './sandbox';
@@ -639,6 +640,8 @@ export interface Organisation {
   privileges: OrgPrivileges;
   /** Which work approaches the shareholders have closed to a role. */
   workApproaches: OrgApproaches;
+  /** The latest times the memory was put to use: what leads were shown from it, and what was searched for. For a person to see it at work. */
+  memoryUses?: MemoryUse[];
   id: string;
   /** Counter behind the short ids of plans, tasks, decisions and messages. */
   seq: number;

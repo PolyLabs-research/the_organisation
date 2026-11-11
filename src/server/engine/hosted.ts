@@ -7,7 +7,8 @@ import { WorkspaceError } from '../workspace';
 import type { Commit, EngineContext } from './handlers';
 import * as prompts from './prompts';
 import { recallAnswer } from '../memory';
-import { recalled, who } from './recall';
+import type { MemoryHit } from '../../shared/memory';
+import { noteUse, recollect, who } from './recall';
 import { MAX_RESULT_CHARS, clean, fileReport, logRemitDecisions, newTask, now } from './records';
 import { MAX_REQUESTS_PER_GATE, alreadyRaised, raiseRequests } from './signatory';
 import { execById, isPlanActive, postToBoard, sessionAllowance, teamDir } from './state';
@@ -177,10 +178,13 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     ctx.touch();
   };
 
+  // What the lead of a new session is told at its start, from the memory. Noted once the session is there to have been told.
+  let toldAtStart: MemoryHit[] = [];
   const hooks: PlanHooks = {
     session(info) {
       if (managed.sessionId !== info.id) {
         // A new session: what the last one spent stays in the organisation's totals, but this one starts from nothing.
+        if (toldAtStart.length) noteUse(org, lead.id, 'shown', 'Starting the plan in a hosted session', toldAtStart);
         managed.sessionId = info.id;
         managed.spentUsd = 0;
         managed.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, webSearches: 0 };
@@ -282,7 +286,10 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
 
     async recall(input) {
       // The lead's own look in the organisation's memory. It reads, and changes nothing, so it is answered however the plan stands.
-      const answer = await recallAnswer(ctx.memory, who(org), input, `A file named here is in your sandbox under ${prompts.SESSION_WORKSPACE}/ if it was among the files mounted when this session began.`);
+      const answer = await recallAnswer(ctx.memory, who(org), input, `A file named here is in your sandbox under ${prompts.SESSION_WORKSPACE}/ if it was among the files mounted when this session began.`, (query, found) => {
+        noteUse(org, lead.id, 'lead', query, found);
+        ctx.touch();
+      });
       return { ok: !('error' in answer), message: JSON.stringify(answer) };
     },
 
@@ -557,7 +564,10 @@ export async function executeInSession(ctx: EngineContext, lead: Executive, plan
     const files = mountable(await workspace.list());
     // A lead in a session plans its own phases, so it is told at the start what the organisation remembers on the objective.
     // After that it looks things up for itself, with the tool it has for that.
-    const memory = await recalled(org, ctx.memory, [plan.objective, plan.successCriteria, plan.rationale].join('\n'), { reader: 'you' });
+    const recollection = await recollect(org, ctx.memory, [plan.objective, plan.successCriteria, plan.rationale].join('\n'), { reader: 'you' });
+    const memory = recollection.text;
+    // It goes in the kickoff, which only a new session is sent: one that is picked up again is told nothing twice, and nothing more is noted for it.
+    toldAtStart = recollection.items;
     const job: PlanJob = {
       planId: plan.id,
       title: `${org.name} · ${lead.short}: ${plan.objective}`.slice(0, 120),
