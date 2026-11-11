@@ -202,7 +202,8 @@ export function Memory({ org, asked, onAsk, onOpenPlan, onOpenFile }: { org: Org
           <span className="field-label">Search what the organisation remembers</span>
           <input type="search" value={draft} maxLength={1000} onChange={(event) => setDraft(event.target.value)} placeholder="A supplier, a decision, a figure, a file…" disabled={empty} />
         </label>
-        <button type="submit" className="button button-primary" disabled={busy || empty}>
+        {/* Left on while a search is on its way: a form whose button is off does nothing when Enter is pressed, and what was typed then would be dropped. */}
+        <button type="submit" className="button button-primary" disabled={empty}>
           <Search size={15} aria-hidden="true" /> {busy && asked.query ? 'Searching…' : 'Search'}
         </button>
       </form>

@@ -243,12 +243,30 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       await page.getByText('Try looking among everything').waitFor();
       // A cycle in the archive that cannot be read is named, and the rest is found as before.
       await writeFile(path.join(dir, 'orgs', org.id, 'archive', 'cycle-3.json'), '{ not json', 'utf8');
+      // The next answer is slow in coming, as one is from a large memory, and something else is asked for before it has come.
+      const answers: string[] = [];
+      let slow = true;
+      const memory = (url: URL) => url.pathname.endsWith('/memory');
+      await page.route(memory, async (route) => {
+        const late = slow;
+        slow = false;
+        if (late) await new Promise((resolve) => setTimeout(resolve, 2000));
+        await route.continue();
+        answers.push(new URL(route.request().url()).searchParams.get('q') ?? '');
+      });
       await page.getByRole('group', { name: 'Look among' }).getByRole('button', { name: 'Everything', exact: true }).click();
       await box.fill('paperwork');
       await box.press('Enter');
+      // What was asked for last is what is searched for and shown. It was not dropped for being asked while the page was busy.
       await page.getByText('Cycle 3 is in the archive but could not be read, so nothing from it is found here.').waitFor();
       await hits.filter({ hasText: 'One supplier of pots or two' }).waitFor();
       expect(await hits.count()).toBe(1);
+      // And it stays shown when the slow answer to the earlier search arrives after it.
+      await expect.poll(() => answers, { timeout: PATIENCE }).toEqual(['paperwork', 'giraffes']);
+      await page.waitForTimeout(300);
+      expect(await hits.count()).toBe(1);
+      expect(await page.getByText('Nothing remembered shares those words.').count()).toBe(0);
+      await page.unroute(memory);
       // Whether leads are shown any of it is a setting, and the page says which way it is set.
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
       const shown = page.getByRole('checkbox', { name: /Show leads what the organisation remembers/ });
