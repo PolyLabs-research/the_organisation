@@ -20,6 +20,22 @@ export class WorkspaceError extends Error {}
  * supplies is untrusted and is confined to the root: no absolute paths, no
  * `..`, and no escaping through a symlink.
  */
+/**
+ * Write a file so that it can be told from what it was. Whoever keeps a copy of the workspace (the memory's index, a
+ * plan's sandbox) knows a file has changed by its size and by when it was last written, to the millisecond. A file
+ * written again within that millisecond, at the same size, would look to them like the file they already have. So
+ * the time on a file moves on with every write, by a millisecond where the clock has not.
+ */
+async function put(target: string, content: string | Uint8Array): Promise<void> {
+  const before = await fs.stat(target).catch(() => null);
+  await fs.writeFile(target, content);
+  if (!before) return;
+  const after = await fs.stat(target);
+  // Compared as a listing gives it: to the nearest millisecond.
+  const was = before.mtime.getTime();
+  if (after.size === before.size && after.mtime.getTime() <= was) await fs.utimes(target, after.atime, new Date(was + 1));
+}
+
 export class Workspace {
   constructor(readonly root: string) {}
 
@@ -78,7 +94,7 @@ export class Workspace {
     if (bytes > MAX_WRITE_BYTES) throw new WorkspaceError(`file is ${bytes} bytes; the limit is ${MAX_WRITE_BYTES}`);
     const target = await this.resolveSafe(rel);
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, content, 'utf8');
+    await put(target, content);
     return { path: rel, bytes };
   }
 
@@ -103,7 +119,7 @@ export class Workspace {
     if (bytes.length > MAX_OUTPUT_BYTES) throw new WorkspaceError(`file is ${bytes.length} bytes; the limit is ${MAX_OUTPUT_BYTES}`);
     const target = await this.resolveSafe(rel);
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, bytes);
+    await put(target, bytes);
     return { path: rel, bytes: bytes.length };
   }
 

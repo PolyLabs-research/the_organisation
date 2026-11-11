@@ -89,6 +89,36 @@ describe('the workspace', () => {
     expect((await workspace.read('a.md')).content).toBe('same\nsame\n');
   });
 
+  it('moves the time on a file on with every write, so that one written twice in a moment at the same size is seen to have changed', async () => {
+    // What keeps a copy of the workspace knows a file has changed by its size and when it was written. Written again within the
+    // same millisecond, at the same size, it would look like the file they already have.
+    const seen = new Set<string>();
+    const times: number[] = [];
+    const look = async () => {
+      const [file] = await workspace.list();
+      seen.add(`${file!.size}:${file!.modifiedAt}`);
+      times.push(new Date(file!.modifiedAt).getTime());
+    };
+    for (let round = 0; round < 150; round++) {
+      await workspace.write('ops/ledger.md', `round ${round % 10} ${'x'.repeat(200)}`);
+      await look();
+    }
+    for (let round = 0; round < 100; round++) {
+      await workspace.writeBytes('ops/ledger.md', Buffer.from(`round ${round % 10} ${'y'.repeat(200)}`));
+      await look();
+    }
+    await workspace.edit('ops/ledger.md', 'round 9', 'round 0');
+    await look();
+    expect(seen.size).toBe(251);
+    // Always later than it was, and never far from the time it really is.
+    expect(times.every((time, i) => i === 0 || time > times[i - 1]!)).toBe(true);
+    expect(Math.abs(times.at(-1)! - Date.now())).toBeLessThan(5000);
+    // A file that grows or shrinks is told apart by its size, and its time is left as the clock gave it.
+    await workspace.write('ops/other.md', 'one');
+    await workspace.write('ops/other.md', 'three');
+    expect((await workspace.read('ops/other.md')).content).toBe('three');
+  });
+
   it('edits the end of a file too long to read in one go, without losing any of it', async () => {
     const long = 'x'.repeat(130_000) + 'THE END';
     await workspace.write('long.md', long);
