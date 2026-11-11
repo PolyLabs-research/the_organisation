@@ -8,7 +8,9 @@
 //
 //   FAKE_DOCKER_LOG   a file to add each call to, one JSON list of arguments to a line
 //   FAKE_DOCKER_REAL  the real command, to pass calls on to. Left out, nothing real is ever run
-//   FAKE_DOCKER_SAYS  what is wrong: down, no-image, no-tools, no-volume, refused. Left out, nothing is
+//   FAKE_DOCKER_SAYS  what is wrong: down, no-image, no-tools, no-volume, refused. Or how a command that was run ended:
+//                     killed (the command alone), starved (the command alone, for memory), killed-whole (everything in the
+//                     container at once). Left out, nothing is wrong and a command ends by itself
 import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 
@@ -55,6 +57,11 @@ if (real) {
   process.stderr.write('@@org-sandbox synced\n@@org-sandbox started\n');
   const command = args[args.indexOf('sandbox', args.indexOf('-c')) + 3] ?? '';
   process.stdout.write('ran: ' + command + '\n');
+  // Everything in the container stopped at once: what runs around the command never gets to say that it saw the command end.
+  if (says === 'killed-whole') process.exit(137);
+  if (says === 'starved') process.stderr.write('@@org-sandbox oom\n');
+  process.stderr.write('@@org-sandbox ended\n');
+  if (says === 'killed' || says === 'starved') process.exit(137);
 } else if (first === 'run') {
   // Any other container (one that makes a volume ready, one that brings files out) ends with nothing to say.
 } else {

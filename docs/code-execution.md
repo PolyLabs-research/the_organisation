@@ -59,7 +59,7 @@ Every command runs in a container of its own, started for it and removed when it
 | No privileges | Every capability dropped, with no way to gain any, and Docker's default system-call filter. |
 | An ordinary user | Commands run as this server's own user, or as user 1000 where the server is run by root. Never as root. |
 | A system it cannot change | The container's own filesystem is read-only. It can write to its work folder, its home folder and `/tmp`, which is 512 MB held in memory. |
-| Memory | 2 GB, with no swap. A process that goes over is killed, and the agent is told that is why. |
+| Memory | 2 GB, with no swap. A process that goes over is killed, and the agent is told that is why. Some container services stop everything in the sandbox at once instead, and then the agent is told that memory is the likely reason. |
 | Processors and processes | 2 processors, and 512 processes at one time. |
 | Disk | 4 GB for everything a plan's commands leave behind. No one file may be larger, and the total is measured every few seconds while a command runs: one that goes past it is stopped. |
 | Time | 120 seconds unless the agent asks for longer, and never more than 15 minutes. Nothing a command starts goes on running after it: the container ends with the command. |

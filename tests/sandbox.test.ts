@@ -383,6 +383,21 @@ describe('when a container cannot be had', () => {
     expect(await ran()).toBe(2);
   });
 
+  it('says why a command was killed as far as it can be known: memory, most likely memory, or nothing more', async () => {
+    const sandbox = sandboxFor('org_abc');
+    // The process that used too much was killed, and what runs around the command saw it happen.
+    process.env.FAKE_DOCKER_SAYS = 'starved';
+    expect(await sandbox.run('p7', { command: 'ls' }, forever)).toMatchObject({ ended: 'killed', exitCode: null, output: 'ran: ls\n', note: 'It was killed for using more memory than the 2048 MB a sandbox may use.' });
+    // Everything in the container was stopped at once, so nothing was left to say why. Some container services do that when memory runs out.
+    process.env.FAKE_DOCKER_SAYS = 'killed-whole';
+    expect(await sandbox.run('p7', { command: 'ls' }, forever)).toMatchObject({ ended: 'killed', exitCode: null, output: 'ran: ls\n', note: 'It was killed, and everything in the sandbox with it: most likely for using more memory than the 2048 MB a sandbox may use.' });
+    // The command alone was killed, and memory had not run out: nothing more is known, and nothing more is said.
+    process.env.FAKE_DOCKER_SAYS = 'killed';
+    expect(await sandbox.run('p7', { command: 'ls' }, forever)).toMatchObject({ ended: 'killed', exitCode: null, note: 'It was killed before it finished.' });
+    delete process.env.FAKE_DOCKER_SAYS;
+    expect(await sandbox.run('p7', { command: 'ls' }, forever)).toMatchObject({ ended: 'exited', exitCode: 0, note: null });
+  });
+
   it('sends the workspace again to a sandbox that its files never reached', async () => {
     const sandbox = sandboxFor('org_abc');
     await workspace.write('engineering/app/main.js', 'console.log(1)\n');
@@ -571,9 +586,16 @@ describe.skipIf(withoutSandbox())('in a real container', { timeout: 120_000 }, (
     sandbox = real(org, { limits: { memoryMb: 128, workMb: 48, processes: 64 } });
     const hog = 'awk \'BEGIN { s = "x"; while (1) s = s s }\'';
     // A process the command started is killed, the command goes on, and the agent is told why.
-    expect(await run(`${hog}; echo "it ended with $?"`, { seconds: 60 })).toMatchObject({ ended: 'exited', exitCode: 0, output: expect.stringContaining('it ended with 137'), note: 'A process it started was killed for using more memory than the 128 MB a sandbox may use.' });
+    // Which of two things then happens is the container service's to decide, and the same service does not always decide alike: the process
+    // that took the memory is killed and the command goes on, or everything in the sandbox is stopped at once.
+    const memory = /^It was killed(, and everything in the sandbox with it: most likely)? for using more memory than the 128 MB a sandbox may use\.$/;
+    const starved = await run(`${hog}; echo "it ended with $?"`, { seconds: 60 });
+    if (starved.ended === 'exited') expect(starved).toMatchObject({ exitCode: 0, output: expect.stringContaining('it ended with 137'), note: 'A process it started was killed for using more memory than the 128 MB a sandbox may use.' });
+    else expect(starved).toMatchObject({ ended: 'killed', exitCode: null, note: expect.stringMatching(memory) });
     // The command itself is killed.
-    expect(await run(`exec ${hog}`, { seconds: 60 })).toMatchObject({ ended: 'killed', exitCode: null, note: 'It was killed for using more memory than the 128 MB a sandbox may use.' });
+    expect(await run(`exec ${hog}`, { seconds: 60 })).toMatchObject({ ended: 'killed', exitCode: null, note: expect.stringMatching(memory) });
+    // A command killed by something else, with the rest of its sandbox left standing, is not said to have run out of memory.
+    expect(await run('kill -9 $$', { seconds: 60 })).toMatchObject({ ended: 'killed', exitCode: null, note: 'It was killed before it finished.' });
     // No more processes than it may have.
     const forks = await run('i=0; while [ $i -lt 400 ]; do sleep 20 & i=$((i+1)); done 2>&1 | grep -c "fork"; echo done', { seconds: 60 });
     expect(Number(forks.output.split('\n')[0])).toBeGreaterThan(0);
@@ -1165,7 +1187,7 @@ describe.skipIf(withoutSandbox())('a gate the system checks by running the leadâ
     expect(reviews(provider)).toHaveLength(4);
     expect(reviews(provider)[0]).toMatch(/Result: NOT PASSED\. The check failed: it exited with 3 after \d+\.\d s\.[\s\S]*<output>\n3 tests failed\n\n<\/output>/);
     expect(reviews(provider)[1]).toContain('Result: NOT PASSED. The check did not finish in the 1 seconds it was given, and was stopped.\nThis is the check that was run.\n- sleep 30: failed\n');
-    expect(reviews(provider)[2]).toContain('Result: NOT PASSED. The check did not run to its end. It was killed for using more memory than the 128 MB a sandbox may use.');
+    expect(reviews(provider)[2]).toMatch(/Result: NOT PASSED\. The check did not run to its end\. It was killed(, and everything in the sandbox with it: most likely)? for using more memory than the 128 MB a sandbox may use\./);
     expect(reviews(provider)[3]).toMatch(/Result: NOT PASSED\. The check failed: it exited with 9 after/);
     // Three times back is as often as it goes. The fourth time the lead is told the plan stops, and the check it then names is not taken up.
     for (const review of reviews(provider).slice(0, 3)) expect(review).toContain('will go back for rework whatever you decide');

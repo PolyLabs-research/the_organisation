@@ -318,6 +318,7 @@ code=$?
 for counted in /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory/memory.oom_control; do
   if [ -r "$counted" ] && grep -q '^oom_kill [1-9]' "$counted" 2>/dev/null; then say oom; break; fi
 done
+say ended
 exit "$code"
 `;
 
@@ -612,7 +613,18 @@ export class OrgSandbox {
         return answer('failed', null, '', 0, `The sandbox could not be started${complaint(said) ? `: ${complaint(said)}` : ''}.`);
       }
       const starved = marks.has('oom');
-      if (ran.code === 137 || ran.code === null) return answer('killed', null, text, dropped, starved ? `It was killed for using more memory than the ${limits.memoryMb} MB a sandbox may use.` : 'It was killed before it finished.');
+      // What runs around the command says when it has seen the command end, and says first whether memory ran out. Where it said neither, it
+      // was stopped along with the command: some container services stop everything in a container when one process in it runs out of memory,
+      // where others kill that process alone. Nothing here stops a container without saying so above, so memory is by far the likeliest reason.
+      const whole = !marks.has('ended');
+      if (ran.code === 137 || ran.code === null) {
+        const why = starved
+          ? `It was killed for using more memory than the ${limits.memoryMb} MB a sandbox may use.`
+          : whole
+            ? `It was killed, and everything in the sandbox with it: most likely for using more memory than the ${limits.memoryMb} MB a sandbox may use.`
+            : 'It was killed before it finished.';
+        return answer('killed', null, text, dropped, why);
+      }
       return answer('exited', ran.code, text, dropped, [starved ? `A process it started was killed for using more memory than the ${limits.memoryMb} MB a sandbox may use.` : null, left].filter(Boolean).join(' ') || null);
     } catch (error) {
       // Stopped while it waited: for the image to be looked at, for its turn, for its sandbox to be made ready. That is the work stopping,
