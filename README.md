@@ -33,7 +33,7 @@ It runs on **Claude, GPT, Gemini, DeepSeek, Qwen, Kimi and anything on OpenRoute
 - **Use the models you have, or none.** Claude, GPT, Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, and anything on OpenRouter, with executives on one model and agents on another if you like. Any OpenAI-compatible endpoint works too, so a model on your own machine (llama.cpp, Ollama, LM Studio, vLLM) can do the work. And with no API key at all it can run on the Claude Code you already have, on your own subscription login.
 - **Try it in a minute, for nothing.** With nothing connected it runs in simulation: every seat gives a scripted answer, the whole loop turns, and every control works.
 - **Go at your own pace.** Run it at full speed, one call at a time, with a pause after each to read what happened, or one step at a time on a **Next step** button, and change pace while it runs.
-- **See everything.** A web interface shows the hierarchy and who is busy with what, the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
+- **See it from above, and as closely as you like.** An organisation opens on its headquarters: a map with a room for every seat and a desk for every agent, lit where work is being done, with what is on its way drawn between the rooms and what needs you pinned where it is. Look closer and the map says what each agent is doing; press anything and what was written there is beside it. Behind it are the tabs with the whole of everything: the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
 
 ## What you can use it for
 
@@ -140,7 +140,7 @@ This is early software, and the README says plainly what has been run for real a
 | Running code in a sandbox | Tested in real containers on Docker 29 on Linux: every wall and every limit, whole simulated organisations whose agents run commands, and whole plans held to a gate that runs a check. Not tried on Docker Desktop for macOS or Windows, on Podman or on rootless Docker, and no real model has yet decided what to run or which check to name. |
 | Tool servers (MCP) | Tested with the protocol's official client against a real server of the protocol on the same machine, and signing in against an authorisation server built from the protocol's own handlers. No third party's server has been connected, and no real service signed in to. |
 | Memory | Run in simulation and in tests: whole organisations over six cycles, with what the archive holds found again and put in front of the leads. No real model has yet been shown any of it, or chosen for itself when to search. |
-| Tests | More than 900, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
+| Tests | More than 1,100, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes a minute or two, and runs on every pull request. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
@@ -152,7 +152,7 @@ If you run it on something in the lower rows, start small, with one lead and a s
 - [Shared calendar and business operations](#shared-calendar-and-business-operations) and [memory](#memory)
 - [Business email and service accounts](#business-email-and-service-accounts), and [what each role may do](#what-each-role-may-do)
 - [GitHub repositories](#github-repositories), [tool servers](#tool-servers-mcp), [running code](#running-code) and [work approaches](#work-approaches)
-- [The interface](#the-interface)
+- [The interface](#the-interface), [the headquarters](#headquarters) and the [Overseer](#overseer)
 - [Signing and paying](#signing-and-paying)
 - [Models and keys](#models-and-keys), and [Claude Code in place of a key](#claude-code-in-place-of-a-key)
 - [Spend and limits](#spend-and-limits), and [lighter tasks on cheaper models](#lighter-tasks-on-cheaper-models)
@@ -382,7 +382,7 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
 
 - **Home** lists organisations with their status, cycle and spend.
 - **Establish** takes the idea, recommends a team or lets you seat one, and sets governance and limits.
-- **The dashboard** shows the hierarchy on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what) and, on the right:
+- **The dashboard** opens on **Headquarters**, the whole organisation seen from above (see [Headquarters](#headquarters) below). Its other tabs have the hierarchy beside them on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what):
   - **Board**: the feed of everything said at board level, newest first, with completed cycles below it.
   - **Overseer**: four views for keeping an eye on the whole organisation (see [Overseer](#overseer) below).
   - **Calendar**: persistent commitments in an agenda or month view, with owners, dependencies, dates and verification.
@@ -400,6 +400,27 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
 Start, pause, stop and settings are at the top of the dashboard. Pause lets calls in flight finish; stop cuts them off and puts the interrupted work back in the queue. Either one holds hosted sessions where they are.
 
 The dashboard follows the organisation over one connection that stays open, and a browser keeps at most six to one server. A dashboard in a tab that is out of view lets its connection go after two seconds and opens it again when you come back to it, so any number can be open in tabs. More than five in windows that are all in view at once is too many: the sixth takes the last connection, and nothing more can be asked of the server from any of them until one is closed.
+
+### Headquarters
+
+An organisation writes a great deal, in several places at once. The first tab is for following it without reading all of that: the organisation as a building seen from above, where you look closer at whatever you want to know more of.
+
+![The headquarters of a running organisation: the executive floor along the top, four departments beneath it with their agents at their desks, the lines of what is on its way to the board, and beside the map what needs a person and what is at work](docs/headquarters.png)
+
+- **The building.** The executive floor is along the top: the signing desk, the shareholders' room, the CEO's office and the boardroom, and the judge's chambers where a judge is seated. Each lead has a department beneath, with a desk of its own and one for each of its agents, in one row for up to four leads and two for more. Memory, Files and Operations stand in a column at the side. A room is in the colour of its seat.
+- **What is going on.** A desk's screen is lit while its agent works, and what a lead itself is doing is said beside its desk. A plan is the line of its phases along the bottom of its department: a ring that fills as its tasks come in, a tick once the phase has passed its gate, a cross where something in it failed, and a small lock on a phase [the system checks for itself](#work-approaches). At the board table, each seat is marked with what it has said on the matter in front of the board, or with an hourglass while it is waited for.
+- **What is on its way.** Lines along the corridors: dots that march for what is being worked on now (a proposal for the CEO, a position for the board, a report), dashes for what stands until someone takes it up (a plan before the board, a phase that waits on another lead's), and amber for what stands until you do.
+- **What needs you.** A bell pinned to a room counts what in it is waiting for you: a payment or a signature, a delivery to verify. A warning sign counts what has gone wrong in it: a failed task, a check of the system's that did not pass, a commitment past its date. Both are counted at the top left and listed beside the map, with **Show it** to go to each. A pause that needs you is listed there too, and so is a step that is waited for.
+- **Looking closer.** The map writes as much as it has room for. From afar a room shows its name, a line on what is happening in it, and who is in it and at work. Nearer, it shows each agent with what it is doing, and the phases by name. The wheel, or a pinch, brings it nearer and further, dragging moves it, and **Building**, **Rooms** and **Desks** go straight to each distance. Once part of the building is out of view, the whole of it is shown in small in a corner, to find the way by.
+- **The words themselves.** Press a room, a desk, a phase, a plan or the paper on the board table, and what is written there is shown beside the map: a task's brief and the agent's report, a decision's objections and positions, a request in full. One press more opens the tab that has the whole of it, and the headquarters is as you left it when you come back. A room pressed twice is gone to.
+- **Along the top** is what the other tabs have above them (the cycle and its stage, spend against the budget, and the pace, with **Next step** at the step pace), and beside it how many agents are at work, how many plans are under way, how many of this cycle's phases are done and how many decisions are open.
+- **Dispatches**, beneath the map, are the latest of what was said at the board and what agents finished. Press one and the map goes to where it happened. When a new one comes in, the room it came from is ringed for a moment.
+- **Steer from there.** The shareholders' room has the box for a steer. A steer half written there is the same one in the box beside the other tabs.
+- **Fill the window** gives the map the whole window, with Start, Pause and the pace in its own bar, and Escape gives the window back.
+
+From the keyboard, Tab goes from room to room and Enter chooses one. With the map itself in focus the arrow keys move it, `+` and `-` bring it nearer and further, and `0` shows the whole building. The panel beside the map lists every room, and everything in the room that is chosen, so nothing on the map can be reached with a pointer only. Nothing on it moves for anyone whose system asks for less motion. It has a light and a dark form, following the system's.
+
+It is drawn from the same state as every other tab, and holds nothing of its own. It does not count what agents have asked you for under **Email & accounts** (access requests): those are kept with the vault and are listed there.
 
 ### Overseer
 
@@ -723,7 +744,9 @@ src/server/
                  and its files, and the search agents are given (what a lead is
                  shown from it is in engine/recall.ts)
   app.ts         the HTTP API and live event stream
-src/client/      the web interface (React)
+src/client/      the web interface (React). The headquarters is headquarters.ts, which
+                 works out from an organisation's state where every room stands and
+                 what is going on in it, and Headquarters*.tsx, which draw it
 scripts/         establish an organisation from one prompt; set up hosted sessions;
                  check the Claude Code on this machine
 tests/
@@ -751,6 +774,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - Requests to the signatory are raised by leads at their phase gates. A lead cannot ask in the middle of a phase, and the CEO cannot ask at all.
 - One organisation is one process's worth of state: there is no multi-user access and no login. Whoever can open the interface can answer for the signatory.
 - A board decision is one round of positions and a ruling; there is no further debate.
+- The [headquarters](#headquarters) counts what the organisation's own state holds. Access requests, which are kept with the vault, are not counted or drawn there. A desk or a phase is chosen on the map with a pointer, and from the keyboard in the panel beside it. It has been looked at in Chrome, and not in other browsers.
 - Steer given mid-cycle changes plans, not tasks already running: an agent finishes the task it is on.
 - Seats are fixed once an organisation is established. Agent allocation, the arbiter and every limit can be changed afterwards.
 

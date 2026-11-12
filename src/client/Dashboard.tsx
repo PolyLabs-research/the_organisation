@@ -8,6 +8,7 @@ const Access = lazy(() => import('./Access').then(module => ({ default: module.A
 const Overseer = lazy(() => import('./Overseer').then((module) => ({ default: module.Overseer })));
 import { Approaches } from './Approaches';
 import { Privileges } from './Privileges';
+import { Headquarters, HEADQUARTERS_START, type HeadquartersState } from './Headquarters';
 import { Hierarchy } from './Hierarchy';
 import { Memory, type MemoryAsk } from './Memory';
 import { EXECUTION, STAGES } from './labels';
@@ -18,7 +19,7 @@ import { Signatory } from './Signatory';
 import { ActivityLog, Board, Decisions, Files, Plans } from './Tabs';
 import { Empty, ErrorBoundary, ErrorNote, PAUSE_REASONS, money } from './ui';
 
-type Tab = 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'memory' | 'activity' | 'overseer';
+type Tab = 'hq' | 'access' | 'privileges' | 'approaches' | 'calendar' | 'business' | 'board' | 'plans' | 'decisions' | 'signatory' | 'files' | 'memory' | 'activity' | 'overseer';
 
 function Banner({ view, onSettings }: { view: OrgView; onSettings: () => void }) {
   const { org } = view;
@@ -55,7 +56,11 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const control = useAction();
   // What brought the browser back here from a sign-in elsewhere, if that is how it came: a mailbox connected, or a tool server signed in to.
   const [arrived] = useState(() => new URLSearchParams(window.location.search).get('access'));
-  const [tab, setTab] = useState<Tab>(arrived === 'connected' || arrived === 'tools' ? 'access' : 'board');
+  const [tab, setTab] = useState<Tab>(arrived === 'connected' || arrived === 'tools' ? 'access' : 'hq');
+  // What was chosen in the headquarters and where its map was, so that both are as they were after a look at another tab.
+  const [headquarters, setHeadquarters] = useState<HeadquartersState>(HEADQUARTERS_START);
+  // A steer that is half written. It can be written beside the tabs or in the headquarters, and is the same steer in both.
+  const [steer, setSteer] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planTarget, setPlanTarget] = useState<string | null>(null);
   const [file, setFile] = useState<string | null>(null);
@@ -93,7 +98,9 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   // What the organisation has asked to have paid or signed, and that only a person can now do.
   const waiting = waitingOnPerson(org).length;
   const share = Math.min(100, (org.usage.costUsd / org.settings.budgetUsd) * 100);
+  // An organisation at a stage this page has never heard of cannot be drawn, whichever tab is open, and the page says so as a whole.
   const stage = STAGES.find((s) => s.id === org.cycle.stage)!;
+  const stageDetail = stage.detail;
   const openDecisions = org.decisions.filter((d) => d.status !== 'resolved').length;
   const livePlans = org.plans.filter((p) => !['done', 'cancelled', 'failed'].includes(p.status)).length;
   const sessions = active.filter((a) => a.kind === 'execute').length;
@@ -103,6 +110,7 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
   const statusLabel = org.status === 'running' ? org.business.waiting ? 'Waiting for scheduled work' : awaitingStep ? 'Waiting for your next step' : 'Running' : draining ? `Pausing: ${winding}` : org.status === 'idle' ? 'Not started' : PAUSE_REASONS[org.pauseReason ?? 'user'];
 
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
+    { id: 'hq', label: 'Headquarters' },
     { id: 'board', label: 'Board' },
     { id: 'overseer', label: 'Overseer' },
     { id: 'calendar', label: 'Calendar' },
@@ -157,43 +165,47 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
         </div>
       </header>
 
-      <div className="org-strip">
-        <div className="strip-item">
-          <span className="field-label">Cycle {org.cycle.number}</span>
-          <ol className="stages" title={stage.detail}>
-            {STAGES.map((s) => (
-              <li key={s.id} className={s.id === org.cycle.stage ? 'is-current' : ''}>
-                {s.label}
-              </li>
-            ))}
-          </ol>
-        </div>
-        <PaceControl view={view} onView={setView} />
-        <div className="strip-item strip-spend">
-          <span className="field-label">{meta.provider.simulated ? 'Simulated spend' : 'Estimated spend'}</span>
-          <span className="meter-line">
-            <span className="meter">
-              <span style={{ width: `${share}%` }} className={share >= 100 ? 'is-full' : ''} />
+      {/* The headquarters has these along its own top edge, with the rest of what it counts. */}
+      {tab === 'hq' ? null : (
+        <div className="org-strip">
+          <div className="strip-item">
+            <span className="field-label">Cycle {org.cycle.number}</span>
+            <ol className="stages" title={stageDetail}>
+              {STAGES.map((s) => (
+                <li key={s.id} className={s.id === org.cycle.stage ? 'is-current' : ''}>
+                  {s.label}
+                </li>
+              ))}
+            </ol>
+          </div>
+          <PaceControl view={view} onView={setView} />
+          <div className="strip-item strip-spend">
+            <span className="field-label">{meta.provider.simulated ? 'Simulated spend' : 'Estimated spend'}</span>
+            <span className="meter-line">
+              <span className="meter">
+                <span style={{ width: `${share}%` }} className={share >= 100 ? 'is-full' : ''} />
+              </span>
+              <span className="num">
+                {money(org.usage.costUsd)} of {money(org.settings.budgetUsd)}
+              </span>
             </span>
-            <span className="num">
-              {money(org.usage.costUsd)} of {money(org.settings.budgetUsd)}
-            </span>
-          </span>
+          </div>
+          <div className="strip-item">
+            <span className="field-label">Decisions signed off by</span>
+            <span>{org.settings.arbiter === 'judge' ? 'An independent judge' : 'The CEO'}</span>
+          </div>
+          <div className="strip-item">
+            <span className="field-label">Agents work</span>
+            <span>{EXECUTION[org.settings.execution]}</span>
+          </div>
+          {!connected ? <span className="tag tag-warn">Reconnecting…</span> : null}
         </div>
-        <div className="strip-item">
-          <span className="field-label">Decisions signed off by</span>
-          <span>{org.settings.arbiter === 'judge' ? 'An independent judge' : 'The CEO'}</span>
-        </div>
-        <div className="strip-item">
-          <span className="field-label">Agents work</span>
-          <span>{EXECUTION[org.settings.execution]}</span>
-        </div>
-        {!connected ? <span className="tag tag-warn">Reconnecting…</span> : null}
-      </div>
+      )}
 
       <ErrorNote onDismiss={control.clearError}>{control.error}</ErrorNote>
       <Banner view={view} onSettings={() => setSettingsOpen(true)} />
-      {waiting && tab !== 'signatory' ? (
+      {/* The headquarters says the same itself, with what else needs a person. */}
+      {waiting && tab !== 'signatory' && tab !== 'hq' ? (
         <div className="note note-warn">
           <span>
             <strong>
@@ -207,10 +219,13 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
         </div>
       ) : null}
 
-      <div className="org-body">
-        <aside className="org-side">
-          <Hierarchy view={view} meta={meta} onView={setView} onOpenPlan={openPlan} onOpenSignatory={() => setTab('signatory')} />
-        </aside>
+      <div className={`org-body${tab === 'hq' ? ' org-body-wide' : ''}`}>
+        {/* The headquarters draws the hierarchy itself, and has the whole width to do it in. */}
+        {tab === 'hq' ? null : (
+          <aside className="org-side">
+            <Hierarchy view={view} meta={meta} onView={setView} onOpenPlan={openPlan} onOpenSignatory={() => setTab('signatory')} steer={steer} onSteer={setSteer} />
+          </aside>
+        )}
         <section className="org-main">
           <div className="tabs" role="tablist">
             {tabs.map((t) => (
@@ -220,9 +235,10 @@ export function Dashboard({ id, meta }: { id: string; meta: Meta }) {
               </button>
             ))}
           </div>
-          <div className="tab-panel" role="tabpanel">
+          <div className={`tab-panel${tab === 'hq' ? ' tab-panel-flush' : ''}`} role="tabpanel">
             {/* A tab that cannot be drawn says so in its own place, and the rest of the page carries on, Pause and Stop included. Choosing a tab starts it afresh. */}
             <ErrorBoundary key={tab} what="This tab">
+              {tab === 'hq' ? <Headquarters view={view} meta={meta} connected={connected} state={headquarters} onState={setHeadquarters} steer={steer} onSteer={setSteer} onView={setView} onOpenTab={setTab} onOpenPlan={openPlan} onOpenFile={openFile} onSettings={() => setSettingsOpen(true)} /> : null}
               {tab === 'access' ? <Suspense fallback={<p className="muted">Loading email and accounts…</p>}><Access org={org} arrived={arrived === 'tools' ? 'tools' : null} /></Suspense> : null}
               {tab === 'privileges' ? <Privileges org={org} onView={setView} onSettings={() => setSettingsOpen(true)} /> : null}
               {tab === 'approaches' ? <Approaches org={org} onView={setView} /> : null}

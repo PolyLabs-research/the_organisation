@@ -81,6 +81,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     runner.org.board.push({ id: 'm-bad', at: new Date().toISOString(), cycle: 1, type: 'system', title: 'From nobody', body: 'x' } as unknown as BoardMessage);
     const page = await open('/#/org/' + runner.org.id);
     try {
+      await page.getByRole('tab', { name: 'Board', exact: true }).click();
       await page.getByText('This tab could not be shown.').waitFor();
       await page.getByRole('button', { name: 'Reload the page', exact: true }).waitFor();
       // The controls above it are still there and still work.
@@ -308,6 +309,8 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     const runner = await organisation('Steered once');
     const page = await open('/#/org/' + runner.org.id);
     try {
+      // Beside the tabs, where the hierarchy stands.
+      await page.getByRole('tab', { name: 'Board', exact: true }).click();
       const box = page.getByLabel('Steer for the CEO', { exact: true });
       await box.fill('Keep the first box under 20 GBP.');
       // Ctrl+Enter held down: the key repeats before the page has heard back, or even drawn itself again.
@@ -354,14 +357,14 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       await page.getByRole('heading', { name: 'Just connected', exact: true }).waitFor();
       expect(await selected(page)).toBe('Email & accounts');
       await expect.poll(() => page.url()).toBe(base + '/#/org/' + connected.org.id);
-      // The next organisation opened from here starts on its board, and so does this one after a reload.
+      // The next organisation opened from here starts on its headquarters, and so does this one after a reload.
       await page.getByRole('link', { name: 'Organisations' }).click();
       await page.getByRole('link', { name: /Another one/ }).click();
       await page.getByRole('heading', { name: 'Another one', exact: true }).waitFor();
-      expect(await selected(page)).toBe('Board');
+      expect(await selected(page)).toBe('Headquarters');
       await page.reload();
       await page.getByRole('heading', { name: 'Another one', exact: true }).waitFor();
-      expect(await selected(page)).toBe('Board');
+      expect(await selected(page)).toBe('Headquarters');
     } finally {
       await page.close();
     }

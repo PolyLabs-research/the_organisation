@@ -1,4 +1,8 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { Meta } from '../src/client/api';
+import { HEADQUARTERS_START, Headquarters, type HeadquartersState } from '../src/client/Headquarters';
 import { ZOOM, fit, fitText, inView, keepInView, plot, roomOf, route, survey, textWidth, wrapText, zoomAt, type Boardroom, type Department, type Office, type Rect, type Scene } from '../src/client/headquarters';
 import { createOrganisation } from '../src/server/engine/state';
 import type { BusinessJob } from '../src/shared/business';
@@ -909,5 +913,296 @@ describe('the latest of what was said and done', () => {
     expect(both).toHaveLength(80);
     expect(both.filter((d) => d.id.startsWith('task:'))).toHaveLength(30);
     expect(both.at(-1)!.title).toBe('Notice 70');
+  });
+});
+
+// ---- as it is drawn ----
+
+const META = { provider: { id: 'mock', label: 'Simulation', simulated: true, defaultModel: 'm', models: [], managed: false }, providerReason: '', profiles: [], defaults: organisation().settings, limits: { maxAgentsPerLead: 8, maxLeads: 8 }, keys: null } satisfies Meta;
+
+function draw(v: OrgView, state: Partial<HeadquartersState> = {}, given: { meta?: Meta; connected?: boolean } = {}): string {
+  return renderToStaticMarkup(createElement(Headquarters, { view: v, meta: given.meta ?? META, connected: given.connected, state: { ...HEADQUARTERS_START, ...state }, onState: () => {}, steer: '', onSteer: () => {}, onView: () => {}, onOpenTab: () => {}, onOpenPlan: () => {}, onOpenFile: () => {}, onSettings: () => {} }));
+}
+
+/** The words drawn on the map, as a reader of it would see them. */
+const mapWords = (html: string): string[] => [...html.slice(html.indexOf('class="hq-svg"'), html.indexOf('</svg><ul class="hq-overlay')).matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]!.replace(/&#x27;/g, "'").replace(/&amp;/g, '&'));
+/** The panel beside the map, as text. */
+const panel = (html: string): string => html.slice(html.indexOf('<aside class="hq-panel"'), html.indexOf('</aside>')).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
+
+/** An organisation with a plan under way: one agent at work, one task failed, a request waiting and a decision open. */
+function busy(): OrgView {
+  const org = running();
+  const p = plan(org, 'cto', 'p1');
+  p.phases[0]!.status = 'done';
+  p.phases[0]!.tasks = [
+    task('t0', { status: 'done', agent: 1, title: 'Sketch the pages', brief: 'Draw each page.', result: 'Sketched.', files: ['pages.md', 'spec.md'], finishedAt: '2026-11-08T11:00:00.000Z' }),
+    task('t1', { status: 'done', agent: 1, title: 'Write the spec', brief: 'Say what the shop must do.', result: 'The spec is in **spec.md**.', files: ['spec.md'], finishedAt: AT }),
+  ];
+  p.phases[1]!.status = 'working';
+  p.phases[1]!.gate = 'run';
+  p.phases[1]!.check = { command: 'npm test', dir: '', seconds: 120 };
+  p.phases[1]!.tasks = [task('t2', { status: 'running', agent: 2, title: 'Build the basket and the checkout for the shop', brief: 'Make it take an order.' }), task('t3', { status: 'failed', agent: 1, title: 'Wire up payments', error: 'No account to test with.' })];
+  plan(org, 'cmo', 'p2').status = 'contested';
+  org.decisions.push({ id: 'd1', cycle: 1, at: AT, kind: 'contested', title: 'Whether to launch before the shop takes payments', context: 'The CMO wants to announce now.', raisedById: 'cto', planId: 'p2', issues: [{ byId: 'cto', concern: 'Nothing can be bought yet.', proposal: 'Wait for the Build phase.' }], participantIds: ['cto', 'cmo'], positions: { cto: { stance: 'back_objection', argument: 'An announcement with nothing to buy wastes it.' } }, status: 'open', outcome: null });
+  org.signatory.requests.push({ id: 'r1', cycle: 1, kind: 'payment', fromId: 'cto', planId: 'p1', phase: 'Build', title: 'Payment account', detail: 'Open a merchant account so that payments can be tested.', amount: '25 GBP a month', party: 'Paywell', files: ['quotes/paywell.md'], status: 'pending', raisedAt: AT, ruling: null, outcome: null });
+  org.steers.push({ id: 's1', at: AT, text: 'Take the first order this month.', status: 'acknowledged', response: 'The shop comes first.', acknowledgedAt: AT });
+  org.board.push({ id: 'm1', at: AT, cycle: 1, type: 'plan', fromId: 'cto', title: 'Plan: open the shop', body: '', planId: 'p1' });
+  return view(org, [work('task', 'cto', { agent: 2, label: 'Build the basket and the checkout for the shop', planId: 'p1' }), work('position', 'cmo', { label: 'Stating a position to the board' })]);
+}
+
+describe('the headquarters as it is drawn', () => {
+  it('draws a room for every seat that can be chosen, and says of each what is going on in it', () => {
+    const html = draw(busy());
+    const rooms = [...html.matchAll(/<g class="hq-room [^"]*"[^>]*data-hq="([^"]+)"[^>]*role="button"[^>]*tabindex="0"[^>]*aria-label="([^"]+)"[^>]*aria-pressed="false"/g)].map((m) => [m[1], m[2]!.replace(/&#x27;/g, "'")]);
+    expect(rooms).toEqual([
+      ['shareholders', 'Shareholders. The CEO has answered your steer'],
+      ['ceo', 'CEO’s office. The leads are at work on its direction'],
+      ['board', 'Boardroom. Whether to launch before the shop takes payments. At work'],
+      ['signatory', 'Signing desk. 1 request waiting for you. Waiting. 1 waiting for you'],
+      ['dept:cto', 'Engineering. Build · 1 of 2 agents working. At work. 1 gone wrong'],
+      ['dept:cmo', 'Marketing. Stating a position to the board. At work'],
+      ['archive', 'Memory. Not used yet this cycle'],
+      ['files', 'Files. 2 files written this cycle'],
+      ['operations', 'Operations. No open commitments'],
+    ]);
+    // What needs a person and what has gone wrong are pinned to the rooms they are in, with how many.
+    expect(html.match(/class="hq-pin hq-pin-you"/g)).toHaveLength(1);
+    expect(html.match(/class="hq-pin hq-pin-trouble"/g)).toHaveLength(1);
+    // What is on its way is named for whoever cannot see the line.
+    expect([...html.matchAll(/data-hq-flow="([^"]+)" role="img" aria-label="([^"]+)"/g)].map((m) => [m[1]!.replace(/&gt;/g, '>'), m[2]])).toEqual([
+      ['board:dept:cmo>board', 'CMO: Stating a position to the board'],
+      ['plan:dept:cmo>board', 'The CMO’s plan is before the board'],
+      ['request:dept:cto>signatory', 'A payment the CTO asked for'],
+    ]);
+    // Only what is being worked on now has something travelling along it.
+    expect(html.match(/class="hq-flow-dot"/g)).toHaveLength(1);
+    expect(html).toContain('class="hq-flow is-you hq-flow-request"');
+  });
+
+  it('writes on the map what there is room for: more of it the nearer the map is', () => {
+    // Four departments, so that each is narrow, and four agents in the first, so that their desks stand two abreast.
+    const org = createOrganisation({ name: 'Fernery', idea: 'Houseplants by post.', executives: [{ profileId: 'engineering', agentCount: 4 }, { profileId: 'product' }, { profileId: 'marketing' }, { profileId: 'finance' }] }, 'org_1');
+    org.status = 'running';
+    org.cycle.stage = 'work';
+    const p = plan(org, 'cto', 'p1');
+    p.phases[0]!.status = 'working';
+    p.phases[0]!.tasks = [task('t1', { status: 'running', agent: 2 })];
+    const doing = 'Build the basket and the checkout for the shop';
+    const v = view(org, [work('task', 'cto', { agent: 2, label: doing, planId: 'p1' }), work('position', 'cmo', { label: 'Stating a position to the board' })]);
+    const far = mapWords(draw(v, { camera: { k: 0.45, x: 0, y: 0 } }));
+    const mid = mapWords(draw(v));
+    const near = mapWords(draw(v, { camera: { k: 2.4, x: -200, y: -500 } }));
+    // From afar: which room it is and, cut to what fits, what is going on in it. Who is in it is drawn, and not written.
+    expect(far).toContain('CTO');
+    expect(far.some((w) => /^Spec · 1 of 4.*…$/.test(w))).toBe(true);
+    expect(far.some((w) => w.startsWith('Agent') || ['2', '3', '4'].includes(w))).toBe(false);
+    expect(draw(v, { camera: { k: 0.45, x: 0, y: 0 } })).not.toContain('class="hq-bubble');
+    expect(draw(v, { camera: { k: 0.45, x: 0, y: 0 } })).not.toContain('class="hq-desk"');
+    // Nearer: the room's name in full, each desk by its number, and what the lead itself is doing beside its desk.
+    expect(mid).toEqual(expect.arrayContaining(['Engineering', 'Spec · 1 of 4 agents working', '1', '2', '3', '4', 'Open the shop']));
+    expect(draw(v)).toContain('class="hq-bubble is-live"');
+    expect(draw(v).match(/class="hq-desk"/g)!.length).toBeGreaterThanOrEqual(11);
+    expect(mid.some((w) => w.startsWith('Build the basket'))).toBe(false);
+    // Nearest: what each agent is doing, written beside it, and every phase by its name.
+    expect(near).toEqual(expect.arrayContaining(['Agent 1', 'Agent 2', 'Agent 3', 'Agent 4', 'Idle', 'Spec', 'Build', 'Test', 'Release', 'Stating a position to the board']));
+    const at = near.indexOf('Agent 2');
+    expect(near.slice(at + 1, at + 4).join(' ')).toContain(doing);
+  });
+
+  it('lets a desk, a phase and a plan be chosen once the map is near enough to tell them apart', () => {
+    const v = busy();
+    const targets = (html: string) => [...html.matchAll(/data-hq="([^"]+)"/g)].map((m) => m[1]).filter((id) => id!.includes('/'));
+    expect(targets(draw(v, { camera: { k: 0.45, x: 0, y: 0 } }))).toEqual([]);
+    expect(targets(draw(v))).toEqual(['board/decision/d1', 'dept:cto/agent/1', 'dept:cto/agent/2', 'dept:cto/plan/p1', 'dept:cto/phase/p1/0', 'dept:cto/phase/p1/1', 'dept:cto/phase/p1/2', 'dept:cto/phase/p1/3', 'dept:cmo/agent/1', 'dept:cmo/plan/p2', 'dept:cmo/phase/p2/0', 'dept:cmo/phase/p2/1', 'dept:cmo/phase/p2/2', 'dept:cmo/phase/p2/3']);
+    // A phase the system checks for itself carries the mark of its gate, and one with a failed task is marked as failed.
+    const html = draw(v);
+    expect(html).toContain('class="hq-station is-working is-failed is-pressable" data-hq="dept:cto/phase/p1/1"');
+    expect(html.match(/class="hq-gate is-ahead"/g)).toHaveLength(1);
+    expect(html).toContain('class="hq-station is-done is-pressable" data-hq="dept:cto/phase/p1/0"');
+  });
+
+  it('marks the room that is chosen, and what in it is chosen', () => {
+    const html = draw(busy(), { selected: 'dept:cto/agent/2' });
+    expect(html).toMatch(/<g class="hq-room hq-room-department is-working is-selected"[^>]*data-hq="dept:cto"[^>]*aria-pressed="true"/);
+    expect(html).toContain('class="hq-cell is-busy is-selected is-pressable" data-hq="dept:cto/agent/2"');
+    expect(html.match(/aria-pressed="true"[^>]*class="hq-room|class="hq-room[^"]* is-selected/g)).toHaveLength(1);
+  });
+
+  it('shows the whole building in small only once part of it is out of view', () => {
+    expect(draw(busy())).not.toContain('class="hq-mini"');
+    expect(draw(busy(), { camera: { k: 2, x: -300, y: -200 } })).toContain('class="hq-mini"');
+  });
+
+  it('counts along its top what there is of each thing, and puts first what needs a person', () => {
+    const html = draw(busy());
+    const bar = html.slice(html.indexOf('class="hq-bar"'), html.indexOf('class="hq-stage"')).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(bar).toContain('1 needs you');
+    expect(bar).toContain('1 gone wrong');
+    expect(bar).toContain('Cycle 1 · Work');
+    expect(bar).toContain('Simulated spend $0.00 of $');
+    expect(bar).toContain('Agents at work 1 of 3');
+    expect(bar).toContain('Plans 2');
+    expect(bar).toContain('Phases done 1 of 8');
+    expect(bar).toContain('Open decisions 1');
+    expect(html).toContain('class="hq-alarm is-you is-on"');
+    expect(html).toContain('class="hq-alarm is-trouble is-on"');
+    expect(html).toContain('aria-label="13% of this cycle’s phases are done"');
+    expect(html).toContain('class="hq-meter" role="img" aria-label="0% of the budget is spent"');
+    expect(bar).not.toContain('Reconnecting');
+    // Spend is an estimate where a real model is called, and a budget that is spent is marked as trouble.
+    const spent = busy();
+    spent.org.usage.costUsd = spent.org.settings.budgetUsd;
+    const real = draw(spent, {}, { meta: { ...META, provider: { ...META.provider, simulated: false } } });
+    expect(real).toContain('Estimated spend');
+    expect(real).not.toContain('Simulated spend');
+    expect(real).toContain('class="hq-meter is-full" role="img" aria-label="100% of the budget is spent"');
+    // While the server is being found again, it says so.
+    expect(draw(busy(), {}, { connected: false })).toContain('Reconnecting…');
+    // With nothing to say, neither is raised, and the words agree with the number.
+    const nothing = running();
+    nothing.board = [];
+    const quiet = draw(view(nothing));
+    expect(quiet).toContain('class="hq-alarm is-you"');
+    expect(quiet.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).toContain('0 need you');
+    expect(quiet).toContain('Nothing has happened yet.');
+  });
+
+  it('says beside the map what needs a person, what has gone wrong, what is at work and what is held up', () => {
+    const text = panel(draw(busy()));
+    expect(text).toMatch(/The situation .*Needs you 1 Pay: Payment account \(25 GBP a month, to Paywell\) Asked by the CTO\. .* Show it/);
+    expect(text).toMatch(/Gone wrong 1 CTO Build: 1 task failed Wire up payments: No account to test with\. Show it/);
+    expect(text).toMatch(/At work now 2 CTO Agent 2 Build the basket and the checkout for the shop .* CMO Stating a position to the board/);
+    expect(text).toMatch(/Held up 1 Before the board: Whether to launch before the shop takes payments Waiting for CMO\./);
+    // Every room is listed, for whoever would rather read than look.
+    expect(text).toMatch(/Rooms Shareholders The CEO has answered your steer CEO’s office .* Operations No open commitments All dispatches/);
+    // An organisation with nothing in flight says why not.
+    const idle = organisation();
+    expect(panel(draw(view(idle)))).toContain('The organisation has not been started.');
+    idle.status = 'paused';
+    idle.pauseReason = 'user';
+    expect(panel(draw(view(idle)))).toContain('Paused. Nothing starts until it is resumed.');
+  });
+
+  it('shows what is written in whatever is chosen', () => {
+    const v = busy();
+    const of = (selected: string) => panel(draw(v, { selected }));
+    expect(of('dept:cto')).toMatch(/CTO Engineering .* At work Build · 1 of 2 agents working Plan Under way Open the shop Spec Done Build 0 of 2 tasks done Test Not started Release Not started Open the plan Agents Agent 1 Idle Agent 2 Build the basket and the checkout for the shop/);
+    expect(of('dept:cto/agent/2')).toMatch(/CTO · Engineering Agent 2 At work Build the basket and the checkout for the shop Working on .* Build Open the shop Brief Make it take an order\. Open the plan/);
+    // An agent with nothing to do shows the last thing it did, with what it reported and wrote.
+    expect(of('dept:cto/agent/1')).toMatch(/Agent 1 Nothing under way Idle since its last task Last finished Write the spec Spec Open the shop Brief Say what the shop must do\. Report to the lead The spec is in spec\.md \. spec\.md Open the plan Tasks finished in the plans on record 2/);
+    expect(of('dept:cto/phase/p1/1')).toMatch(/CTO · phase Build Phase 2 of 4 Open the shop At work 0 of 2 tasks done .* Gate The system checks this gate for itself, by running the check the lead named in the sandbox\. npm test Tasks 2 Build the basket and the checkout for the shop Agent 2 Wire up payments Agent 1 Open the plan/);
+    expect(of('dept:cto/plan/p1')).toMatch(/CTO · plan Open the shop Under way It is done when It takes an order Phases Spec Done Build 0 of 2 tasks done .* Approach a Open the plan/);
+    expect(of('board')).toMatch(/Boardroom .* Decisions are signed off by the CEO\. At work Whether to launch before the shop takes payments Before the board 1 .* Waiting for CMO At the table now CMO Stating a position to the board Said lately .* Plan Plan: open the shop/);
+    expect(of('board/decision/d1')).toMatch(/Board · decision Whether to launch before the shop takes payments Waiting Waiting for CMO The CMO wants to announce now\. Objections CTO Nothing can be bought yet\. Proposes: Wait for the Build phase\. Positions CTO Backs the objection An announcement with nothing to buy wastes it\. CMO Yet to answer The plan CMO Open the shop Open decisions Open the plan/);
+    expect(of('signatory')).toMatch(/Signing desk .* Held by you\. Waiting 1 request waiting for you Open requests 1 CTO Pay: Payment account \(25 GBP a month, to Paywell\) · waiting for you Open Signatory, where you answer/);
+    expect(of('signatory/request/r1')).toMatch(/Signing desk · request Pay: Payment account \(25 GBP a month, to Paywell\) Waiting asked by the Chief Technology Officer, .* Amount 25 GBP a month To Paywell Open a merchant account so that payments can be tested\. quotes\/paywell\.md Answer it under Signatory Open the plan/);
+    expect(of('shareholders')).toMatch(/Shareholders Nothing under way The CEO has answered your steer .* Your steer is binding\. The CEO enforces it\. Send steer Take the first order this month\. CEO: The shop comes first\./);
+    expect(of('ceo')).toMatch(/CEO’s office .* Cycle 1 Stage Work .* Proposals from the leads CTO Not in yet CMO Not in yet Open the board/);
+    // Each file once, the latest written first.
+    expect(of('files')).toMatch(/Files The workspace: what the agents have written\. .* Written this cycle 2 CTO spec\.md CTO pages\.md Open Files/);
+    expect(of('archive')).toMatch(/Memory .* Not used yet this cycle Put to use lately Not yet\. .* Open Memory, and search it/);
+    expect(of('operations')).toMatch(/Operations .* Open commitments None\. Open the calendar Open Business, where you verify/);
+  });
+
+  it('shows the rest of what there is to read in a room, where there is some', () => {
+    const of = (v: OrgView, selected: string) => panel(draw(v, { selected }));
+    // A judge signs off in place of the CEO, and has chambers.
+    const judged = team(2, true);
+    judged.status = 'running';
+    expect(of(view(judged), 'board')).toContain('Decisions are signed off by an independent judge.');
+    expect(of(view(judged), 'judge')).toMatch(/Chambers Signs off the board’s decisions when leads have competing priorities, in place of the CEO\. Nothing under way Rules when leads disagree Open decisions/);
+    // An AI in the signatory's seat: what it ruled is said with the request.
+    const ai = busy();
+    ai.org.settings.signatory = 'ai';
+    Object.assign(ai.org.signatory.requests[0]!, { status: 'authorised', ruling: { verdict: 'authorised', reason: 'Within budget.', at: AT } });
+    expect(of(ai, 'signatory')).toContain('Held by an AI; you carry out what it authorises.');
+    expect(of(ai, 'signatory/request/r1')).toMatch(/Authorised, not yet done asked by .* The AI signatory authorised: Within budget\. /);
+    expect(of(busy(), 'signatory/request/r1')).not.toContain('The AI signatory');
+    // The memory: what it was last used for, newest first, and what each use found.
+    const remembered = busy();
+    remembered.org.memoryUses = [
+      { at: AT, cycle: 1, seatId: 'cto', by: 'shown', about: 'Drafting a plan', items: [{ id: 'report:r1', kind: 'report', cycle: 1, title: 'Supplier chosen', from: 'cto' }] },
+      { at: AT, cycle: 1, seatId: 'cmo', by: 'agent', about: 'giraffes', items: [] },
+    ];
+    expect(of(remembered, 'archive')).toMatch(/Used 2 times this cycle Put to use lately 2 CMO Searched: giraffes It found nothing\. CTO Shown: Drafting a plan report to the board: Supplier chosen Open Memory/);
+    // Operations: each open commitment, with how it stands.
+    const kept = busy();
+    const job = (id: string, fields: Partial<BusinessJob>): BusinessJob => ({ id, revision: 1, createdAt: AT, updatedAt: AT, updatedBy: 'cto', title: `Job ${id}`, description: '', ownerId: 'cto', nextAction: '', status: 'open', blockedReason: '', notBefore: null, dueAt: null, recurrenceDays: null, dependsOn: [], customerId: null, metricId: null, reviewerId: null, plan: null, evidence: '', verification: null, previousJobId: null, nextJobId: null, notifiedAt: null, ...fields });
+    kept.org.business.jobs.push(job('j1', { status: 'review' }), job('j2', { status: 'blocked' }), job('j3', { status: 'in_progress' }), job('j4', {}), job('j5', { status: 'done' }));
+    expect(of(kept, 'operations')).toMatch(/Open commitments 4 CTO Job j1 To verify CTO Job j2 Blocked CTO Job j3 Under way CTO Job j4 Open Open the calendar/);
+    // The CEO's office: what it has decided the shareholders want, and what each lead proposed.
+    const directed = busy();
+    directed.org.cycle.intent = 'Take the first order.';
+    directed.org.cycle.priorities = ['The shop first', 'Then the launch'];
+    directed.org.cycle.consults.cto = { proposal: 'Build the shop.', rationale: 'r', needs: 'n' };
+    expect(of(directed, 'ceo')).toMatch(/The shareholders want Take the first order\. The shop first Then the launch Proposals from the leads 1 CTO Build the shop\. CMO Not in yet/);
+    // A department with nothing to do says how its plans run, and one with more than one plan counts the rest.
+    expect(of(view(running()), 'dept:cmo')).toContain('No plan in progress. Every plan of this lead runs through Research → Position → Create → Launch.');
+    const queued = busy();
+    plan(queued.org, 'cto', 'p9').status = 'planning';
+    expect(of(queued, 'dept:cto')).toContain('1 more plan queued.');
+    expect(of(busy(), 'dept:cto')).not.toContain('queued');
+    // A phase: what the system found at its gate, and why it was sent back.
+    const checked = busy();
+    const build = checked.org.plans[0]!.phases[1]!;
+    build.evidence = { gate: 'run', state: 'failed', sha: null, summary: 'npm test exited with 1.', checks: [], waitedMs: 0, at: AT };
+    build.summary = 'Fix the basket before anything else.';
+    build.reworkRounds = 1;
+    expect(of(checked, 'dept:cto/phase/p1/1')).toMatch(/Not passed npm test exited with 1\. npm test Tasks 2 .* Sent back for rework Fix the basket before anything else\. Open the plan/);
+    build.evidence.state = 'passed';
+    build.status = 'done';
+    expect(of(checked, 'dept:cto/phase/p1/1')).toMatch(/Checked by the system npm test exited with 1\. .* Gate review Fix the basket/);
+    // A plan: what binds it, what holds it, how it ended and what it reported.
+    const ended = busy();
+    const done = ended.org.plans[0]!;
+    done.amendments = ['Wait for the lease to be signed.'];
+    done.status = 'done';
+    done.reportId = 'rep1';
+    ended.org.reports.push({ id: 'rep1', planId: 'p1', fromId: 'cto', cycle: 1, at: AT, headline: 'The shop is open', summary: 'It took its first order.', outcomes: [], files: [], asks: [] });
+    expect(of(ended, 'dept:cto/plan/p1')).toMatch(/CTO · plan Open the shop Reported It is done when .* Binding instructions Wait for the lease to be signed\. Report to the board The shop is open It took its first order\. Open the plan/);
+    done.status = 'cancelled';
+    done.cancelReason = 'The steer changed.';
+    expect(of(ended, 'dept:cto/plan/p1')).toMatch(/Cancelled It is done when It takes an order The steer changed\. Phases/);
+    // An agent's record is of its own lead's plans: another lead's first agent is another agent.
+    const two = busy();
+    two.org.plans[1]!.phases[0]!.tasks = [task('t9', { status: 'done', agent: 1, title: 'Write the announcement', finishedAt: '2026-11-08T13:00:00.000Z' })];
+    expect(of(two, 'dept:cto/agent/1')).toMatch(/Last finished Write the spec .* Tasks finished in the plans on record 2/);
+    expect(of(two, 'dept:cmo/agent/1')).toMatch(/Last finished Write the announcement .* Tasks finished in the plans on record 1/);
+    // A task that failed says why.
+    const failed = busy();
+    failed.org.plans[0]!.phases[1]!.tasks[1]!.finishedAt = '2026-11-08T13:00:00.000Z';
+    expect(of(failed, 'dept:cto/agent/1')).toMatch(/Last finished Wire up payments Build Open the shop Brief Do it\. No account to test with\. Open the plan/);
+    // A request an AI signatory has yet to rule on is with it, and not with you.
+    const asked = busy();
+    asked.org.settings.signatory = 'ai';
+    expect(of(asked, 'signatory')).toMatch(/1 request with the AI signatory Open requests 1 CTO Pay: Payment account \(25 GBP a month, to Paywell\) · with the AI signatory Open Signatory/);
+    // A report that was shortened on its way to the browser says that there is more of it.
+    const long = busy();
+    long.org.plans[0]!.phases[0]!.tasks[1]!.resultTruncated = true;
+    expect(of(long, 'dept:cto/agent/1')).toContain('That is the start of it. The whole report is on the plan.');
+    expect(of(busy(), 'dept:cto/agent/1')).not.toContain('That is the start of it.');
+  });
+
+  it('shows the room when what was chosen in it is no longer there, and the situation when the room is not', () => {
+    const v = busy();
+    // Another lead's plan is not this department's to show.
+    expect(panel(draw(v, { selected: 'dept:cmo/plan/p1' }))).toMatch(/^ ?The situation CMO Marketing /);
+    expect(panel(draw(v, { selected: 'dept:cmo/phase/p1/0' }))).toMatch(/^ ?The situation CMO Marketing /);
+    expect(panel(draw(v, { selected: 'dept:cto/phase/p1/9' }))).toMatch(/^ ?The situation CTO Engineering /);
+    expect(panel(draw(v, { selected: 'dept:cto/plan/gone' }))).toMatch(/^ ?The situation CTO Engineering /);
+    expect(panel(draw(v, { selected: 'dept:cto/agent/9' }))).toMatch(/^ ?The situation CTO Engineering /);
+    expect(panel(draw(v, { selected: 'signatory/request/gone' }))).toMatch(/Signing desk .* Open requests/);
+    expect(panel(draw(v, { selected: 'board/decision/gone' }))).toMatch(/Boardroom .* Before the board 1/);
+    expect(panel(draw(v, { selected: 'dept:nobody' }))).toMatch(/^ ?The situation Needs you/);
+  });
+
+  it('lists the latest of what happened beneath the map, and all of it on asking', () => {
+    const v = busy();
+    const html = draw(v);
+    const ticker = html.slice(html.indexOf('class="hq-ticker"')).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    expect(ticker).toMatch(/Dispatches .* Org Notice Organisation established .* CTO Plan Plan: open the shop .* CTO Agent 1 finished Write the spec .* CTO Agent 1 finished Sketch the pages All of them/);
+    expect(panel(draw(v, { pane: 'dispatches' }))).toMatch(/The situation Dispatches Org Notice Organisation established .* CTO Plan Plan: open the shop .* CTO Agent 1 finished Write the spec/);
+    // Whatever is chosen is shown in place of the list, and the list is still a press away.
+    expect(panel(draw(v, { pane: 'dispatches', selected: 'board' }))).toMatch(/^ ?The situation Boardroom /);
   });
 });

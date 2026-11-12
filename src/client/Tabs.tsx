@@ -111,7 +111,7 @@ function Message({ org, message, onOpenPlan }: { org: Organisation; message: Boa
 
 // ---- Plans ----
 
-function TaskIcon({ status, held }: { status: Task['status']; held: boolean }) {
+export function TaskIcon({ status, held }: { status: Task['status']; held: boolean }) {
   if (status === 'done') return <CircleCheck size={16} className="icon-ok" aria-label="Done" />;
   if (status === 'failed') return <CircleX size={16} className="icon-bad" aria-label="Failed" />;
   // Part-way through in a session that is being held: it carries on when the session does.
