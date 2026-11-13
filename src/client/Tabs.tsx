@@ -1,6 +1,7 @@
 import { CircleCheck, CircleDashed, CirclePause, CircleX, ExternalLink, FileText, LoaderCircle } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { STANDARD_APPROACH, approachLabel } from '../shared/approaches';
+import { runOutcome, runPassed } from '../shared/sandbox';
 import { describeWait, waitMet } from '../shared/waits';
 import type {
   GateEvidence,
@@ -110,7 +111,7 @@ function Message({ org, message, onOpenPlan }: { org: Organisation; message: Boa
 
 // ---- Plans ----
 
-function TaskIcon({ status, held }: { status: Task['status']; held: boolean }) {
+export function TaskIcon({ status, held }: { status: Task['status']; held: boolean }) {
   if (status === 'done') return <CircleCheck size={16} className="icon-ok" aria-label="Done" />;
   if (status === 'failed') return <CircleX size={16} className="icon-bad" aria-label="Failed" />;
   // Part-way through in a session that is being held: it carries on when the session does.
@@ -150,6 +151,8 @@ function TaskRow({ orgId, task, held, ladder, onOpenFile }: { orgId: string; tas
           <span className="task-title">{task.title}</span>
           {task.rework ? <span className="tag">Rework</span> : null}
           {task.agent ? <span className="agent-tag">Agent {task.agent}</span> : inRun ? <span className="agent-tag">In a run</span> : null}
+          {/* How the last thing it ran in the sandbox ended, by the system's record and not the agent's word. */}
+          {task.runs?.length ? <span className={`tag ${runPassed(task.runs.at(-1)!) ? 'tag-ok' : 'tag-bad'}`}>{runPassed(task.runs.at(-1)!) ? 'Last run passed' : 'Last run did not pass'}</span> : null}
           {/* Which model the task was given to, where the agents have more than one to go to. */}
           {task.model && ladder ? <span className="agent-tag" title={task.effort ? `Rated ${task.effort} for effort` : 'Not rated for effort'}>{task.model}</span> : null}
         </summary>
@@ -177,6 +180,27 @@ function TaskRow({ orgId, task, held, ladder, onOpenFile }: { orgId: string; tas
             )
           ) : null}
           {failed ? <p className="note note-bad">The report could not be read. {failed}</p> : null}
+          {task.runs ? (
+            <>
+              <p className="field-label">Ran in the sandbox, as the system recorded it</p>
+              {task.runs.length ? (
+                <ol className="runs">
+                  {task.runs.map((run, i) => (
+                    <li key={run.at + i} className={runPassed(run) ? 'run-ok' : 'run-bad'}>
+                      {/* A command is an agent's words. It is shown as written, and is nothing that can be pressed. */}
+                      <code>{run.command}</code>
+                      <span className="muted">
+                        {run.dir ? `in ${run.dir} · ` : ''}
+                        {runOutcome(run)} · {duration(run.ms)}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="muted">Nothing. It could run commands, and ran none.</p>
+              )}
+            </>
+          ) : null}
           {task.files.length ? (
             <ul className="file-links">
               {task.files.map((path) => (
@@ -334,6 +358,12 @@ function SessionBlock({ orgId, plan, simulated, onOpenFile }: { orgId: string; p
 }
 
 const EVIDENCE_HEADING: Record<GateEvidence['state'], string> = { passed: 'Checked by the system', waiting: 'Waiting on the repository', failed: 'Not passed' };
+/** What the system does at each kind of gate, before it has done it. */
+const GATE_WAITS: Record<NonNullable<PlanPhase['gate']>, string> = {
+  checks: 'The system checks this gate for itself, against the repository.',
+  pull_request: 'The system checks this gate for itself, against the repository.',
+  run: 'The system checks this gate for itself, by running the check in the sandbox.',
+};
 
 /** A link from GitHub's own answer. Anything that is not a plain web address is shown as text. */
 function Outward({ url, children }: { url: string; children: ReactNode }) {
@@ -364,7 +394,7 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
             return (
               <li key={check.name + check.url}>
                 <span>
-                  {check.name}
+                  {evidence.gate === 'run' ? <code>{check.name}</code> : check.name}
                   {site ? <> (<Outward url={check.url}>{site}</Outward>)</> : null}
                 </span>
                 <span className="muted">{check.state}</span>
@@ -373,6 +403,31 @@ function GateResult({ evidence }: { evidence: GateEvidence }) {
           })}
         </ul>
       ) : null}
+      {evidence.output ? (
+        // What a program printed, as text and nothing else. Open where the gate did not pass, which is when it is wanted.
+        <details className="gate-output" open={evidence.state !== 'passed'}>
+          <summary>The end of what the check printed</summary>
+          <pre>{evidence.output}</pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+/** What a phase is held to, where the system proves it by running something: the lead's own words for the command, as the system will run them. */
+function PhaseCheckLine({ phase }: { phase: PlanPhase }) {
+  const check = phase.check;
+  return (
+    <div className="phase-check">
+      <span className="field-label">The system proves this phase by running</span>
+      {check ? (
+        <>
+          <code>{check.command}</code>
+          <span className="muted">{check.dir ? `in ${check.dir}` : 'at the top of the workspace'}, with {check.seconds} seconds to finish</span>
+        </>
+      ) : (
+        <span className="muted">{phase.status === 'pending' ? 'A check the lead names when the phase begins.' : 'Nothing yet: the lead has named no check, and the gate cannot pass without one.'}</span>
+      )}
     </div>
   );
 }
@@ -399,6 +454,7 @@ function PhaseBlock({ orgId, phase, index, held, ladder, waitsFor, onOpenFile }:
         <span className="muted">{state}</span>
       </header>
       <p className="muted">{phase.intent}</p>
+      {phase.gate === 'run' ? <PhaseCheckLine phase={phase} /> : null}
       {phase.tasks.length ? (
         <ul className="tasks">
           {phase.tasks.map((task) => (
@@ -412,7 +468,7 @@ function PhaseBlock({ orgId, phase, index, held, ladder, waitsFor, onOpenFile }:
           <Markdown>{phase.summary}</Markdown>
         </div>
       ) : null}
-      {phase.evidence ? <GateResult evidence={phase.evidence} /> : phase.gate ? <p className="muted">The system checks this gate for itself, against the repository.</p> : null}
+      {phase.evidence ? <GateResult evidence={phase.evidence} /> : phase.gate ? <p className="muted">{GATE_WAITS[phase.gate]}</p> : null}
     </li>
   );
 }

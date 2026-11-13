@@ -1,4 +1,5 @@
 import { emptyBusiness } from '../../shared/business';
+import { MAX_MEMORY_USES } from '../../shared/memory';
 import { STANDARD_APPROACH } from '../../shared/approaches';
 import { PROFILE_BY_ID, MAX_LEADS, executiveFromDraft } from '../../shared/profiles';
 import { MAX_LADDER, MAX_RUNG_LEVEL } from '../../shared/routing';
@@ -19,6 +20,7 @@ import type {
   SignatoryRequest,
   UsageTotals,
 } from '../../shared/types';
+import { SANDBOX_DEFAULT_IMAGE, imageName } from '../../shared/sandbox';
 import { DEFAULT_MODEL } from '../providers/pricing';
 import type { CallUsage } from '../providers/types';
 
@@ -41,6 +43,8 @@ export const DEFAULT_SETTINGS: OrgSettings = {
   workflowRuns: true,
   archiveSessions: false,
   recall: true,
+  sandboxImage: SANDBOX_DEFAULT_IMAGE,
+  sandboxNetwork: false,
   signatory: 'human',
   workerLadder: [],
   workerLadderLearns: true,
@@ -184,6 +188,9 @@ export function sanitiseSettings(patch: Partial<OrgSettings> | undefined, base: 
     workflowRuns: typeof p.workflowRuns === 'boolean' ? p.workflowRuns : base.workflowRuns,
     archiveSessions: typeof p.archiveSessions === 'boolean' ? p.archiveSessions : base.archiveSessions,
     recall: typeof p.recall === 'boolean' ? p.recall : base.recall,
+    // A name that could not be an image's is not taken. It is handed to a command, and must be what it says.
+    sandboxImage: imageName(p.sandboxImage) ?? base.sandboxImage,
+    sandboxNetwork: typeof p.sandboxNetwork === 'boolean' ? p.sandboxNetwork : base.sandboxNetwork,
     signatory: p.signatory === 'ai' || p.signatory === 'human' ? p.signatory : base.signatory,
     // Tidied against the agents' model as it will be: a rung that names that model is no rung.
     workerLadder: tidyLadder(p.workerLadder !== undefined ? p.workerLadder : base.workerLadder, model(p.workerModel, base.workerModel)),
@@ -395,6 +402,7 @@ export function createOrganisation(req: CreateOrgRequest, id: string): Organisat
     signatory: { requests: [], messages: [] },
     privileges: {},
     workApproaches: {},
+    memoryUses: [],
     usage: emptyUsage(),
     usageByExec: {},
   };
@@ -501,6 +509,8 @@ export function normaliseLoaded(org: Organisation): Organisation {
   org.privileges ??= {};
   // From before there were work approaches: every plan ran the lead's own profile.
   org.workApproaches ??= {};
+  // From before the uses of the memory were noted: none have been.
+  org.memoryUses = Array.isArray(org.memoryUses) ? org.memoryUses.slice(-MAX_MEMORY_USES) : [];
   syncSignatory(org);
   syncRouting(org);
   for (const plan of org.plans) {

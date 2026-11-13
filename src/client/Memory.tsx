@@ -1,6 +1,6 @@
 import { FileText, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { MEMORY_KIND_LABEL, words, type MemoryHit, type MemoryKind, type MemorySearch, type MemoryStats } from '../shared/memory';
+import { MEMORY_KIND_LABEL, words, type MemoryHit, type MemoryKind, type MemorySearch, type MemoryStats, type MemoryUse } from '../shared/memory';
 import type { Organisation } from '../shared/types';
 import { api } from './api';
 import { Empty, ErrorNote, SeatBadge, clock, seatFor } from './ui';
@@ -154,6 +154,114 @@ function Hit({ org, hit, wanted, onOpenPlan, onOpenFile }: { org: Organisation; 
   );
 }
 
+/** One thing the memory gave: what it is, and the whole of it on asking. A file is read where files are read. */
+function UsedItem({ org, item, onOpenFile }: { org: Organisation; item: MemoryUse['items'][number]; onOpenFile: (path: string) => void }) {
+  const [whole, setWhole] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = () => {
+    if (open || whole !== null) {
+      setOpen(!open);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    api.remembered(org.id, item.id).then(
+      (found) => {
+        setWhole(found.text);
+        setOpen(true);
+        setBusy(false);
+      },
+      (err: Error) => {
+        setError(err.message);
+        setBusy(false);
+      },
+    );
+  };
+  return (
+    <li>
+      <span className="muted">
+        {MEMORY_KIND_LABEL[item.kind]}
+        {item.cycle !== null ? ` · cycle ${item.cycle}` : ''}
+      </span>{' '}
+      {item.kind === 'file' && item.path ? (
+        <button type="button" className="link" onClick={() => onOpenFile(item.path!)}>
+          <code>{item.path}</code>
+        </button>
+      ) : (
+        <button type="button" className="link" onClick={toggle} disabled={busy} aria-expanded={open}>
+          {item.title}
+        </button>
+      )}
+      {/* Shown as written, like everything the memory quotes: nothing in it can pass for a link or a control of this page. */}
+      {open && whole !== null ? <p className="pre-wrap memory-whole">{whole}</p> : null}
+      {error ? <p className="note note-bad">{error}</p> : null}
+    </li>
+  );
+}
+
+/** How a use is headed: who it was shown to, or who searched. The seat is named, since the CEO and the signatory are shown things too. */
+const usedBy = (use: MemoryUse, seat: string): string => (use.by === 'shown' ? `shown to the ${seat}` : use.by === 'agent' ? 'searched by an agent' : `searched by the ${seat}`);
+
+/** Why the memory has not been put to use yet, as far as the page can tell. */
+function unusedBecause(org: Organisation): string {
+  const searches = 'What an agent searches for is listed here too, when one does.';
+  if (!org.settings.recall) return `Nothing yet. Leads are not being shown any of it: that is switched off in the settings. ${searches}`;
+  if (org.cycle.number <= 1) return `Nothing yet. A lead is shown what earlier cycles left, and what the files in the workspace say, on the matter it is about to decide. This organisation is in its first cycle, so there is little to show one. ${searches}`;
+  return `Nothing yet. A lead is shown passages only where the record shares enough with the matter it is about to decide. ${searches}`;
+}
+
+/**
+ * The memory at work: the latest times a lead was shown something from it, or something searched it. Without this a
+ * person has no way to tell from a run whether the memory did anything at all.
+ */
+export function MemoryUses({ org, onOpenFile }: { org: Organisation; onOpenFile: (path: string) => void }) {
+  const uses = [...(org.memoryUses ?? [])].reverse();
+  return (
+    <section className="memory-uses" aria-label="The memory at work">
+      <h3>The memory at work</h3>
+      {uses.length === 0 ? (
+        <p className="muted">{unusedBecause(org)}</p>
+      ) : (
+        <>
+          <p className="muted">The latest times it was put to use, newest first: what a lead was shown before it decided, and what was searched for.</p>
+          <ol className="feed">
+            {uses.map((use, index) => {
+              const seat = seatFor(org, use.seatId);
+              return (
+              <li key={use.at + index}>
+                <article className="msg memory-use">
+                  <SeatBadge seat={seat} />
+                  <div className="msg-body">
+                    <header>
+                      <span className="msg-kind">
+                        {usedBy(use, seat.short)} · cycle {use.cycle}
+                      </span>
+                      <h3>{use.by === 'shown' ? use.about : `“${use.about}”`}</h3>
+                      {use.at ? <time dateTime={use.at}>{clock(use.at)}</time> : null}
+                    </header>
+                    {use.items.length ? (
+                      <ul className="memory-used">
+                        {use.items.map((item) => (
+                          <UsedItem key={item.id} org={org} item={item} onOpenFile={onOpenFile} />
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="muted">It found nothing.</p>
+                    )}
+                  </div>
+                </article>
+              </li>
+              );
+            })}
+          </ol>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function Memory({ org, asked, onAsk, onOpenPlan, onOpenFile }: { org: Organisation; asked: MemoryAsk; onAsk: (ask: MemoryAsk) => void; onOpenPlan: (planId: string) => void; onOpenFile: (path: string) => void }) {
   const [draft, setDraft] = useState(asked.query);
   const [found, setFound] = useState<MemorySearch | null>(null);
@@ -233,24 +341,27 @@ export function Memory({ org, asked, onAsk, onOpenPlan, onOpenFile }: { org: Org
           <p className="muted">Loading…</p>
         )
       ) : !asked.query ? (
-        <div className="memory-about">
-          <p>
-            Everything the organisation has reported, decided, planned and written, in every cycle, can be found here: cycles long closed among them, and the text of the files in the
-            workspace. {stats ? holds(stats) : ''}
-          </p>
-          <p className="muted">
-            It finds what shares words with what you ask, not what means the same in other words, so ask in the words the thing itself would use.{' '}
-            {org.settings.recall
-              ? 'Before a lead directs, plans or rules, it is shown the passages from earlier cycles that bear most on the matter. That can be switched off in the settings.'
-              : 'Leads are not being shown any of it before they decide: that is switched off in the settings.'}{' '}
-            Agents search it themselves when their work calls for it.
-          </p>
-          {stats?.leftOut ? (
-            <p className="muted">
-              {stats.leftOut} of the oldest {stats.leftOut === 1 ? 'task report is' : 'task reports are'} not held, to keep the memory within its size. What was reported to the board about that work is.
+        <>
+          <div className="memory-about">
+            <p>
+              Everything the organisation has reported, decided, planned and written, in every cycle, can be found here: cycles long closed among them, and the text of the files in the
+              workspace. {stats ? holds(stats) : ''}
             </p>
-          ) : null}
-        </div>
+            <p className="muted">
+              It finds what shares words with what you ask, not what means the same in other words, so ask in the words the thing itself would use.{' '}
+              {org.settings.recall
+                ? 'Before a lead directs, plans or rules, it is shown the passages from earlier cycles that bear most on the matter. That can be switched off in the settings.'
+                : 'Leads are not being shown any of it before they decide: that is switched off in the settings.'}{' '}
+              Agents search it themselves when their work calls for it.
+            </p>
+            {stats?.leftOut ? (
+              <p className="muted">
+                {stats.leftOut} of the oldest {stats.leftOut === 1 ? 'task report is' : 'task reports are'} not held, to keep the memory within its size. What was reported to the board about that work is.
+              </p>
+            ) : null}
+          </div>
+          <MemoryUses org={org} onOpenFile={onOpenFile} />
+        </>
       ) : found.hits.length === 0 ? (
         <Empty title="Nothing remembered shares those words.">
           {asked.kind ? 'Try looking among everything, or use ' : 'Use '}the words the thing itself would use, or fewer of them. A search finds words, not meanings.

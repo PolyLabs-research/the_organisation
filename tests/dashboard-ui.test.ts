@@ -12,7 +12,9 @@ import type { OrgRunner } from '../src/server/engine/runner';
 import { MockProvider } from '../src/server/providers/mock';
 import { Registry } from '../src/server/registry';
 import { Store } from '../src/server/store';
-import type { BoardMessage } from '../src/shared/types';
+import { allows } from '../src/shared/privileges';
+import type { SandboxRun } from '../src/shared/sandbox';
+import type { BoardMessage, Task } from '../src/shared/types';
 import { plan } from './client-helpers';
 import { CHROME, QUIET, TEAM, withoutBrowser } from './helpers';
 
@@ -79,6 +81,7 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     runner.org.board.push({ id: 'm-bad', at: new Date().toISOString(), cycle: 1, type: 'system', title: 'From nobody', body: 'x' } as unknown as BoardMessage);
     const page = await open('/#/org/' + runner.org.id);
     try {
+      await page.getByRole('tab', { name: 'Board', exact: true }).click();
       await page.getByText('This tab could not be shown.').waitFor();
       await page.getByRole('button', { name: 'Reload the page', exact: true }).waitFor();
       // The controls above it are still there and still work.
@@ -193,12 +196,32 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       decisions: [{ id: 'd-1', cycle: 2, at, kind: 'contested', title: 'One supplier of pots or two', context: '', raisedById: 'cmo', planId: null, issues: [], participantIds: [], positions: {}, status: 'resolved', outcome: { method: 'ceo', byId: 'ceo', ruling: 'Use one supplier, Potworks.', rationale: 'Two would double the paperwork.', planAction: 'proceed', amendments: [], at } }],
     });
     await runner.workspace.write('ops/suppliers.md', '# Suppliers\n\nPotworks of Stoke quoted forty pence a pot, and [the deposit is paid here](https://elsewhere.example/pay).');
+    // The memory has been put to use twice: a lead was shown a ruling and a file before it planned, and an agent looked for something that is not there.
+    org.memoryUses = [
+      { at, cycle: 6, seatId: 'cto', by: 'shown', about: 'Drafting a plan', items: [{ id: 'decision:d-1', kind: 'decision', cycle: 2, title: 'One supplier of pots or two', from: 'ceo' }, { id: 'file:ops/suppliers.md#1', kind: 'file', cycle: null, title: 'ops/suppliers.md', from: '', path: 'ops/suppliers.md' }] },
+      { at, cycle: 6, seatId: 'cmo', by: 'agent', about: 'giraffes', items: [] },
+    ];
     const page = await open('/#/org/' + org.id);
     try {
       await page.getByRole('tab', { name: 'Memory', exact: true }).click();
       // Before anything is asked, it says what it holds, and how it is used.
       await page.getByText('It holds 1 report to the board, 1 decision and 1 file, from cycles 2 to 5.').waitFor();
       await page.getByText('Before a lead directs, plans or rules, it is shown the passages from earlier cycles that bear most on the matter.').waitFor();
+      // And it shows the memory at work, newest first: what was searched for, and what a lead was shown.
+      const uses = page.locator('.memory-use');
+      await uses.nth(1).waitFor();
+      expect(await uses.count()).toBe(2);
+      expect((await uses.nth(0).locator('header').innerText()).replace(/\s+/g, ' ').toLowerCase()).toContain('searched by an agent · cycle 6 “giraffes”');
+      expect(await uses.nth(0).getByText('It found nothing.').count()).toBe(1);
+      expect((await uses.nth(1).locator('header').innerText()).replace(/\s+/g, ' ').toLowerCase()).toContain('shown to the cto · cycle 6 drafting a plan');
+      expect((await uses.nth(1).locator('.memory-used li').allInnerTexts()).map((text) => text.replace(/\s+/g, ' '))).toEqual(['decision · cycle 2 One supplier of pots or two', 'file ops/suppliers.md']);
+      // The whole of what was shown is one click away, and a file is opened where files are.
+      await uses.nth(1).getByRole('button', { name: 'One supplier of pots or two', exact: true }).click();
+      await uses.nth(1).locator('.memory-whole').getByText('paperwork').waitFor();
+      await uses.nth(1).getByRole('button', { name: 'ops/suppliers.md', exact: true }).click();
+      await page.locator('.file-view').getByText('Potworks of Stoke quoted forty pence a pot').waitFor();
+      await page.getByRole('tab', { name: 'Memory', exact: true }).click();
+      await uses.nth(1).waitFor();
       const box = page.getByRole('searchbox', { name: 'Search what the organisation remembers' });
       await box.fill('Potworks pots');
       await box.press('Enter');
@@ -286,6 +309,8 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
     const runner = await organisation('Steered once');
     const page = await open('/#/org/' + runner.org.id);
     try {
+      // Beside the tabs, where the hierarchy stands.
+      await page.getByRole('tab', { name: 'Board', exact: true }).click();
       const box = page.getByLabel('Steer for the CEO', { exact: true });
       await box.fill('Keep the first box under 20 GBP.');
       // Ctrl+Enter held down: the key repeats before the page has heard back, or even drawn itself again.
@@ -332,14 +357,14 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       await page.getByRole('heading', { name: 'Just connected', exact: true }).waitFor();
       expect(await selected(page)).toBe('Email & accounts');
       await expect.poll(() => page.url()).toBe(base + '/#/org/' + connected.org.id);
-      // The next organisation opened from here starts on its board, and so does this one after a reload.
+      // The next organisation opened from here starts on its headquarters, and so does this one after a reload.
       await page.getByRole('link', { name: 'Organisations' }).click();
       await page.getByRole('link', { name: /Another one/ }).click();
       await page.getByRole('heading', { name: 'Another one', exact: true }).waitFor();
-      expect(await selected(page)).toBe('Board');
+      expect(await selected(page)).toBe('Headquarters');
       await page.reload();
       await page.getByRole('heading', { name: 'Another one', exact: true }).waitFor();
-      expect(await selected(page)).toBe('Board');
+      expect(await selected(page)).toBe('Headquarters');
     } finally {
       await page.close();
     }
@@ -499,6 +524,86 @@ describe.skipIf(withoutBrowser({ build: true }))('the dashboard in a browser', {
       await standing.waitFor();
       expect(await standing.locator('tbody tr').first().innerText()).toMatch(/claude-haiku-5-5\s+tasks rated 1 to 3\s+tasks rated 1 to 3\s+\d+ of \d+ let stand/);
       expect(await standing.locator('tbody tr').last().innerText()).toMatch(/claude-opus-5-5\s+tasks rated 4 to 10, and any not rated/);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it('shows what each task ran in the sandbox as the system recorded it, and says under Privileges whether code can be run', async () => {
+    const runner = await organisation('Runs things');
+    const org = runner.org;
+    const at = new Date().toISOString();
+    const made = plan(org, 'cto', 'p-1');
+    const task = (id: string, title: string, runs?: SandboxRun[]): Task => ({ id, title, brief: 'Do it.', status: 'done', agent: 1, rework: false, result: 'All the tests pass.', files: [], error: null, attempts: 1, startedAt: at, finishedAt: at, effort: null, ...(runs ? { runs } : {}) });
+    made.phases[0]!.status = 'working';
+    made.phases[0]!.tasks.push(
+      // It failed, was fixed, and passed. Its agent says only that the tests pass.
+      task('t-1', 'Build the parser', [{ at, command: 'npm test', dir: 'engineering/app', ended: 'exited', exitCode: 1, ms: 4200 }, { at, command: 'npm test', dir: 'engineering/app', ended: 'exited', exitCode: 0, ms: 3900 }]),
+      // It could run things and ran nothing, whatever its report says.
+      task('t-2', 'Write the notes', []),
+      // It had no sandbox.
+      task('t-3', 'Draft the spec'),
+      task('t-4', 'Run the long job', [{ at, command: 'node slow.js "<img src=x onerror=alert(1)>"', dir: '', ended: 'timed_out', exitCode: null, ms: 120_000 }]),
+    );
+    const page = await open('/#/org/' + org.id);
+    // Once Docker has been started: the same server, asked again.
+    let started = false;
+    await page.route('**/api/meta', async (route) => {
+      if (!started) return route.continue();
+      const answer = await route.fetch();
+      await route.fulfill({ response: answer, json: { ...(await answer.json()), sandbox: { available: true, runtime: 'Docker 29.9.2', reason: null } } });
+    });
+    try {
+      await page.getByRole('tab', { name: /^Plans/ }).click();
+      const tasks = page.locator('.task');
+      await tasks.first().waitFor({ state: 'attached' });
+      await page.evaluate(() => document.querySelectorAll('.tab-panel details').forEach((details) => { (details as HTMLDetailsElement).open = true; }));
+      const row = (title: string) => tasks.filter({ hasText: title });
+      // How the last thing it ran ended is on the task's own line, by the record and not the report.
+      expect(await row('Build the parser').locator('summary .tag').allInnerTexts()).toEqual(['Last run passed']);
+      expect(await row('Run the long job').locator('summary .tag').allInnerTexts()).toEqual(['Last run did not pass']);
+      expect(await row('Write the notes').locator('summary .tag').count()).toBe(0);
+      // Every command, in order, with where it was run and how it ended.
+      const runs = row('Build the parser').locator('.runs li');
+      expect(await runs.count()).toBe(2);
+      expect((await runs.nth(0).innerText()).replace(/\s+/g, ' ')).toBe('npm test in engineering/app · failed (exit 1) · 4.2 s');
+      expect(await runs.nth(0).getAttribute('class')).toBe('run-bad');
+      expect((await runs.nth(1).innerText()).replace(/\s+/g, ' ')).toBe('npm test in engineering/app · passed (exit 0) · 3.9 s');
+      expect(await runs.nth(1).getAttribute('class')).toBe('run-ok');
+      expect(await row('Write the notes').getByText('Nothing. It could run commands, and ran none.').count()).toBe(1);
+      expect(await row('Draft the spec').getByText('Ran in the sandbox').count()).toBe(0);
+      // A command is an agent's words, and is shown as words.
+      expect((await row('Run the long job').locator('.runs li').innerText()).replace(/\s+/g, ' ')).toBe('node slow.js "<img src=x onerror=alert(1)>" stopped at its time limit · 2 min 0 s');
+      expect(await page.locator('.runs img').count()).toBe(0);
+
+      // No role may run code to begin with. Allowing one says at once whether anything can be run for it.
+      await page.getByRole('tab', { name: 'Privileges', exact: true }).click();
+      const tick = page.getByRole('checkbox', { name: 'CTO: Run code in a sandbox' });
+      expect(await tick.isChecked()).toBe(false);
+      expect(await page.getByText('may run code').count()).toBe(0);
+      // The tick shows what the server holds, so it changes once the server has answered.
+      await tick.click();
+      await page.getByText('CTO may run code, but nothing can be run yet. Nothing was set up on this server to run code with. Until then its agents are told that they cannot run code.').waitFor();
+      await expect.poll(() => allows(runner.org, 'cto', 'run_code')).toBe(true);
+      expect(allows(runner.org, 'cpo', 'run_code')).toBe(false);
+      // With something to run it in, the page says what, from which image, and whether it can reach the network.
+      started = true;
+      await page.getByRole('tab', { name: 'Board', exact: true }).click();
+      await page.getByRole('tab', { name: 'Privileges', exact: true }).click();
+      await page.getByText('can run code, in a sandbox started with Docker 29.9.2 from the image node:22-bookworm. The sandbox has no network.').waitFor();
+      // The image and the network are settings. A name that could not be an image's is not sent, and the person is told.
+      await page.getByRole('button', { name: 'Settings', exact: true }).click();
+      const image = page.getByLabel('Image that code is run in');
+      expect(await image.inputValue()).toBe('node:22-bookworm');
+      await image.fill('python --privileged');
+      await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+      await page.getByText('"python --privileged" is not a name an image can have.').waitFor();
+      expect(runner.org.settings.sandboxImage).toBe('node:22-bookworm');
+      await image.fill('python:3.12-bookworm');
+      await page.getByRole('checkbox', { name: /Let code in a sandbox reach the network/ }).check();
+      await saveSettings(page);
+      expect(runner.org.settings).toMatchObject({ sandboxImage: 'python:3.12-bookworm', sandboxNetwork: true });
+      await page.getByText('from the image python:3.12-bookworm. The sandbox can reach the network, so what is run in it can reach any site and this machine’s own network, and send what it can read there.').waitFor();
     } finally {
       await page.close();
     }

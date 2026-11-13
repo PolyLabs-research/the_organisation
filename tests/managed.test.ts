@@ -2016,6 +2016,13 @@ describe('the organisation on hosted sessions, end to end', () => {
 
     // The lead is told it has the tool, and that what it was shown at the start can be read in full with it.
     expect(api.session().created.agent.system).toContain('call recall to find what was reported, decided and written about it');
+
+    // Each search the lead made is on record for a person to see, with what it found. What was not a search, or could not be made, is not.
+    expect(h.org.memoryUses!.filter((use) => use.by === 'lead').map((use) => ({ seatId: use.seatId, about: use.about, items: use.items }))).toEqual([
+      { seatId: 'cto', about: 'which supplier of terracotta pots', items: [{ id: 'decision:d-old', kind: 'decision', cycle: 2, title: 'One supplier of terracotta pots or two', from: 'ceo' }] },
+      { seatId: 'cto', about: 'kiln firing', items: [{ id: 'file:engineering/kiln.md#1', kind: 'file', cycle: null, title: 'engineering/kiln.md', from: '', path: 'engineering/kiln.md' }] },
+      { seatId: 'cto', about: 'giraffes', items: [] },
+    ]);
   });
 
   it('puts what a lead asks for in a phase record to the signatory, and tells the lead it has not happened', async () => {

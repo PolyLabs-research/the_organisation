@@ -79,7 +79,7 @@ The spend bar shows the estimate against your budget. At the budget the organisa
 
 ### Set the pace
 
-**Pace**, in the strip under the organisation's name, sets how fast work starts, so that you can keep up with it. Change it at any time, including while the organisation runs.
+**Pace**, in the strip under the tabs in the headquarters and under the organisation's name elsewhere, sets how fast work starts, so that you can keep up with it. Change it at any time, including while the organisation runs.
 
 | Pace | What happens |
 | --- | --- |
@@ -92,11 +92,29 @@ A piece of work is one call: a lead's proposal, a plan, a review, a position on 
 
 ## See what it is doing
 
-The left side shows the hierarchy: you, the CEO, the signatory, and each lead with its plan and which agents are busy. Select a lead's plan to open it.
+An organisation opens on its **Headquarters**: the whole of it as a building seen from above, so that you can follow it without reading everything it writes.
+
+![The headquarters](headquarters.png)
+
+- **Each seat has a room, and each agent a desk.** A desk's screen is lit while its agent works, and what a lead itself is doing is said beside its desk.
+- **A plan is the line of its phases** along the bottom of its department. A ring fills as tasks come in, and turns to a tick when the phase passes its gate.
+- **Lines along the corridors** are what is on its way: dotted for what is being worked on now, dashed for what stands until someone takes it up, amber for what stands until you do.
+- **A bell on a room** is something waiting for you, and **a warning sign** is something that has gone wrong. Both are counted at the top left and listed beside the map. **Show it** takes you to each.
+- **Go nearer** with the wheel or a pinch, or with **Building**, **Rooms** and **Desks**, and drag to move about. The nearer you are, the more is written on the map. Press a room twice to go to it.
+- **Press a room, a desk or a phase** to read what was written there, beside the map: the brief and the report, the objections and positions, the request. From there **Open the plan**, and its like, take you to the tab with the whole of it. The headquarters is as you left it when you come back.
+- **Dispatches**, beneath the map, are the latest things said and done. Press one to go to where it happened.
+- **Fill the window**, the button at the map's top right, gives the map the whole window. Escape gives it back.
+
+![A department seen close to: what each agent is doing, and one agent's task beside the map](headquarters-desk.png)
+
+Without a pointer: Tab goes from room to room, Enter chooses one, and the panel beside the map lists everything in it. With the map in focus, the arrow keys move it, `+` and `-` go nearer and further, and `0` shows the whole building.
+
+The other tabs hold everything in full. Beside them, on the left, is the hierarchy: you, the CEO, the signatory, and each lead with its plan and which agents are busy. Select a lead's plan to open it.
 
 | Tab | What it is for |
 | --- | --- |
-| **Board** | Everything said at board level, newest first. Start here |
+| **Headquarters** | The whole organisation from above. Start here |
+| **Board** | Everything said at board level, newest first |
 | **Calendar** | Commitments, with owners, dependencies and dates |
 | **Email & accounts** | Mailboxes, accounts, repositories, tool servers, drafts and requests for help |
 | **Privileges** | What each role may do |
@@ -117,19 +135,19 @@ A lead is shown this cycle and the last four in brief, and cycles older than the
 
 - **Leads** are shown, before they propose, direct, plan, hand out tasks or take part in a board decision, the passages from earlier cycles that bear most on the matter: six at most. To switch that off, open **Settings** and untick **Show leads what the organisation remembers**.
 - **Agents** search it themselves, with a tool called `recall`, when their work may have been done before or touches something the board has ruled on.
-- **You** search it under **Memory**. Type a few words and press Enter. Each result says what it is, whose it was and which cycle it is from, with the words you asked about marked. **Read all of it** shows the whole item in place, and **Open the file** or **Open the plan** takes you to where it lives. The buttons under the box keep the search to one kind of thing.
+- **You** search it under **Memory**. Type a few words and press Enter. Each result says what it is, whose it was and which cycle it is from, with the words you asked about marked. **Read all of it** shows the whole item in place, and **Open the file** or **Open the plan** takes you to where it lives. The buttons under the box keep the search to one kind of thing. Before you ask anything, the tab shows **The memory at work**: what each lead was last shown from it, and what agents searched for. In an organisation's first cycle that list is nearly always empty, because a lead is shown what earlier cycles left.
 
 It finds words, not meanings. The [README](../README.md#memory) says what is remembered and what is left out.
 
 ## Steer it
 
-Type in the box under **Shareholders** and choose **Send steer**. Steer is binding, and the CEO enforces it. It can change plans, or cancel them. An agent finishes the task it is on, so a steer does not reach work already running.
+In the headquarters, press the **Shareholders** room; on any other tab, the box is at the top left. Type in the box under **Shareholders** and choose **Send steer**. Steer is binding, and the CEO enforces it. It can change plans, or cancel them. An agent finishes the task it is on, so a steer does not reach work already running.
 
-You can also change how many agents a lead has, with the **+** and **−** on its card, while the organisation runs.
+You can also change how many agents a lead has while the organisation runs, with the **+** and **−** on its card, or beside the map once its department is chosen.
 
 ## Pay and sign
 
-The organisation cannot pay for anything or sign anything. A lead raises a request at a phase gate, and the plan carries on without waiting. The **Signatory** tab shows a count of what is waiting for you.
+The organisation cannot pay for anything or sign anything. A lead raises a request at a phase gate, and the plan carries on without waiting. The **Signatory** tab shows a count of what is waiting for you, and the headquarters pins a bell to the signing desk.
 
 1. Read the request and the files it points to. It was written by a model, so check the amount and the payee yourself.
 2. Do it outside this program, or decide not to.
@@ -182,6 +200,16 @@ Every lead has its own operating profile. **Approaches** lists the alternatives 
 To point a lead at one, say so in a steer: "Treat this as a bug fix."
 
 **DevOps delivery** is only on offer once the role has a repository and may push to it.
+
+## Let it run what it writes
+
+Agents on this machine write files. To let a role's agents also run them (tests, scripts, builds), install Docker, start it, and tick **Run code in a sandbox** for that role under **Privileges**. It is off for every role to begin with.
+
+Each command runs in a container that cannot reach the rest of this machine, on a copy of the workspace. The organisation's settings name the image the container is started from, and have a switch, **Let code in a sandbox reach the network**, which is off: with it on, code can install packages, and can also reach any site and send what it can read there.
+
+The board tells you if Docker is not running or the image cannot be fetched, and so does the Privileges page. Under **Plans**, each task then lists what it ran and how each command ended, as the system recorded it: go by that where an agent's report says more. See the [guide to running code](code-execution.md) before you open the network.
+
+A lead whose role may run code can also choose the **Tested build** approach for a plan. It names one command that proves the work, such as its tests, and the system runs that command itself when the work is in: the phase passes only if it exits with 0. The plan shows the check and what the system found, and the board shows every change a lead makes to a check. The check is the lead's choice, so read it: a gate proves no more than its check does.
 
 ## Work on code
 

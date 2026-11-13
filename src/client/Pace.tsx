@@ -20,8 +20,11 @@ function useSecondsUntil(at: string | null): number | null {
   return at ? Math.max(0, Math.ceil((Date.parse(at) - now) / 1000)) : null;
 }
 
-/** How fast the organisation moves on, and at the step pace, the button that moves it on. */
-export function PaceControl({ view, onView }: { view: OrgView; onView: (view: OrgView) => void }) {
+/**
+ * How fast the organisation moves on, and at the step pace, the button that moves it on. `compact` is for where there
+ * is one line to put it in: what comes next is then said by the button and on hovering, and not written out beneath.
+ */
+export function PaceControl({ view, onView, compact = false }: { view: OrgView; onView: (view: OrgView) => void; compact?: boolean }) {
   const { org, active, pace } = view;
   const action = useAction();
   const seconds = useSecondsUntil(pace.nextAt);
@@ -40,7 +43,7 @@ export function PaceControl({ view, onView }: { view: OrgView; onView: (view: Or
   }
 
   return (
-    <div className="strip-item pace">
+    <div className="strip-item pace" title={compact ? (note ?? undefined) : undefined}>
       <span className="field-label">Pace</span>
       <div className="pace-row">
         <div className="pace-options" role="radiogroup" aria-label="Pace">
@@ -71,7 +74,7 @@ export function PaceControl({ view, onView }: { view: OrgView; onView: (view: Or
           </button>
         ) : null}
       </div>
-      {note ? <span className="muted pace-note" aria-live="polite">{note}</span> : null}
+      {note && !compact ? <span className="muted pace-note" aria-live="polite">{note}</span> : null}
       {action.error ? <span className="pace-error" role="alert">{action.error}</span> : null}
     </div>
   );

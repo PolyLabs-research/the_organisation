@@ -19,8 +19,14 @@ function Working({ label }: { label: string }) {
   );
 }
 
-function Shareholders({ org, onView }: { org: Organisation; onView: (view: OrgView) => void }) {
-  const [text, setText] = useState('');
+/**
+ * Where the shareholders steer from. `draft` and `onDraft` let whatever shows this keep a steer that is half written:
+ * the same box is shown beside the tabs and in the headquarters, and what was typed in one is there in the other.
+ */
+export function Shareholders({ org, onView, draft, onDraft }: { org: Organisation; onView: (view: OrgView) => void; draft?: string; onDraft?: (text: string) => void }) {
+  const [own, setOwn] = useState('');
+  const text = draft ?? own;
+  const setText = onDraft ?? setOwn;
   const send = useAction();
   // One steer is sent once. The button is out of use while a steer is on its way, but the shortcut is not a button, and
   // a key held down repeats: without this, each repeat that came before the page had drawn itself again sent the steer again.
@@ -260,12 +266,17 @@ export function Hierarchy({
   onView,
   onOpenPlan,
   onOpenSignatory,
+  steer,
+  onSteer,
 }: {
   view: OrgView;
   meta: Meta;
   onView: (view: OrgView) => void;
   onOpenPlan: (planId: string) => void;
   onOpenSignatory: () => void;
+  /** A steer that is half written, where it is kept by whatever shows this. */
+  steer?: string;
+  onSteer?: (text: string) => void;
 }) {
   const { org, active } = view;
   const ceo = org.executives.find((e) => e.kind === 'ceo')!;
@@ -278,7 +289,7 @@ export function Hierarchy({
   const withAi = org.signatory.requests.filter((r) => waitsOnAi(r, org.settings.signatory)).length;
   return (
     <div className="hierarchy">
-      <Shareholders org={org} onView={onView} />
+      <Shareholders org={org} onView={onView} draft={steer} onDraft={onSteer} />
       <div className="tier-link" aria-hidden="true" />
       <Ceo org={org} exec={ceo} active={active} />
       {judge ? (

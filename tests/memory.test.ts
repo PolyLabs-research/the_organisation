@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rm, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryUses } from '../src/client/Memory';
 import { OrgMemory, excerpt, memoryTools, parts, remembered } from '../src/server/memory';
-import { stem, words } from '../src/shared/memory';
-import { recalled } from '../src/server/engine/recall';
+import { stem, words, type MemoryItem } from '../src/shared/memory';
+import { noteUse, recalled, recollect } from '../src/server/engine/recall';
 import { MockProvider } from '../src/server/providers/mock';
-import type { AgentRequest, AgentResult, PlanJob, PlanOutcome, StructuredRequest } from '../src/server/providers/types';
-import { DEFAULT_SETTINGS, sanitiseSettings } from '../src/server/engine/state';
+import { ProviderError, type AgentRequest, type AgentResult, type PlanJob, type PlanOutcome, type StructuredRequest } from '../src/server/providers/types';
+import { DEFAULT_SETTINGS, normaliseLoaded, sanitiseSettings } from '../src/server/engine/state';
 import type { BoardReport, Decision, OrgSettings, Plan } from '../src/shared/types';
 import { QUIET, harness, runToRest, type Harness } from './helpers';
 
@@ -441,6 +444,52 @@ describe('in an organisation', () => {
     for (const kind of ['phase_review', 'report', 'react']) expect(provider.asked.filter((ask) => ask.kind === kind).every((ask) => !ask.prompt.includes(MEMORY)), kind).toBe(true);
     expect(provider.asked.some((ask) => ask.kind === 'kickoff' && ask.cycle === 5 && ask.prompt.includes(MEMORY))).toBe(true);
     expect(provider.asked.some((ask) => ask.kind === 'direct' && ask.cycle === 5 && ask.prompt.includes(MEMORY))).toBe(true);
+
+    // What a lead was shown is on record for a person to see, as it was shown: the same items in the same order, once for each step.
+    const uses = h.org.memoryUses!;
+    expect(uses.length).toBeGreaterThan(5);
+    expect(uses.length).toBeLessThanOrEqual(30);
+    const planned = uses.filter((use) => use.by === 'shown' && use.seatId === 'cto' && use.cycle === 5 && use.about === 'Drafting a plan');
+    expect(planned).toHaveLength(1);
+    expect(planned[0]!.items.map((item) => item.id)).toEqual(lines.map((line) => /\[([a-z]+:[a-z]+\d+)\]: /.exec(line)![1]));
+    expect(planned[0]!.items.every((item) => item.cycle !== null && item.cycle < 5 && item.title.length > 0 && item.from.length > 0)).toBe(true);
+    // Every step of the last cycle that was shown something is there, once, and no step that was shown nothing.
+    const shownInFifth = provider.asked.filter((ask) => ask.cycle === 5 && ask.prompt.includes(MEMORY));
+    const notedInFifth = uses.filter((use) => use.by === 'shown' && use.cycle === 5);
+    expect(notedInFifth).toHaveLength(shownInFifth.length);
+    expect(notedInFifth.map((use) => use.seatId).sort()).toEqual(shownInFifth.map((ask) => ask.seat).sort());
+    const steps = new Set(notedInFifth.map((use) => use.about.replace(/ for .*/, '')));
+    expect([...steps].sort()).toEqual(['Deciding what the shareholders want now', 'Drafting a plan', 'Handing out work']);
+    for (const use of uses) expect(use.items.length, use.about).toBeGreaterThan(0);
+  });
+
+  it('notes what a lead was shown once, however many times the call had to be made, and nothing while there is nothing to show', async () => {
+    class Stumbling extends Watching {
+      stumbled = 0;
+      override async structured<T>(req: StructuredRequest<T>): Promise<T> {
+        if (req.kind === 'plan' && Number(req.context.cycle) === 2 && req.prompt.includes(MEMORY) && this.stumbled < 2) {
+          this.stumbled++;
+          throw new ProviderError('The model is busy.', 'unavailable', true);
+        }
+        return super.structured(req);
+      }
+    }
+    const provider = new Stumbling(QUIET);
+    h = await harness({ provider, settings: { maxCycles: 2 }, executives: [{ profileId: 'engineering', agentCount: 1 }] });
+    await runToRest(h.runner, 50_000);
+    // The lead was shown the same passages three times over, and answered once.
+    expect(provider.stumbled).toBe(2);
+    const planned = h.org.memoryUses!.filter((use) => use.by === 'shown' && use.about === 'Drafting a plan');
+    expect(planned).toHaveLength(1);
+    expect(planned[0]).toMatchObject({ cycle: 2, seatId: 'cto' });
+    // And what is noted is what it was shown the last time, not all three times together.
+    const ids = planned[0]!.items.map((item) => item.id);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids.length).toBeLessThanOrEqual(6);
+    expect(new Set(ids).size).toBe(ids.length);
+    // In the first cycle nothing was shown, so nothing was noted.
+    expect(h.org.memoryUses!.length).toBeGreaterThan(1);
+    expect(h.org.memoryUses!.every((use) => use.cycle === 2)).toBe(true);
   });
 
   it('gives every agent a tool to search the memory with, which finds what was reported in a cycle long archived', async () => {
@@ -465,6 +514,24 @@ describe('in an organisation', () => {
     expect(files.found[0]).toMatchObject({ id: expect.stringMatching(/^file:engineering\//), file: expect.stringMatching(/^engineering\/p\d+\/.+\.md$/) });
     const [stopped] = memoryTools(h.runner.memory, (id) => id, () => false);
     expect(JSON.parse(await stopped!.run({ action: 'search', query: 'release' }))).toEqual({ error: 'This task is no longer active.' });
+
+    // The agent's search is on record for a person to see: whose agent looked, for what, and what it found.
+    const searched = h.org.memoryUses!.filter((use) => use.by === 'agent');
+    expect(searched).toHaveLength(provider.recalledByAgents.length);
+    expect(searched[0]).toEqual({ at: expect.any(String), cycle: 5, seatId: 'cto', by: 'agent', about: 'release notes and handover instructions delivered', items: found.found.map((item) => expect.objectContaining({ id: item.id, kind: 'report', from: 'cto' })) });
+    // Every search that was made is told of, whatever it found. What was not a search, or could not be made, is not.
+    const told: Array<[string, number]> = [];
+    const [noting] = memoryTools(h.runner.memory, (id) => id, () => true, (query, hits) => told.push([query, hits.length]));
+    await noting!.run({ action: 'search', query: 'giraffes' });
+    await noting!.run({ action: 'search', query: '  ' });
+    await noting!.run({ action: 'search', query: 'release', kind: 'gossip' });
+    await noting!.run({ action: 'read', id: found.found[0]!.id });
+    await noting!.run({ action: 'search', query: '  release notes  ', kind: 'report' });
+    expect(told).toEqual([['giraffes', 0], ['release notes', expect.any(Number)]]);
+    expect(told[1]![1]).toBeGreaterThan(0);
+    const [idle] = memoryTools(h.runner.memory, (id) => id, () => false, () => told.push(['never', 0]));
+    await idle!.run({ action: 'search', query: 'release' });
+    expect(told).toHaveLength(2);
   });
 
   it('shows the board what was ruled before on a matter that comes up again', async () => {
@@ -592,5 +659,95 @@ describe('in an organisation', () => {
     expect(block(last)).toContain('You can read any of these in full with recall, by the id in brackets.');
     expect(block(last)).not.toContain('An agent can read');
     expect(last.indexOf(MEMORY)).toBeLessThan(last.indexOf('# Business'));
+    // What each new session's lead was told at its start is on record, once for each session, as it was told.
+    const told = h.org.memoryUses!.filter((use) => use.about === 'Starting the plan in a hosted session');
+    expect(told.map((use) => [use.by, use.seatId, use.cycle])).toEqual(provider.kickoffs.filter((kickoff) => kickoff.message.includes(MEMORY)).map((kickoff) => ['shown', 'cto', kickoff.cycle]));
+    expect(told.at(-1)!.items.map((item) => item.id)).toEqual(block(last).split('\n').filter((line) => line.startsWith('- ')).map((line) => /\[([a-z]+:[^\]]+)\]: /.exec(line)![1]));
+  });
+});
+
+describe('the memory at work', () => {
+  const item = (n: number): MemoryItem => ({ id: 'report:r' + n, kind: 'report', cycle: 1, at: '2026-01-01T00:00:00.000Z', from: 'cto', title: 'Report ' + n });
+  const file: MemoryItem = { id: 'file:ops/suppliers.md#1', kind: 'file', cycle: null, at: '2026-01-03T00:00:00.000Z', from: '', title: 'ops/suppliers.md', path: 'ops/suppliers.md' };
+
+  it('keeps the latest uses and no more, each cut to what a page can show', async () => {
+    const { org } = await organisation();
+    for (let n = 0; n < 35; n++) noteUse(org, 'cto', 'shown', 'Drafting a plan ' + n, [item(n)]);
+    expect(org.memoryUses).toHaveLength(30);
+    expect(org.memoryUses![0]!.about).toBe('Drafting a plan 5');
+    expect(org.memoryUses!.at(-1)).toEqual({ at: expect.any(String), cycle: org.cycle.number, seatId: 'cto', by: 'shown', about: 'Drafting a plan 34', items: [{ id: 'report:r34', kind: 'report', cycle: 1, title: 'Report 34', from: 'cto' }] });
+    // What was searched for is kept on one line and to a length, and no more of what was found than a search gives.
+    noteUse(org, 'cmo', 'agent', 'pots\n  and   pans ' + 'x'.repeat(500), [...Array.from({ length: 12 }, (_, n) => item(n)), file]);
+    const long = org.memoryUses!.at(-1)!;
+    expect(long.about).toHaveLength(300);
+    expect(long.about.startsWith('pots and pans xxx')).toBe(true);
+    expect(long.items.map((kept) => kept.id)).toEqual(Array.from({ length: 8 }, (_, n) => 'report:r' + n));
+    // A file keeps where it is, so that it can be opened. A search that found nothing is a use all the same.
+    noteUse(org, 'cto', 'lead', 'suppliers', [file, { ...item(1), title: 'A title\nover two lines ' + 'y'.repeat(400) }]);
+    noteUse(org, 'cto', 'agent', 'giraffes', []);
+    expect(org.memoryUses!.at(-2)!.items).toEqual([{ id: 'file:ops/suppliers.md#1', kind: 'file', cycle: null, title: 'ops/suppliers.md', from: '', path: 'ops/suppliers.md' }, expect.objectContaining({ id: 'report:r1', title: expect.stringMatching(/^A title over two lines y+$/) })]);
+    expect(org.memoryUses!.at(-2)!.items[1]!.title).toHaveLength(200);
+    expect(org.memoryUses!.at(-1)).toMatchObject({ by: 'agent', about: 'giraffes', items: [] });
+    expect(org.memoryUses).toHaveLength(30);
+  });
+
+  it('gives what was shown along with the words of it, and loads an organisation saved before uses were noted', async () => {
+    const { org, memory } = await organisation();
+    org.cycle.number = 3;
+    org.reports.push(report('r1', 1, 'cto', 'Supplier of pots chosen', 'Potworks will supply terracotta pots at forty pence each.'));
+    const given = await recollect(org, memory, 'Which supplier of terracotta pots do we use?');
+    expect(given.text).toContain('- Cycle 1 · CTO report to the board “Supplier of pots chosen” [report:r1]: ');
+    expect(given.items.map((hit) => hit.id)).toEqual(['report:r1']);
+    expect(await recalled(org, memory, 'Which supplier of terracotta pots do we use?')).toBe(given.text);
+    // Nothing to say is nothing shown.
+    expect(await recollect(org, memory, 'giraffes')).toEqual({ text: '', items: [] });
+    org.settings.recall = false;
+    expect(await recollect(org, memory, 'Which supplier of terracotta pots do we use?')).toEqual({ text: '', items: [] });
+
+    const saved = JSON.parse(JSON.stringify(org)) as typeof org;
+    delete saved.memoryUses;
+    expect(normaliseLoaded(saved).memoryUses).toEqual([]);
+    saved.memoryUses = Array.from({ length: 40 }, (_, n) => ({ at: '2026-01-01T00:00:00.000Z', cycle: 1, seatId: 'cto', by: 'shown' as const, about: String(n), items: [] }));
+    expect(normaliseLoaded(saved).memoryUses!.map((use) => use.about)).toEqual(Array.from({ length: 30 }, (_, n) => String(n + 10)));
+    (saved as { memoryUses: unknown }).memoryUses = 'not a list';
+    expect(normaliseLoaded(saved).memoryUses).toEqual([]);
+  });
+
+  it('says on the page why nothing has been put to use yet, which is not the same in a first cycle', async () => {
+    const { org } = await organisation();
+    const page = () => renderToStaticMarkup(createElement(MemoryUses, { org, onOpenFile: () => {} }));
+    expect(page()).toContain('<section class="memory-uses" aria-label="The memory at work"><h3>The memory at work</h3><p class="muted">Nothing yet. A lead is shown what earlier cycles left, and what the files in the workspace say, on the matter it is about to decide. This organisation is in its first cycle, so there is little to show one. What an agent searches for is listed here too, when one does.</p></section>');
+    org.cycle.number = 4;
+    expect(page()).toContain('Nothing yet. A lead is shown passages only where the record shares enough with the matter it is about to decide. What an agent searches for is listed here too, when one does.');
+    expect(page()).not.toContain('first cycle');
+    org.settings.recall = false;
+    expect(page()).toContain('Nothing yet. Leads are not being shown any of it: that is switched off in the settings. What an agent searches for is listed here too, when one does.');
+    // An organisation saved before any of this has none, and says the same.
+    delete org.memoryUses;
+    expect(page()).toContain('Nothing yet.');
+  });
+
+  it('lists on the page what each lead was shown and what was searched for, newest first, as words', async () => {
+    const { org } = await organisation();
+    org.cycle.number = 3;
+    noteUse(org, 'cto', 'shown', 'Drafting a plan', [{ ...item(1), title: 'Supplier of pots <img src=x onerror=alert(1)> chosen' }, file]);
+    noteUse(org, 'cmo', 'agent', 'terracotta "pots"', [{ id: 'decision:d1', kind: 'decision', cycle: 2, at: '', from: 'ceo', title: 'One supplier of pots or two' }]);
+    noteUse(org, 'cto', 'lead', 'giraffes', []);
+    const html = renderToStaticMarkup(createElement(MemoryUses, { org, onOpenFile: () => {} }));
+    expect(html).toContain('The latest times it was put to use, newest first: what a lead was shown before it decided, and what was searched for.');
+    // Newest first: the lead's own search that found nothing, the agent's search, then what the lead was shown.
+    const order = ['searched by the CTO · cycle 3', 'searched by an agent · cycle 3', 'shown to the CTO · cycle 3'].map((kind) => html.indexOf(kind));
+    expect(order.every((at) => at > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html).toContain('<h3>“giraffes”</h3>');
+    expect(html).toContain('<p class="muted">It found nothing.</p>');
+    expect(html).toContain('<h3>“terracotta &quot;pots&quot;”</h3>');
+    expect(html).toContain('<li><span class="muted">decision · cycle 2</span> <button type="button" class="link" aria-expanded="false">One supplier of pots or two</button></li>');
+    // What a step was is said as it is, and each thing shown says what it is and when it was. A file is opened where files are.
+    expect(html).toContain('<h3>Drafting a plan</h3>');
+    expect(html).toContain('<li><span class="muted">report to the board · cycle 1</span> <button type="button" class="link" aria-expanded="false">Supplier of pots &lt;img src=x onerror=alert(1)&gt; chosen</button></li>');
+    expect(html).toContain('<li><span class="muted">file</span> <button type="button" class="link"><code>ops/suppliers.md</code></button></li>');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('Nothing yet.');
   });
 });

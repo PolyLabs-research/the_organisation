@@ -560,6 +560,18 @@ input[type='radio'] {
   color: var(--warn);
 }
 
+.tag-ok {
+  background: var(--ok-soft);
+  border-color: var(--ok-line);
+  color: var(--ok);
+}
+
+.tag-bad {
+  background: var(--bad-soft);
+  border-color: var(--bad-line);
+  color: var(--bad);
+}
+
 .status {
   display: inline-flex;
   align-items: center;
@@ -1753,6 +1765,38 @@ input[type='radio'] {
   font-size: 13px;
 }
 
+/* What a task ran in the sandbox: the command as it was given, and how it ended. */
+.runs {
+  display: grid;
+  gap: 5px;
+  margin: 0 0 4px;
+}
+
+.runs li {
+  display: grid;
+  gap: 1px;
+  padding: 5px 9px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-2);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 12.5px;
+}
+
+.runs li.run-ok {
+  border-left-color: var(--ok);
+}
+
+.runs li.run-bad {
+  border-left-color: var(--bad);
+}
+
+.runs code {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .file-links {
   display: grid;
   gap: 3px;
@@ -2042,6 +2086,42 @@ input[type='radio'] {
   display: grid;
   gap: 8px;
   max-width: 78ch;
+}
+
+/* The memory at work: what leads were shown and what was searched for, under what the memory says of itself. */
+.memory-uses {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.memory-uses > h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.memory-used {
+  display: grid;
+  gap: 3px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.memory-used .link {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.memory-whole {
+  margin: 4px 0 6px;
+  padding: 6px 9px;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 13px;
 }
 
 /* Where a seat's badge stands on the board, for what came from no seat. */
@@ -2825,6 +2905,13 @@ a.provider:hover {
   .privileges-table thead th:first-child, .privileges-table th[scope='row'] { width: 11rem; min-width: 11rem; }
 }
 
+/* What a phase is held to where the system proves it by running something: the command as the lead wrote it. */
+.phase-check { display: grid; gap: 2px; margin: .35rem 0 .5rem; font-size: 12.5px; }
+.phase-check code, .gate-checks code { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gate-output { margin-top: .45rem; font-size: .85rem; }
+.gate-output summary { cursor: pointer; color: var(--ink-2); }
+.gate-output pre { margin: .35rem 0 0; padding: .5rem .6rem; max-height: 18rem; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-family: var(--mono); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* What the system found at a gate, set apart from what the lead wrote about it. */
 .gate-evidence { margin-top: .6rem; padding: .6rem .75rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .gate-evidence p { margin: .2rem 0 0; }
@@ -3283,3 +3370,1387 @@ a.provider:hover {
 .sev-warning .finding-icon { color: var(--viz-warning); }
 .sev-info .finding-icon { color: var(--ink-3); }
 .sev-good .finding-icon { color: var(--ok); }
+
+/* ---- headquarters ---- */
+
+/* The headquarters has the whole width of the page: the hierarchy that stands beside the other tabs is what it draws. */
+.org-body-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tab-panel-flush {
+  padding: 0;
+}
+
+.clamp-3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.hq {
+  /* What is at work is in the accent. The three below say how a thing stands, here as everywhere, and never whose it is. */
+  --hq-good: #0ca30c;
+  --hq-warning: #fab219;
+  --hq-critical: #d03b3b;
+  --hq-ground: #eceef3;
+  --hq-dot: #d3d7e0;
+  --hq-slab: #ffffff;
+  --hq-slab-lip: #c5cad6;
+  --hq-hall: #eff1f6;
+  --hq-idle: #c3c8d3;
+  --hq-desk: #e3e6ec;
+  --hq-desk-edge: #b9bfcc;
+  --hq-shade: rgb(15 20 40 / 0.1);
+  /* A room is in its seat's colour: faint on the floor, stronger on the walls, strongest on whoever is at work in it. */
+  --hq-floor: 55% 97.5%;
+  --hq-band: 62% 92%;
+  --hq-wall: 34% 62%;
+  --hq-lip: 28% 74%;
+  --hq-busy: 58% 46%;
+  --hq-rest: 24% 74%;
+  --hq-badge: 55% 40%;
+  --hq-badge-ink: #ffffff;
+  --hq-mark: 42% 40%;
+  --hq-table: 26% 88%;
+  --hq-table-lip: 24% 74%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .hq {
+    --hq-ground: #101319;
+    --hq-dot: #232832;
+    --hq-slab: #191d25;
+    --hq-slab-lip: #07080b;
+    --hq-hall: #12151b;
+    --hq-idle: #4b5262;
+    --hq-desk: #343a47;
+    --hq-desk-edge: #232833;
+    --hq-shade: rgb(0 0 0 / 0.35);
+    --hq-floor: 24% 15%;
+    --hq-band: 32% 22%;
+    --hq-wall: 30% 42%;
+    --hq-lip: 30% 9%;
+    --hq-busy: 62% 66%;
+    --hq-rest: 18% 38%;
+    --hq-badge: 50% 64%;
+    --hq-badge-ink: #0e1015;
+    --hq-mark: 45% 72%;
+    --hq-table: 22% 26%;
+    --hq-table-lip: 24% 12%;
+  }
+}
+
+.hq.is-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: var(--surface);
+}
+
+.hq-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.hq-run {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 460px;
+  padding-right: 16px;
+  border-right: 1px solid var(--line);
+}
+
+/* Along the top, as on the bar of a game: what needs a person first, then what there is of each thing, then how fast it goes. */
+.hq-alarms {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hq-alarm {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 4px 11px 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-2);
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hq-alarm strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.hq-alarm:hover {
+  border-color: var(--line-strong);
+}
+
+.hq-alarm.is-on.is-you {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.hq-alarm.is-on.is-trouble {
+  border-color: var(--bad-line);
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.hq-alarm.is-on strong {
+  color: inherit;
+}
+
+.hq-tiles {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px 0;
+  min-width: 0;
+}
+
+.hq-tile {
+  display: grid;
+  align-content: center;
+  padding: 0 13px;
+  border-left: 1px solid var(--line);
+}
+
+.hq-tile dt {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.hq-tile dd {
+  position: relative;
+  font-size: 15.5px;
+  font-weight: 650;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.hq-tile-of {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.hq-bar .pace {
+  align-content: center;
+  padding-left: 15px;
+  border-left: 1px solid var(--line);
+}
+
+.hq-bar .pace .field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+}
+
+.hq-bar > .tag {
+  align-self: center;
+}
+
+/* How far through: the part done in the accent, on a lighter step of the same colour. */
+.hq-meter {
+  display: block;
+  height: 4px;
+  margin-top: 1px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--accent-soft);
+}
+
+.hq-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* A budget that is spent is trouble, and so is its whole bar. */
+.hq-meter.is-full {
+  background: var(--bad-soft);
+}
+
+.hq-meter.is-full > span {
+  background: var(--hq-critical);
+}
+
+.hq-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 352px;
+  height: var(--hq-height, 560px);
+  min-height: 420px;
+}
+
+.hq.is-expanded .hq-stage {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.hq-map {
+  position: relative;
+  overflow: hidden;
+  background: var(--hq-ground);
+  cursor: grab;
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.hq-map.is-dragging {
+  cursor: grabbing;
+}
+
+.hq-map:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.hq-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.hq-svg text {
+  font-family: var(--font);
+  pointer-events: none;
+}
+
+.hq-t1 {
+  fill: var(--ink);
+}
+
+.hq-t2 {
+  fill: var(--ink-2);
+}
+
+.hq-t3 {
+  fill: var(--ink-3);
+}
+
+.hq-strong {
+  font-weight: 650;
+}
+
+.hq-dot {
+  fill: var(--hq-dot);
+}
+
+.hq-shadow {
+  fill: var(--hq-shade);
+}
+
+.hq-slab {
+  fill: var(--hq-slab);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.hq-slab-lip {
+  fill: var(--hq-slab-lip);
+}
+
+.hq-hall {
+  fill: var(--hq-hall);
+}
+
+.hq-room {
+  --h: 220;
+  cursor: pointer;
+  outline: none;
+}
+
+.hq-floor {
+  fill: hsl(var(--h) var(--hq-floor));
+}
+
+.hq-lip {
+  fill: hsl(var(--h) var(--hq-lip));
+}
+
+.hq-band {
+  fill: hsl(var(--h) var(--hq-band));
+}
+
+.hq-wall {
+  fill: none;
+  stroke: hsl(var(--h) var(--hq-wall));
+  stroke-width: 1.5;
+}
+
+.hq-room:hover > .hq-wall {
+  stroke-width: 2.5;
+}
+
+.hq-room.is-selected > .hq-wall {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.hq-room:focus-visible > .hq-wall {
+  stroke: var(--accent);
+  stroke-width: 3.5;
+}
+
+.hq-door {
+  fill: var(--hq-hall);
+}
+
+.hq-title {
+  fill: var(--ink);
+  font-weight: 650;
+}
+
+.hq-badge {
+  fill: hsl(var(--h) var(--hq-badge));
+}
+
+.hq-badge-text {
+  fill: var(--hq-badge-ink);
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.hq-band-icon {
+  color: hsl(var(--h) var(--hq-badge));
+}
+
+.hq-room-icon {
+  color: hsl(var(--h) var(--hq-wall));
+}
+
+.hq-lamp-working circle {
+  fill: var(--accent);
+}
+
+.hq-lamp-working .hq-lamp-ring {
+  opacity: 0.28;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.hq-lamp-waiting {
+  color: var(--ink-3);
+}
+
+.hq-lamp-done {
+  color: var(--ok);
+}
+
+/* Whoever is at a desk: grey with nothing to do, in the room's colour at work. A lead keeps a little of its colour at rest. */
+.hq-person path,
+.hq-person circle {
+  fill: var(--hq-idle);
+}
+
+.hq-person.is-lead path,
+.hq-person.is-lead circle {
+  fill: hsl(var(--h) var(--hq-rest));
+}
+
+.hq-person.is-busy path,
+.hq-person.is-busy circle {
+  fill: hsl(var(--h) var(--hq-busy));
+}
+
+.hq-desk-top {
+  fill: var(--hq-desk);
+}
+
+.hq-desk-lip,
+.hq-screen {
+  fill: var(--hq-desk-edge);
+}
+
+.hq-screen.is-busy {
+  fill: var(--accent);
+}
+
+.hq-hit {
+  fill: transparent;
+}
+
+.is-pressable {
+  cursor: pointer;
+}
+
+.is-pressable:hover > .hq-hit {
+  fill: hsl(var(--h) 50% 50% / 0.1);
+}
+
+.hq-chosen {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.hq-bubble rect {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.hq-bubble path {
+  fill: var(--line-strong);
+}
+
+.hq-bubble.is-live rect {
+  stroke: var(--accent);
+}
+
+.hq-bubble.is-live path {
+  fill: var(--accent);
+}
+
+/* A plan as the line of its phases. One under way is a ring that fills as its tasks come in. */
+.hq-rail {
+  stroke: var(--line-strong);
+  stroke-width: 2;
+}
+
+.hq-rail.is-done {
+  stroke: var(--hq-good);
+}
+
+.hq-station-disc {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1.75;
+}
+
+.hq-station.is-working .hq-station-disc {
+  stroke: color-mix(in srgb, var(--accent) 28%, var(--surface));
+  stroke-width: 3;
+}
+
+.hq-station-share {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.hq-station-core {
+  fill: var(--accent);
+}
+
+.hq-station.is-done .hq-station-disc {
+  fill: var(--hq-good);
+  stroke: var(--hq-good);
+}
+
+.hq-station.is-failed .hq-station-disc {
+  fill: var(--hq-critical);
+  stroke: var(--hq-critical);
+  stroke-width: 1.75;
+}
+
+.hq-station-glyph {
+  color: #ffffff;
+}
+
+.hq-track.is-empty {
+  opacity: 0.6;
+}
+
+.hq-gate {
+  color: var(--ink-3);
+}
+
+.hq-gate circle {
+  fill: var(--surface);
+  stroke: currentColor;
+  stroke-width: 1;
+}
+
+.hq-gate.is-passed {
+  color: var(--ok);
+}
+
+.hq-gate.is-failed {
+  color: var(--bad);
+}
+
+.hq-gate.is-waiting {
+  color: var(--warn);
+}
+
+.hq-table {
+  fill: hsl(var(--h) var(--hq-table));
+  stroke: hsl(var(--h) var(--hq-wall));
+  stroke-width: 1;
+}
+
+.hq-table-lip {
+  fill: hsl(var(--h) var(--hq-table-lip));
+}
+
+.hq-sheet {
+  fill: #ffffff;
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.hq-sheet-lines {
+  fill: none;
+  stroke: #747b8c;
+  stroke-width: 1;
+}
+
+.hq-paper.is-selected .hq-sheet {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.hq-mark {
+  color: var(--ink-2);
+}
+
+.hq-mark circle {
+  fill: var(--surface);
+  stroke: currentColor;
+  stroke-width: 1;
+}
+
+.hq-mark.is-for {
+  color: var(--ok);
+}
+
+.hq-mark.is-against {
+  color: var(--bad);
+}
+
+.hq-mark.is-awaited {
+  color: var(--ink-3);
+}
+
+.hq-steps circle {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+
+.hq-steps .is-done circle {
+  fill: var(--line-strong);
+}
+
+.hq-steps .is-current circle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+
+/* What a room needs of a person, and what has gone wrong in it, pinned to its corner at the same size from any distance. */
+.hq-pin rect {
+  stroke: var(--hq-slab);
+  stroke-width: 1.5;
+}
+
+.hq-pin text {
+  font-weight: 750;
+}
+
+.hq-pin-you {
+  color: #0b0b0b;
+}
+
+.hq-pin-you rect {
+  fill: var(--hq-warning);
+}
+
+.hq-pin-you text {
+  fill: #0b0b0b;
+}
+
+.hq-pin-trouble {
+  color: #ffffff;
+}
+
+.hq-pin-trouble rect {
+  fill: var(--hq-critical);
+}
+
+.hq-pin-trouble text {
+  fill: #ffffff;
+}
+
+/* Where something has just happened: a ring that widens from the room's walls and is gone. */
+.hq-flash {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0;
+  pointer-events: none;
+  animation: hq-flash 2.2s ease-out 1;
+}
+
+@keyframes hq-flash {
+  0% {
+    opacity: 0.85;
+    stroke-width: 2;
+  }
+  100% {
+    opacity: 0;
+    stroke-width: 22;
+  }
+}
+
+/* What is on its way between rooms: dots that march while it is being worked on, dashes while it stands. */
+.hq-flow {
+  cursor: pointer;
+}
+
+.hq-flow-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+}
+
+.hq-flow-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hq-flow:hover .hq-flow-line {
+  stroke-width: 3.25;
+}
+
+.hq-flow.is-moving .hq-flow-line {
+  stroke: var(--accent);
+  stroke-dasharray: 1 7;
+}
+
+.hq-flow.is-waiting .hq-flow-line {
+  stroke: var(--ink-3);
+  stroke-dasharray: 6 5;
+}
+
+/* What stands until a person acts is a longer dash and a dot, so that it is told from the rest by more than its colour. */
+.hq-flow.is-you .hq-flow-line {
+  stroke: var(--warn);
+  stroke-width: 2.25;
+  stroke-dasharray: 9 4 1 4;
+}
+
+.hq-flow-dot {
+  fill: var(--accent);
+  offset-rotate: 0deg;
+  offset-distance: 50%;
+}
+
+.hq-arrow.is-moving path {
+  fill: var(--accent);
+}
+
+.hq-arrow.is-waiting path {
+  fill: var(--ink-3);
+}
+
+.hq-arrow.is-you path {
+  fill: var(--warn);
+}
+
+.hq-map.is-live .hq-lamp-ring {
+  animation: hq-ring 1.7s ease-out infinite;
+}
+
+.hq-map.is-live .hq-screen.is-busy,
+.hq-map.is-live .hq-station-core.is-live {
+  animation: hq-glow 1.5s ease-in-out infinite;
+}
+
+.hq-map.is-live .hq-flow.is-moving .hq-flow-line {
+  animation: hq-march 0.8s linear infinite;
+}
+
+.hq-map.is-live .hq-flow-dot {
+  animation: hq-travel 2.8s linear infinite;
+}
+
+@keyframes hq-ring {
+  from {
+    opacity: 0.5;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+}
+
+@keyframes hq-glow {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes hq-march {
+  to {
+    stroke-dashoffset: -8;
+  }
+}
+
+@keyframes hq-travel {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hq-map.is-live .hq-lamp-ring,
+  .hq-map.is-live .hq-screen.is-busy,
+  .hq-map.is-live .hq-station-core.is-live,
+  .hq-map.is-live .hq-flow.is-moving .hq-flow-line,
+  .hq-map.is-live .hq-flow-dot,
+  .hq-flash {
+    animation: none;
+  }
+}
+
+/* What lies over the map: its controls, the key to its marks, and the whole building in small. */
+.hq-overlay {
+  position: absolute;
+  z-index: 2;
+  cursor: default;
+}
+
+.hq-controls {
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hq-levels {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.hq-levels button {
+  min-height: 28px;
+  padding: 4px 11px;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hq-levels button + button {
+  border-left: 1px solid var(--line);
+}
+
+.hq-levels button:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.hq-levels button.is-on {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.hq-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.hq-tool:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.hq-tool:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hq-legend {
+  top: 10px;
+  left: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 13px;
+  max-width: calc(100% - 330px);
+  min-height: 30px;
+  align-items: center;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.hq-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.hq-key {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 8px;
+}
+
+.hq-key-working::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.hq-key-waiting {
+  color: var(--ink-3);
+}
+
+.hq-key-line line {
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.hq-key-line.is-moving line {
+  stroke: var(--accent);
+  stroke-dasharray: 1 5;
+}
+
+.hq-key-line.is-waiting line {
+  stroke: var(--ink-3);
+  stroke-dasharray: 5 4;
+}
+
+.hq-key-line.is-you line {
+  stroke: var(--warn);
+  stroke-dasharray: 7 3 1 3;
+}
+
+.hq-key-done {
+  color: var(--ok);
+}
+
+.hq-key-you {
+  background: var(--hq-warning);
+  color: #0b0b0b;
+}
+
+.hq-key-trouble {
+  background: var(--hq-critical);
+  color: #ffffff;
+}
+
+.hq-mini-wrap {
+  right: 10px;
+  bottom: 10px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  line-height: 0;
+}
+
+.hq-mini {
+  display: block;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.hq-mini-slab {
+  fill: var(--hq-hall);
+  stroke: var(--line);
+}
+
+.hq-mini-room {
+  fill: hsl(var(--h) var(--hq-band));
+  stroke: hsl(var(--h) var(--hq-wall));
+  stroke-width: 0.75;
+}
+
+.hq-mini-room.is-working {
+  fill: hsl(var(--h) var(--hq-busy));
+}
+
+.hq-mini-pin {
+  stroke: var(--surface);
+  stroke-width: 1;
+}
+
+.hq-mini-pin.is-you {
+  fill: var(--hq-warning);
+}
+
+.hq-mini-pin.is-trouble {
+  fill: var(--hq-critical);
+}
+
+.hq-mini-view {
+  fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+/* Beside the map. */
+.hq-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.hq-panel-head {
+  display: grid;
+  gap: 3px;
+  padding: 11px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.hq-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  justify-self: start;
+  font-size: 12.5px;
+}
+
+.hq-panel-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hq-panel-title h2 {
+  font-size: 15px;
+}
+
+.hq-panel-body {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: 13px;
+  min-height: 0;
+  padding: 12px 14px 18px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.hq-section {
+  display: grid;
+  gap: 6px;
+}
+
+.hq-section > h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.hq-list {
+  display: grid;
+  gap: 1px;
+}
+
+.hq-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.hq-item {
+  cursor: pointer;
+}
+
+button.hq-item:hover {
+  background: var(--surface-2);
+}
+
+.hq-item > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.hq-item-name {
+  flex: none;
+  font-weight: 600;
+}
+
+.hq-item.is-trouble {
+  color: var(--bad);
+}
+
+.hq-kind {
+  flex: none;
+  font-size: 11px;
+  white-space: nowrap;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.hq-alerts {
+  display: grid;
+  gap: 7px;
+}
+
+.hq-alert {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.hq-alert > svg {
+  margin-top: 2px;
+  color: var(--ink-3);
+}
+
+.hq-alert.is-you {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+}
+
+.hq-alert.is-you > svg {
+  color: var(--warn);
+}
+
+.hq-alert.is-trouble {
+  border-color: var(--bad-line);
+  background: var(--bad-soft);
+}
+
+.hq-alert.is-trouble > svg {
+  color: var(--bad);
+}
+
+.hq-alert .link {
+  margin-top: 4px;
+}
+
+.hq-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.hq-state-lamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.hq-state.is-working .hq-state-lamp {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.hq-state.is-done .hq-state-lamp {
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.hq-facts {
+  display: grid;
+  gap: 4px;
+}
+
+.hq-facts > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hq-facts dt {
+  color: var(--ink-3);
+}
+
+.hq-plain {
+  display: grid;
+  gap: 4px;
+  padding-left: 17px;
+  list-style: disc;
+}
+
+.hq-numbered {
+  list-style: decimal;
+}
+
+.hq-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.hq-stack > li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.hq-long {
+  max-height: 240px;
+  padding-right: 4px;
+  overflow-y: auto;
+}
+
+.hq-lede {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.hq-lede > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.hq-code,
+.hq-path {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.hq-code {
+  display: block;
+  margin-top: 4px;
+}
+
+.hq-next {
+  font-size: 12.5px;
+}
+
+.hq-panel .tier {
+  padding: 11px 12px;
+}
+
+/* Beneath the map: the latest of what was said and done. */
+.hq-ticker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.hq-ticker-name {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink-2);
+}
+
+.hq-ticker ol {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hq-ticker li {
+  flex: none;
+}
+
+.hq-ticker > .link {
+  flex: none;
+  font-size: 12.5px;
+}
+
+.hq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 330px;
+  min-height: 28px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.hq-chip:hover {
+  border-color: var(--line-strong);
+}
+
+.hq-chip time {
+  flex: none;
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.hq-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hq-chip.is-trouble {
+  border-color: var(--bad-line);
+  background: var(--bad-soft);
+}
+
+@media (max-width: 1100px) {
+  .hq-stage {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .hq-map {
+    height: 62vh;
+    min-height: 380px;
+  }
+
+  .hq-panel {
+    max-height: 70vh;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .hq.is-expanded .hq-stage {
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+  }
+
+  .hq.is-expanded .hq-map {
+    height: auto;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .hq-bar {
+    gap: 10px;
+  }
+
+  .hq-tiles {
+    display: grid;
+    flex-basis: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 9px 0;
+  }
+
+  .hq-tile {
+    padding: 0 10px;
+    overflow: hidden;
+  }
+
+  .hq-tile:nth-child(3n + 1) {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .hq-bar .pace {
+    flex-basis: 100%;
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  /* A narrow screen shows the building small, and has no need of a tall map to do it in. */
+  .hq-map {
+    height: min(62vh, 92vw);
+    min-height: 300px;
+  }
+
+  .hq-legend {
+    display: none;
+  }
+
+  .hq-levels button {
+    padding: 4px 8px;
+  }
+}
+
+/* With the headquarters there is one tab more. On a window of a laptop's width they are set a little closer, and still fit in one row. */
+@media (min-width: 1001px) and (max-width: 1380px) {
+  .tabs {
+    gap: 0;
+  }
+
+  .tabs button {
+    padding-inline: 9px;
+  }
+}

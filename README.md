@@ -28,11 +28,12 @@ It runs on **Claude, GPT, Gemini, DeepSeek, Qwen, Kimi and anything on OpenRoute
 - **A person holds the purse.** Agents can draft a contract and choose a supplier, but paying and signing are for the Authorised Signatory, and a person does those, outside the program. The organisation asks, gets on with other work, and treats nothing as paid until you say it is.
 - **Each role gets only what you give it.** A Privileges panel sets what each role and its agents may do: search, change records, ask the signatory, read mail, draft mail, sign in, act on accounts, create accounts. Each switch is enforced in code where the thing is done, not by asking the model, and acting on an outside service is off until you turn it on for a role.
 - **It can work on real code.** Connect a GitHub repository and agents get a branch of their own for each plan. They commit, start builds on GitHub's machines, read the results and open a pull request. A gate reads the checks itself and will not pass on an agent's say-so. A person merges.
+- **It can run what it writes.** A role you allow runs commands in a sandbox on this machine: a container with a copy of the workspace, no network unless you open it, and no way to the rest of the machine. Tests are run, not described, and the system's own record of each command and how it ended is what a lead reads at the gate. A plan can go further and have a gate the system checks by running the tests itself.
 - **It can use the tools you already have.** Connect a server that speaks the Model Context Protocol (MCP), such as an issue tracker's, a database's or one of your own, and choose which of its tools a team's agents may call. Nothing is allowed until you tick it, the token stays in the vault, and agents are only ever shown a tool as it was described when you allowed it.
 - **Use the models you have, or none.** Claude, GPT, Gemini, Muse, Kimi, DeepSeek, Qwen, GLM, Hunyuan, MiniMax, Doubao, and anything on OpenRouter, with executives on one model and agents on another if you like. Any OpenAI-compatible endpoint works too, so a model on your own machine (llama.cpp, Ollama, LM Studio, vLLM) can do the work. And with no API key at all it can run on the Claude Code you already have, on your own subscription login.
 - **Try it in a minute, for nothing.** With nothing connected it runs in simulation: every seat gives a scripted answer, the whole loop turns, and every control works.
 - **Go at your own pace.** Run it at full speed, one call at a time, with a pause after each to read what happened, or one step at a time on a **Next step** button, and change pace while it runs.
-- **See everything.** A web interface shows the hierarchy and who is busy with what, the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
+- **See it from above, and as closely as you like.** An organisation opens on its headquarters: a map with a room for every seat and a desk for every agent, lit where work is being done, with what is on its way drawn between the rooms and what needs you pinned where it is. Look closer and the map says what each agent is doing; press anything and what was written there is beside it. Behind it are the tabs with the whole of everything: the board feed, every plan with its tasks and gate reviews, every decision, the files the agents write, and what each call cost.
 
 ## What you can use it for
 
@@ -136,9 +137,10 @@ This is early software, and the README says plainly what has been run for real a
 | Hosted sessions (Claude Managed Agents) | Built, and tested against a stand-in for the API. Not yet run for real. |
 | Email and service accounts | Tested with stand-ins and a real local Chrome. No real mailbox, Google sign-in or outside account has been used. |
 | GitHub repositories | Reads checked against the real API on a public repository, without a token. Commits, pull requests and workflows tested against a local stand-in only. Nothing has been written to a real repository. |
+| Running code in a sandbox | Tested in real containers on Docker 29 on Linux: every wall and every limit, whole simulated organisations whose agents run commands, and whole plans held to a gate that runs a check. Not tried on Docker Desktop for macOS or Windows, on Podman or on rootless Docker, and no real model has yet decided what to run or which check to name. |
 | Tool servers (MCP) | Tested with the protocol's official client against a real server of the protocol on the same machine, and signing in against an authorisation server built from the protocol's own handlers. No third party's server has been connected, and no real service signed in to. |
 | Memory | Run in simulation and in tests: whole organisations over six cycles, with what the archive holds found again and put in front of the leads. No real model has yet been shown any of it, or chosen for itself when to search. |
-| Tests | More than 900, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes about a minute, and runs on every pull request. |
+| Tests | More than 1,100, among them whole organisations run through the loop, and the dashboard and the account browser driven in a real Chrome. The suite takes a minute or two, and runs on every pull request. |
 
 If you run it on something in the lower rows, start small, with one lead and a small budget, and expect the odd rough edge. A report of what you find is the most useful contribution there is.
 
@@ -149,8 +151,8 @@ If you run it on something in the lower rows, start small, with one lead and a s
 - [How an organisation works](#how-an-organisation-works)
 - [Shared calendar and business operations](#shared-calendar-and-business-operations) and [memory](#memory)
 - [Business email and service accounts](#business-email-and-service-accounts), and [what each role may do](#what-each-role-may-do)
-- [GitHub repositories](#github-repositories), [tool servers](#tool-servers-mcp) and [work approaches](#work-approaches)
-- [The interface](#the-interface)
+- [GitHub repositories](#github-repositories), [tool servers](#tool-servers-mcp), [running code](#running-code) and [work approaches](#work-approaches)
+- [The interface](#the-interface), [the headquarters](#headquarters) and the [Overseer](#overseer)
 - [Signing and paying](#signing-and-paying)
 - [Models and keys](#models-and-keys), and [Claude Code in place of a key](#claude-code-in-place-of-a-key)
 - [Spend and limits](#spend-and-limits), and [lighter tasks on cheaper models](#lighter-tasks-on-cheaper-models)
@@ -211,7 +213,7 @@ The library lives in [`src/shared/profiles.ts`](src/shared/profiles.ts); add or 
 
 **Changing files.** Agents change an existing file with `edit_file`, replacing one exact passage at a time, instead of writing the whole file again. They are asked to keep each work product as short as its purpose allows, and not to write logs, trackers or notes about their own process beside it.
 
-Agents can work in one of two ways, chosen per organisation: **on this machine**, where they read and write files and run nothing, or **in hosted sessions**, where each plan gets a sandbox in which the lead and its agents can run and test what they build. See [Hosted sessions](#hosted-sessions-claude-managed-agents).
+Agents can work in one of two ways, chosen per organisation: **on this machine**, where they read and write files and run code only in a [sandbox](#running-code) their role has been allowed, or **in hosted sessions**, where each plan gets a sandbox in which the lead and its agents can run and test what they build. See [Hosted sessions](#hosted-sessions-claude-managed-agents).
 
 **Reports as triggers.** When a plan has run every phase, the lead reports to the whole board. Each other lead reads the report once their own plan is off their desk and may start follow-up work in their own remit. How many rounds of follow-up one cycle allows is a setting, and no lead starts more than two follow-ups in a cycle; anything further waits for the CEO.
 
@@ -260,6 +262,7 @@ Prompts are kept short on purpose. A lead is shown the cycle it is in and the la
 - **An AI in the signatory's seat** is shown what was asked of the signatory in cycles gone by and what the board ruled, so that a payment asked for a second time is seen for a repeat. It is shown nothing an agent wrote.
 - **Agents** have a `recall` tool: search in a few words, among everything or one kind of thing, and read any result in full. Every role's agents have it, with no privilege to grant: it reads the organisation's own record and nothing outside it, though that record now takes in other teams' task reports (see below).
 - **You** search it under **Memory** on the dashboard: the same search, with the words you asked about marked in what it finds, the whole of any item one click away, and the file or the plan it belongs to another. It says how much it holds, and names any archived cycle it could not read. Steer and business knowledge can be found there too; a lead is not shown those from memory, because they are in front of it already.
+- **You see it at work** in the same place. Before anything is asked, the tab lists the latest thirty times the memory was put to use: what each lead was shown and before which step, and what an agent, or a lead in a hosted session, searched for and found. Each thing listed opens in full. Where nothing is listed it says why: in a first cycle there are no earlier cycles to show a lead anything from.
 
 Showing leads is a setting, **Show leads what the organisation remembers**, on by default, for organisations established before this as well. It adds at most about 1,200 tokens to each of those calls, and usually far fewer. Agents can search whatever it says, and so can you.
 
@@ -304,8 +307,9 @@ The vault normally locks after 30 minutes without use. For scheduled unattended 
 | Start build workflows | **Off** | The tool is not given, and the access service refuses anything not on the repository's list. |
 | Change build pipelines | **Off** | Anything under `.github` is refused in a commit. |
 | Use connected tools | **Off** | The tools are not given, and the access service refuses a call to any tool a person has not allowed as it is described. |
+| Run code in a sandbox | **Off** | The tools are not given, and a command that is running is stopped. See [Running code](#running-code). |
 
-Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account, a repository or a connected tool is stopped and its browser closed. The one thing a change cannot reach is the web access of a hosted session that has already started: a session is given its tools and its network when it starts and keeps them until its plan is over. The board says so when that happens, and pausing the organisation holds the session. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, so only the first three rows mean anything there.
+Only a person can change this, and each change goes on the board. A change holds at once: tools the role no longer has are gone from its next task, every operation checks again, and what the role has under way with email, an account, a repository, a connected tool or a sandbox is stopped and its browser closed. The one thing a change cannot reach is the web access of a hosted session that has already started: a session is given its tools and its network when it starts and keeps them until its plan is over. The board says so when that happens, and pausing the organisation holds the session. An agent is told its limits so that it does not waste its turns, but being told is not what stops it. Hosted sessions cannot reach the vault, and have a sandbox of their own, so only the first three rows mean anything there.
 
 **Without Act on accounts**, a session gets one sign-in, on the page it opened, and from then on the browser refuses any request but GET, HEAD and OPTIONS. That is a limit on the network, so it holds whichever element an agent presses and whatever a page's own scripts try to send. Nothing leaves. The agent is told, and can read on or ask a person for help.
 
@@ -322,7 +326,7 @@ A role that can read mail and also act on accounts or call connected tools is sh
 
 ## GitHub repositories
 
-Connect a repository under **Email & accounts** with a fine-grained token, and assign it to a team. The token goes in the vault, and only ever to GitHub. Each plan gets one branch, which the engine names, so no agent can write anywhere else. There is no way for an agent to merge. Local agents cannot run code, but they can push to that branch and have GitHub Actions build and test it, on any model, and read the result. That is how work gets done outside this machine without giving agents a cloud account.
+Connect a repository under **Email & accounts** with a fine-grained token, and assign it to a team. The token goes in the vault, and only ever to GitHub. Each plan gets one branch, which the engine names, so no agent can write anywhere else. There is no way for an agent to merge. Whether or not they may [run code](#running-code) on this machine, local agents can push to that branch and have GitHub Actions build and test it, on any model, and read the result. That is how work gets done outside this machine without giving agents a cloud account.
 
 Before relying on it, read the [setup and limits](docs/code-repositories.md). In short: protect the main branch on GitHub as well, and remember that code an agent pushes runs in your checks with whatever those checks can reach.
 
@@ -341,6 +345,20 @@ A server that has no token to give and asks you to sign in is signed in to on th
 
 A tool still does whatever its server lets it do, and no person checks each call, so use a narrow token and allow only what the work needs. Servers are reached over HTTP: one that is started as a command on this machine cannot be connected yet. Read the [setup and limits](docs/tool-servers.md) before connecting anything that can change something.
 
+## Running code
+
+On this machine an agent reads and writes files, and whether its code ran or its tests passed used to be whatever it said. A role you allow can now run commands in a **sandbox**: a container on this machine that holds a copy of the workspace. It needs Docker, works with any model provider, and is off for every role until you tick **Run code in a sandbox** under Privileges.
+
+- **A command cannot reach the rest of the machine.** Each one runs in a container of its own, removed when it ends, with no network unless you open it, no capabilities, a system it cannot write to, an ordinary user, and limits on memory, processors, processes, disk and time. No folder of this machine is mounted in it: the workspace goes in as an archive, and a file comes out only when an agent asks for it by name.
+- **The system keeps its own record.** Every command is noted on its task as it ends, with how it ended: the exit code, a time limit reached, a process killed for using too much memory. The lead is shown that record at the phase gate, beside what the agent reported, and is told to go by it. You read the same record on each task under **Plans**.
+- **Nothing an agent writes is ever read by a shell on this machine.** Its command is handed to the container as an argument, the folder is checked to be inside the workspace, and a command that contains a saved password or token is refused.
+- **A gate can run the check itself.** For work that one command can prove, a lead can choose the [Tested build](#work-approaches) approach. It names the command as it hands out the proving phase, and the system runs it in the sandbox when the work is in. The phase passes only if the command exits with 0, whatever the agents reported and however the lead rules.
+- **Taking the privilege away stops what is running.**
+
+With the network closed, which is how it starts, a sandbox has what its image came with: enough to run code that needs only a language's own library. Opening the network lets code install packages, and also lets it reach any site and this machine's own network, and send what it can read anywhere. There is no setting yet that allows package registries alone.
+
+A container is not a virtual machine: it shares this machine's kernel. Read the [guide](docs/code-execution.md) for what confines a command, what does not, and what has been checked. Hosted sessions have a sandbox of their own and are not affected.
+
 ## Work approaches
 
 Every lead has its operating profile. For work that does not suit it, a lead can choose another approach for a plan and say why. **Approaches** shows which are open to each role, and you can close any of them.
@@ -348,12 +366,13 @@ Every lead has its operating profile. For work that does not suit it, a lead can
 | Approach | For | Phases |
 | --- | --- | --- |
 | DevOps delivery (CTO) | A change to software in a connected repository | Plan → Build → **Verify** → **Release** → Improve |
+| Tested build (CTO, CDO) | Software, a script or an analysis that a command can prove works | Spec → Build → **Prove** → Release |
 | Bug fix (CTO) | Something that worked has stopped working | Reproduce → Diagnose → Fix → Confirm |
 | Incident response (CTO, COO, CISO) | Something live is broken or at risk now | Contain → Diagnose → Repair → Review |
 | Build-Measure-Learn (CPO) | An idea whose value is unproven | Assume → Build → Measure → Learn |
 | Plan-Do-Check-Act (COO) | Improving a process that already runs | Plan → Do → Check → Act |
 
-The gates in bold are checked by the system against the repository, so a lead cannot pass them on its own judgement. DevOps delivery is only on offer to a role with a repository assigned and the privilege to push. The library lives in [`src/shared/approaches.ts`](src/shared/approaches.ts).
+The gates in bold are checked by the system, so a lead cannot pass them on its own judgement. Those of DevOps delivery are checked against the repository, and it is only on offer to a role with a repository assigned and the privilege to push. Tested build's is checked by [running a command the lead names](docs/code-execution.md#a-gate-the-system-checks-for-itself) in the sandbox, and it is only on offer to a role that may run code, while Docker is running. The library lives in [`src/shared/approaches.ts`](src/shared/approaches.ts).
 
 ![Only Paperclips work approaches](docs/only-paperclips-approaches.png)
 
@@ -363,15 +382,15 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
 
 - **Home** lists organisations with their status, cycle and spend.
 - **Establish** takes the idea, recommends a team or lets you seat one, and sets governance and limits.
-- **The dashboard** shows the hierarchy on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what) and, on the right:
+- **The dashboard** opens on **Headquarters**, the whole organisation seen from above (see [Headquarters](#headquarters) below). Its other tabs have the hierarchy beside them on the left (you, the CEO, the leads on their operating profiles, and which agents are busy with what):
   - **Board**: the feed of everything said at board level, newest first, with completed cycles below it.
   - **Overseer**: four views for keeping an eye on the whole organisation (see [Overseer](#overseer) below).
   - **Calendar**: persistent commitments in an agenda or month view, with owners, dependencies, dates and verification.
   - **Email & accounts**: connected mailboxes, saved service accounts, team access, drafts for a person to send, access requests and vault controls.
-  - **Privileges**: what each role and its agents may do, and what no role can.
+  - **Privileges**: what each role and its agents may do, and what no role can. Where a role may run code, it says whether anything can be run on this machine, and with what.
   - **Approaches**: the ways of working a lead can choose between.
   - **Business**: the operating digest, customers, scorecard, finances, knowledge, incoming events and revision history.
-  - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report.
+  - **Plans**: every plan with its phases, tasks, agent reports, gate reviews and board report, and what each task ran in a sandbox, as the system recorded it. A gate the system checks shows what it was held to and what the system found.
   - **Decisions**: what went to the board, each lead's position and the ruling, plus the decisions leads took in their own remit.
   - **Signatory**: what the organisation has asked to have paid for or signed, and where you tell it what you did. The tab, the dashboard and the home page show how many requests are waiting for you.
   - **Files**: the workspace.
@@ -381,6 +400,27 @@ The [user guide](docs/user-guide.md) goes through each of these step by step.
 Start, pause, stop and settings are at the top of the dashboard. Pause lets calls in flight finish; stop cuts them off and puts the interrupted work back in the queue. Either one holds hosted sessions where they are.
 
 The dashboard follows the organisation over one connection that stays open, and a browser keeps at most six to one server. A dashboard in a tab that is out of view lets its connection go after two seconds and opens it again when you come back to it, so any number can be open in tabs. More than five in windows that are all in view at once is too many: the sixth takes the last connection, and nothing more can be asked of the server from any of them until one is closed.
+
+### Headquarters
+
+An organisation writes a great deal, in several places at once. The first tab is for following it without reading all of that: the organisation as a building seen from above, where you look closer at whatever you want to know more of.
+
+![The headquarters of a running organisation: the executive floor along the top, four departments beneath it with their agents at their desks, the lines of what is on its way to the board, and beside the map what needs a person and what is at work](docs/headquarters.png)
+
+- **The building.** The executive floor is along the top: the signing desk, the shareholders' room, the CEO's office and the boardroom, and the judge's chambers where a judge is seated. Each lead has a department beneath, with a desk of its own and one for each of its agents, in one row for up to four leads and two for more. Memory, Files and Operations stand in a column at the side. A room is in the colour of its seat.
+- **What is going on.** A desk's screen is lit while its agent works, and what a lead itself is doing is said beside its desk. A plan is the line of its phases along the bottom of its department: a ring that fills as its tasks come in, a tick once the phase has passed its gate, a cross where something in it failed, and a small lock on a phase [the system checks for itself](#work-approaches). At the board table, each seat is marked with what it has said on the matter in front of the board, or with an hourglass while it is waited for.
+- **What is on its way.** Lines along the corridors: dots that march for what is being worked on now (a proposal for the CEO, a position for the board, a report), dashes for what stands until someone takes it up (a plan before the board, a phase that waits on another lead's), and amber for what stands until you do.
+- **What needs you.** A bell pinned to a room counts what in it is waiting for you: a payment or a signature, a delivery to verify. A warning sign counts what has gone wrong in it: a failed task, a check of the system's that did not pass, a commitment past its date. Both are counted at the top left and listed beside the map, with **Show it** to go to each. A pause that needs you is listed there too, and so is a step that is waited for.
+- **Looking closer.** The map writes as much as it has room for. From afar a room shows its name, a line on what is happening in it, and who is in it and at work. Nearer, it shows each agent with what it is doing, and the phases by name. The wheel, or a pinch, brings it nearer and further, dragging moves it, and **Building**, **Rooms** and **Desks** go straight to each distance. Once part of the building is out of view, the whole of it is shown in small in a corner, to find the way by.
+- **The words themselves.** Press a room, a desk, a phase, a plan or the paper on the board table, and what is written there is shown beside the map: a task's brief and the agent's report, a decision's objections and positions, a request in full. One press more opens the tab that has the whole of it, and the headquarters is as you left it when you come back. A room pressed twice is gone to.
+- **Along the top** is what the other tabs have above them (the cycle and its stage, spend against the budget, and the pace, with **Next step** at the step pace), and beside it how many agents are at work, how many plans are under way, how many of this cycle's phases are done and how many decisions are open.
+- **Dispatches**, beneath the map, are the latest of what was said at the board and what agents finished. Press one and the map goes to where it happened. When a new one comes in, the room it came from is ringed for a moment.
+- **Steer from there.** The shareholders' room has the box for a steer. A steer half written there is the same one in the box beside the other tabs.
+- **Fill the window** gives the map the whole window, with Start, Pause and the pace in its own bar, and Escape gives the window back.
+
+From the keyboard, Tab goes from room to room and Enter chooses one. With the map itself in focus the arrow keys move it, `+` and `-` bring it nearer and further, and `0` shows the whole building. The panel beside the map lists every room, and everything in the room that is chosen, so nothing on the map can be reached with a pointer only. Nothing on it moves for anyone whose system asks for less motion. It has a light and a dark form, following the system's.
+
+It is drawn from the same state as every other tab, and holds nothing of its own. It does not count what agents have asked you for under **Email & accounts** (access requests): those are kept with the vault and are listed there.
 
 ### Overseer
 
@@ -564,7 +604,7 @@ On the [Claude Code connection](#claude-code-in-place-of-a-key) the figure is wh
 
 ## What agents can and cannot do
 
-**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. A fifth, `recall`, searches the organisation's [memory](#memory) of earlier cycles. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts, repositories and the tools on [connected servers](#tool-servers-mcp) are there for the roles [allowed them](#what-each-role-may-do). They **cannot run code** or reach anything else, and their prompts tell them not to claim otherwise. An engineering "Test" phase is therefore a review of the build against the spec, not an execution of it.
+**On this machine** (the default), agents have four tools, all confined to their organisation's workspace folder: list files, read a file, write a file, and edit a file in place. A fifth, `recall`, searches the organisation's [memory](#memory) of earlier cycles. With web search switched on, agents on Claude models can also search the web and read the pages they find. Business records, email, service accounts, repositories and the tools on [connected servers](#tool-servers-mcp) are there for the roles [allowed them](#what-each-role-may-do). A role allowed to [run code](#running-code) runs it in a sandbox. A role that is not **cannot run code** or reach anything else, and its agents' prompts tell them not to claim otherwise: for that role an engineering "Test" phase is a review of the build against the spec, not an execution of it.
 
 **In hosted sessions** (Claude models only), agents have a shell and file tools in a sandbox on Anthropic's side. They can install packages, build, run and test, and are told to report what actually happened.
 
@@ -651,11 +691,14 @@ A folder is loaded only if its name is the organisation's id, so a copy kept bes
 | `HOST` | `127.0.0.1` | Address to listen on. |
 | `ORG_ALLOWED_HOSTS` | none | When `HOST` is not loopback: the names, separated by commas, that this machine is reached by (`office-box.lan`). Requests addressed to it by IP address need nothing here. |
 | `ORG_DATA_DIR` | `./data` | Where organisations are stored. |
+| `ORG_SANDBOX` | on | `off` switches [running code](#running-code) off on this server, whatever a role is allowed. It is off by itself when `HOST` is not loopback. |
+| `ORG_SANDBOX_COMMAND` | `docker` | The command that runs a sandbox's containers. |
+| `ORG_SANDBOX_MEMORY_MB`, `ORG_SANDBOX_CPUS` | `2048`, `2` | The memory and the processors one command in a sandbox may use. |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | none | OAuth Web application client for Gmail connections; see the [setup guide](docs/email-and-accounts.md). |
 | `ORG_BROWSER_PATH` | installed Google Chrome | Optional Chromium executable for the business account browser. |
 | `ANTHROPIC_WORKSPACE_ID` | Default workspace | The workspace your API key belongs to, for links from a plan to its hosted session in the Console. |
 
-The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection and business email/account controls are switched off in that case. The server then answers requests addressed to it by IP address, or by a name listed in `ORG_ALLOWED_HOSTS`, and by no other name: a web page can point a name of its own at your machine, and without this rule the browser would let that page use the API as if it were the server's own. This holds inside a container too, where the server has to listen on `0.0.0.0` even when the port is published to your machine alone.
+The API has no login. It listens on loopback, refuses requests that are not addressed to localhost, and refuses cross-site requests, so a web page you visit cannot drive it. If you set `HOST` to something reachable from other machines, anyone who can reach the port controls your organisations and their spend. The Claude Code connection, business email/account controls and running code in a sandbox are switched off in that case. The server then answers requests addressed to it by IP address, or by a name listed in `ORG_ALLOWED_HOSTS`, and by no other name: a web page can point a name of its own at your machine, and without this rule the browser would let that page use the API as if it were the server's own. This holds inside a container too, where the server has to listen on `0.0.0.0` even when the port is published to your machine alone.
 
 ## Development
 
@@ -670,9 +713,11 @@ npm run docs:screenshots # refresh Only Paperclips screenshots after a build
 
 The tests run whole organisations through the loop on the simulator, and check the scheduler's rules directly. The Claude provider is tested against local stand-ins for the Messages API and the Managed Agents API that speak their protocols, the providers for everyone else against a stand-in for Chat Completions and OpenAI's Responses API, and the Claude Code connection against a stand-in for the `claude` command; whole organisations are also run end to end on the last two. Tool servers are tested with the protocol's own client against a server built from the protocol's own server classes, on this machine. All of that checks what is sent and how replies are handled, not that the live APIs accept it or behave as the stand-ins do.
 
+The sandbox is tested in real containers where a container service is running, with a small image (`alpine:3.20`, or the one named in `ORG_SANDBOX_TEST_IMAGE`), and left out where none is. With `REQUIRE_SANDBOX=1` a missing service stops the run, as below for the browser. What is sent to the `docker` command is checked against a stand-in for it, everywhere.
+
 Some tests drive the built dashboard, and the account browser, in a real Chrome. On your own machine they are left out when Chrome is not at `/opt/google/chrome/chrome` (set `CHROME_PATH` to where it is) or the client has not been built. With `REQUIRE_BROWSER=1` a missing browser or build stops the run and says what is missing, since a test that was skipped has checked nothing.
 
-**Checks on a pull request.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the type check, the build and the whole suite, with `REQUIRE_BROWSER=1`, on every pull request and on every push to `main`.
+**Checks on a pull request.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the type check, the build and the whole suite, with `REQUIRE_BROWSER=1` and `REQUIRE_SANDBOX=1`, on every pull request and on every push to `main`.
 
 ```
 src/shared/      types and the profile library, used by server and client
@@ -693,11 +738,15 @@ src/server/
                  to one) and the agent tools for all of them
   connections.ts the API keys the server holds
   workspace.ts   the confined file tools agents use
+  sandbox.ts     running code for the roles that may: a container for each command,
+                 what confines it, files in and out, and the tools agents are given
   memory.ts      the organisation's memory: the index over its record, its archive
                  and its files, and the search agents are given (what a lead is
                  shown from it is in engine/recall.ts)
   app.ts         the HTTP API and live event stream
-src/client/      the web interface (React)
+src/client/      the web interface (React). The headquarters is headquarters.ts, which
+                 works out from an organisation's state where every room stands and
+                 what is going on in it, and Headquarters*.tsx, which draw it
 scripts/         establish an organisation from one prompt; set up hosted sessions;
                  check the Claude Code on this machine
 tests/
@@ -711,7 +760,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 
 ## Limits of this version
 
-- Local agents write files and can use explicitly granted email/account tools. They have no general shell or code-execution tool; running and testing generated code needs hosted sessions.
+- Local agents write files and can use explicitly granted email/account tools. They run code only where their role is [allowed to](#running-code), in a container on this machine, which needs Docker and has not been tried on Docker Desktop or Podman. A sandbox's network is all or nothing, and nothing in it keeps running between commands. Where a gate runs a check, the check is the lead's to choose, and nobody approves it first.
 - Gmail, IMAP/SMTP and account-browser integrations have been tested with stand-ins and a real local browser, not a live mailbox or third-party signup. See [email and account limits](docs/email-and-accounts.md).
 - Privileges are per role, and the browser's read-only limit goes by the kind of request: see [what each role may do](#what-each-role-may-do).
 - GitHub is the only code host. Repository work needs agents on this machine, handles text files only, and has not yet been run with a real token: see [the guide](docs/code-repositories.md#what-has-been-checked). Deployment is not built: a person merges, and whatever follows from that is up to your repository.
@@ -725,6 +774,7 @@ A provider with an API of its own implements two methods ([`src/server/providers
 - Requests to the signatory are raised by leads at their phase gates. A lead cannot ask in the middle of a phase, and the CEO cannot ask at all.
 - One organisation is one process's worth of state: there is no multi-user access and no login. Whoever can open the interface can answer for the signatory.
 - A board decision is one round of positions and a ruling; there is no further debate.
+- The [headquarters](#headquarters) counts what the organisation's own state holds. Access requests, which are kept with the vault, are not counted or drawn there. A desk or a phase is chosen on the map with a pointer, and from the keyboard in the panel beside it. It has been looked at in Chrome, and not in other browsers.
 - Steer given mid-cycle changes plans, not tasks already running: an agent finishes the task it is on.
 - Seats are fixed once an organisation is established. Agent allocation, the arbiter and every limit can be changed afterwards.
 
