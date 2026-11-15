@@ -813,6 +813,8 @@ Issues and pull requests are welcome. The most useful thing to send is what happ
 
 For changes to the code: `npm test` and `npm run typecheck` should pass, a change in behaviour comes with a test that fails without it, and the README is the description of what the program does, so it changes with the code.
 
+If you work on it with an AI coding assistant, [`CLAUDE.md`](CLAUDE.md) holds the standing notes one reads on starting: the commands, how the code is put together, the rules above in full, and what has gone wrong before.
+
 ## Licence
 
 [Apache License 2.0](LICENSE). Copyright 2026 PolyLabs Research.
